@@ -6,7 +6,7 @@ import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { Loader2, Phone, X, CheckCircle2, ListChecks } from "lucide-react";
 import {
-  STATUS_LABELS, STATUS_OPTIONS, PRIORITY_LABELS, priorityBadgeClass, statusBadgeClass, fmtMinutes, currentMonthStr,
+  STATUS_LABELS, STATUS_OPTIONS, PRIORITY_LABELS, priorityBadgeClass, statusBadgeClass, currentMonthStr,
 } from "@/lib/ccm";
 
 export default function WorklistPage() {
@@ -56,7 +56,7 @@ export default function WorklistPage() {
   const toggle = (id: number) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
 
   return (
-    <CCMDashboardLayout title={`Monthly Worklist · ${month}`}>
+    <CCMDashboardLayout title={`Monthly Worklist - ${month}`}>
       <div className="flex items-center justify-between flex-wrap gap-3 mb-5">
         <div className="flex items-center gap-2 flex-wrap">
           <select className={field} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
@@ -86,7 +86,7 @@ export default function WorklistPage() {
             <ListChecks size={16} />
             <span className="text-sm font-medium">{selected.length} selected</span>
             <select value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value)} className="px-2 py-1 rounded-lg text-slate-800 text-xs">
-              <option value="">Set status…</option>
+              <option value="">Set status...</option>
               {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
             </select>
             <button disabled={!bulkStatus || bulkUpdate.isPending} onClick={() => bulkUpdate.mutate({ ids: selected, status: bulkStatus as any })} className="px-3 py-1 rounded-lg bg-white text-slate-900 text-xs font-semibold disabled:opacity-50">Apply</button>
@@ -103,7 +103,6 @@ export default function WorklistPage() {
                 <th className="px-5 py-3 font-medium">Patient</th>
                 <th className="px-5 py-3 font-medium">Provider</th>
                 <th className="px-5 py-3 font-medium">Priority</th>
-                <th className="px-5 py-3 font-medium">Time</th>
                 <th className="px-5 py-3 font-medium">Status</th>
                 <th className="px-5 py-3 font-medium text-right">Action</th>
               </tr>
@@ -118,9 +117,9 @@ export default function WorklistPage() {
                   )}
                   <td className="px-5 py-3">
                     <p className="font-semibold text-slate-800">{r.patient.name}</p>
-                    <p className="text-xs text-slate-400">{r.clinicName} · {r.staffName || "Unassigned"}</p>
+                    <p className="text-xs text-slate-400">{r.clinicName} - {r.staffName || "Unassigned"}</p>
                   </td>
-                  <td className="px-5 py-3 text-slate-600">{r.providerName || "—"}</td>
+                  <td className="px-5 py-3 text-slate-600">{r.providerName || "-"}</td>
                   <td className="px-5 py-3">
                     {isStaff ? (
                       <select value={r.task.priorityLevel ?? "medium"} onChange={(e) => updatePriority.mutate({ id: r.task.id, priorityLevel: e.target.value as any })}
@@ -131,7 +130,6 @@ export default function WorklistPage() {
                       <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${priorityBadgeClass(r.task.priorityLevel ?? "medium")}`}>{PRIORITY_LABELS[r.task.priorityLevel ?? "medium"]}</span>
                     )}
                   </td>
-                  <td className="px-5 py-3 text-slate-600">{fmtMinutes(r.task.timeSpentMinutes)}</td>
                   <td className="px-5 py-3">
                     {isStaff ? (
                       <select value={r.task.status ?? "not_started"} onChange={(e) => updateStatus.mutate({ id: r.task.id, status: e.target.value as any })}

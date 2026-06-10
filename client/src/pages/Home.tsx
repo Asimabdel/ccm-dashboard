@@ -39,7 +39,7 @@ export default function Home() {
         </h1>
         <p className="mt-6 text-lg font-light text-slate-500 max-w-xl leading-relaxed">
           Streamline patient outreach, documentation, staff coordination, billing
-          readiness, and provider communication — all in one calm, focused workspace.
+          readiness, and provider communication - all in one calm, focused workspace.
         </p>
 
         <div className="mt-10 flex flex-wrap items-center gap-4">
@@ -61,15 +61,15 @@ export default function Home() {
             </a>
           )}
           <span className="text-sm font-light text-slate-400">
-            {loading ? "Checking your session…" : "Secure Manus sign-in"}
+            {loading ? "Checking your session..." : "Secure Manus sign-in"}
           </span>
         </div>
 
         <div className="mt-20 grid sm:grid-cols-3 gap-5">
           {[
             { icon: ClipboardList, title: "Monthly Worklist", desc: "Auto-generated tasks with exact status and priority labels." },
-            { icon: Activity, title: "Guided Call Workflow", desc: "Structured script, built-in timer, and AI-drafted CCM notes." },
-            { icon: ShieldCheck, title: "Role-based Access", desc: "Each role sees only its dashboard — admin, staff, provider, billing, front desk." },
+            { icon: Activity, title: "Guided Call Workflow", desc: "Structured script, care documentation, and AI-drafted CCM notes." },
+            { icon: ShieldCheck, title: "Role-based Access", desc: "Each role sees only its dashboard - admin, staff, provider, billing, front desk." },
           ].map((f) => (
             <div key={f.title} className="bg-white rounded-3xl p-6 border border-slate-100">
               <div className="w-11 h-11 rounded-2xl bg-[hsl(200_100%_50%)] flex items-center justify-center mb-4">

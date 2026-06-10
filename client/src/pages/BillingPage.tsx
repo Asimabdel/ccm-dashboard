@@ -4,10 +4,9 @@ import { trpc } from "@/lib/trpc";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Loader2, Check, X, DollarSign, FileCheck } from "lucide-react";
-import { BILLING_STATUS_LABELS, billingBadgeClass, currentMonthStr, fmtMinutes } from "@/lib/ccm";
+import { BILLING_STATUS_LABELS, billingBadgeClass, currentMonthStr } from "@/lib/ccm";
 
 const CHECKS: { key: string; label: string }[] = [
-  { key: "timeThresholdMet", label: "Time ≥ 20 min" },
   { key: "documentationComplete", label: "Documentation" },
   { key: "providerAssociated", label: "Provider Linked" },
   { key: "carePlanReviewed", label: "Care Plan" },
@@ -83,7 +82,6 @@ export default function BillingPage() {
               <thead>
                 <tr className="bg-slate-50/70 text-slate-500 text-xs uppercase tracking-wider">
                   <th className="text-left font-medium px-5 py-3">Patient</th>
-                  <th className="text-left font-medium px-3 py-3">Time</th>
                   {CHECKS.map((c) => <th key={c.key} className="font-medium px-3 py-3 text-center whitespace-nowrap">{c.label}</th>)}
                   <th className="text-left font-medium px-3 py-3">Status</th>
                   <th className="text-right font-medium px-5 py-3">Action</th>
@@ -96,7 +94,6 @@ export default function BillingPage() {
                   return (
                     <tr key={r.billing.id} className="border-t border-slate-50 hover:bg-slate-50/40">
                       <td className="px-5 py-3 font-medium text-slate-800 whitespace-nowrap">{r.patient.name}</td>
-                      <td className="px-3 py-3 text-slate-600 whitespace-nowrap">{fmtMinutes(r.task?.timeSpentMinutes)}</td>
                       {CHECKS.map((c) => <td key={c.key} className="px-3 py-3 text-center"><YN ok={!!(r.billing as any)[c.key]} /></td>)}
                       <td className="px-3 py-3"><span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap ${billingBadgeClass(r.billing.billingStatus || "not_started")}`}>{BILLING_STATUS_LABELS[r.billing.billingStatus || "not_started"]}</span></td>
                       <td className="px-5 py-3 text-right">
