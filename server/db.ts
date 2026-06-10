@@ -1,11 +1,23 @@
-import { eq } from "drizzle-orm";
+import { eq, and, gte, lte, desc, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users } from "../drizzle/schema";
-import { ENV } from './_core/env';
+import {
+  InsertUser,
+  users,
+  clinics,
+  providers,
+  patients,
+  ccmTasks,
+  ccmNotes,
+  providerEscalations,
+  followUpItems,
+  billingRecords,
+  notifications,
+  productivityMetrics,
+} from "../drizzle/schema";
+import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
-// Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
@@ -35,7 +47,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     };
     const updateSet: Record<string, unknown> = {};
 
-    const textFields = ["name", "email", "loginMethod"] as const;
+    const textFields = ["name", "email", "loginMethod", "clinicLocation"] as const;
     type TextField = (typeof textFields)[number];
 
     const assignNullable = (field: TextField) => {
@@ -56,8 +68,8 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       values.role = user.role;
       updateSet.role = user.role;
     } else if (user.openId === ENV.ownerOpenId) {
-      values.role = 'admin';
-      updateSet.role = 'admin';
+      values.role = "admin";
+      updateSet.role = "admin";
     }
 
     if (!values.lastSignedIn) {
@@ -84,9 +96,264 @@ export async function getUserByOpenId(openId: string) {
     return undefined;
   }
 
-  const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
+  const result = await db
+    .select()
+    .from(users)
+    .where(eq(users.openId, openId))
+    .limit(1);
 
   return result.length > 0 ? result[0] : undefined;
 }
 
-// TODO: add feature queries here as your schema grows.
+// Patient queries
+export async function getPatientsByClinic(clinicId: number) {
+  const db = await getDb();
+  if (!db) return [];
+
+  return db.select().from(patients).where(eq(patients.clinicId, clinicId));
+}
+
+export async function getPatientsByProvider(providerId: number) {
+  const db = await getDb();
+  if (!db) return [];
+
+  return db
+    .select()
+    .from(patients)
+    .where(eq(patients.providerId, providerId));
+}
+
+export async function getPatientsByRiskLevel(riskLevel: "high" | "medium" | "low") {
+  const db = await getDb();
+  if (!db) return [];
+
+  return db
+    .select()
+    .from(patients)
+    .where(eq(patients.riskLevel, riskLevel));
+}
+
+export async function getActivePatients() {
+  const db = await getDb();
+  if (!db) return [];
+
+  return db
+    .select()
+    .from(patients)
+    .where(eq(patients.ccmEnrollmentStatus, "active"));
+}
+
+export async function getPatientById(patientId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db
+    .select()
+    .from(patients)
+    .where(eq(patients.id, patientId))
+    .limit(1);
+
+  return result.length > 0 ? result[0] : undefined;
+}
+
+// CCM Task queries
+export async function getCCMTasksForMonth(month: string) {
+  const db = await getDb();
+  if (!db) return [];
+
+  return db
+    .select()
+    .from(ccmTasks)
+    .where(eq(ccmTasks.month, month))
+    .orderBy(desc(ccmTasks.createdAt));
+}
+
+export async function getCCMTasksByStaff(staffId: number, month: string) {
+  const db = await getDb();
+  if (!db) return [];
+
+  return db
+    .select()
+    .from(ccmTasks)
+    .where(and(eq(ccmTasks.assignedStaffId, staffId), eq(ccmTasks.month, month)))
+    .orderBy(desc(ccmTasks.createdAt));
+}
+
+export async function getCCMTaskById(taskId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db
+    .select()
+    .from(ccmTasks)
+    .where(eq(ccmTasks.id, taskId))
+    .limit(1);
+
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function getCCMTaskByPatientAndMonth(patientId: number, month: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db
+    .select()
+    .from(ccmTasks)
+    .where(and(eq(ccmTasks.patientId, patientId), eq(ccmTasks.month, month)))
+    .limit(1);
+
+  return result.length > 0 ? result[0] : undefined;
+}
+
+// CCM Note queries
+export async function getCCMNoteByTaskId(taskId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db
+    .select()
+    .from(ccmNotes)
+    .where(eq(ccmNotes.ccmTaskId, taskId))
+    .limit(1);
+
+  return result.length > 0 ? result[0] : undefined;
+}
+
+// Provider Escalation queries
+export async function getEscalationsByProvider(providerId: number) {
+  const db = await getDb();
+  if (!db) return [];
+
+  return db
+    .select()
+    .from(providerEscalations)
+    .where(eq(providerEscalations.providerId, providerId))
+    .orderBy(desc(providerEscalations.createdAt));
+}
+
+export async function getPendingEscalations() {
+  const db = await getDb();
+  if (!db) return [];
+
+  return db
+    .select()
+    .from(providerEscalations)
+    .where(eq(providerEscalations.escalationStatus, "pending"))
+    .orderBy(desc(providerEscalations.createdAt));
+}
+
+// Billing queries
+export async function getBillingRecordsForMonth(month: string) {
+  const db = await getDb();
+  if (!db) return [];
+
+  return db
+    .select()
+    .from(billingRecords)
+    .where(eq(billingRecords.month, month))
+    .orderBy(desc(billingRecords.createdAt));
+}
+
+export async function getBillingReadyCount(month: string) {
+  const db = await getDb();
+  if (!db) return 0;
+
+  const result = await db
+    .select({ count: sql<number>`COUNT(*)` })
+    .from(billingRecords)
+    .where(
+      and(
+        eq(billingRecords.month, month),
+        eq(billingRecords.billingStatus, "ready_for_billing")
+      )
+    );
+
+  return result[0]?.count || 0;
+}
+
+// Notification queries
+export async function getUnreadNotifications(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+
+  return db
+    .select()
+    .from(notifications)
+    .where(and(eq(notifications.userId, userId), eq(notifications.read, false)))
+    .orderBy(desc(notifications.createdAt));
+}
+
+// Productivity metrics queries
+export async function getProductivityMetrics(month: string, staffId?: number) {
+  const db = await getDb();
+  if (!db) return [];
+
+  if (staffId) {
+    return db
+      .select()
+      .from(productivityMetrics)
+      .where(
+        and(
+          eq(productivityMetrics.month, month),
+          eq(productivityMetrics.staffId, staffId)
+        )
+      );
+  }
+
+  return db
+    .select()
+    .from(productivityMetrics)
+    .where(eq(productivityMetrics.month, month));
+}
+
+// Clinic queries
+export async function getAllClinics() {
+  const db = await getDb();
+  if (!db) return [];
+
+  return db.select().from(clinics);
+}
+
+// Provider queries
+export async function getProvidersByClinic(clinicId: number) {
+  const db = await getDb();
+  if (!db) return [];
+
+  return db
+    .select()
+    .from(providers)
+    .where(eq(providers.clinicId, clinicId));
+}
+
+export async function getProviderById(providerId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const result = await db
+    .select()
+    .from(providers)
+    .where(eq(providers.id, providerId))
+    .limit(1);
+
+  return result.length > 0 ? result[0] : undefined;
+}
+
+// Staff queries
+export async function getStaffByRole(role: "admin" | "staff" | "provider" | "billing" | "front_desk" | "user") {
+  const db = await getDb();
+  if (!db) return [];
+
+  return db.select().from(users).where(eq(users.role, role));
+}
+
+export async function getStaffByClinic(clinicLocation: string | null) {
+  const db = await getDb();
+  if (!db) return [];
+
+  if (!clinicLocation) return [];
+
+  return db
+    .select()
+    .from(users)
+    .where(eq(users.clinicLocation, clinicLocation));
+}
