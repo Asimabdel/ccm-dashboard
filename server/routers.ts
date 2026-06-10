@@ -51,6 +51,8 @@ import {
   providerEscalations,
   followUpItems,
   billingRecords,
+  users,
+  teamInvites,
 } from "../drizzle/schema";
 import { ccmNotesRouter } from "./routers/ccmNotes";
 import { seedDatabase, isSeeded, currentMonth } from "./seed";
@@ -88,6 +90,7 @@ const statusEnum = z.enum([
   "needs_appointment", "documentation_incomplete", "ready_for_billing", "billed",
   "cancelled", "unable_to_reach", "declined_ccm", "inactive",
 ]);
+const roleEnum = z.enum(["admin", "staff", "provider", "billing", "front_desk", "user"]);
 
 export const appRouter = router({
   system: systemRouter,
@@ -101,7 +104,7 @@ export const appRouter = router({
       return { success: true } as const;
     }),
     // Admin-only role switcher so the owner/admin can preview every role-based
-    // dashboard. Regular workers CANNOT self-escalate — their role is assigned
+    // dashboard. Regular workers CANNOT self-escalate â€” their role is assigned
     // by an admin via the Team / Access page (users.setRole).
     setRole: protectedProcedure
       .input(z.object({ role: z.enum(["admin", "staff", "provider", "billing", "front_desk"]) }))
@@ -120,7 +123,7 @@ export const appRouter = router({
       return getAllUsers();
     }),
     setRole: protectedProcedure
-      .input(z.object({ userId: z.number(), role: z.enum(["admin", "staff", "provider", "billing", "front_desk", "user"]) }))
+      .input(z.object({ userId: z.number(), role: roleEnum }))
       .mutation(async ({ input, ctx }) => {
         requireRole(ctx, ["admin"]);
         // Prevent an admin from accidentally removing their own admin access (lockout guard).
@@ -131,6 +134,65 @@ export const appRouter = router({
         void logAudit(ctx, "update_patient", { entityType: "user", entityId: input.userId, description: `Set user #${input.userId} role to ${input.role}` });
         return { success: true };
       }),
+    update: protectedProcedure
+      .input(
+        z.object({
+          id: z.number(),
+          name: z.string().optional(),
+          email: z.string().email().optional(),
+          role: roleEnum,
+          clinicLocation: z.string().optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin"]);
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { id, ...updateData } = input;
+        await db.update(users).set({ ...updateData, updatedAt: new Date() }).where(eq(users.id, id));
+        void logAudit(ctx, "update_patient", { entityType: "user", entityId: id, description: `Updated user #${id}` });
+        return { success: true };
+      }),
+    remove: protectedProcedure
+      .input(z.number())
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin"]);
+        if (input === ctx.user.id) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "You cannot remove your own admin account." });
+        }
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        await db.update(users).set({ role: "user", clinicLocation: null, updatedAt: new Date() }).where(eq(users.id, input));
+        void logAudit(ctx, "update_patient", { entityType: "user", entityId: input, description: `Removed access for user #${input}` });
+        return { success: true };
+      }),
+  }),
+
+  invites: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx, ["admin"]);
+      const db = await getDb();
+      if (!db) return [];
+      return db.select().from(teamInvites);
+    }),
+    send: protectedProcedure
+      .input(z.object({ email: z.string().email(), role: roleEnum, clinicLocation: z.string().optional() }))
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin"]);
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        await db.insert(teamInvites).values({ ...input, invitedByUserId: ctx.user.id, status: "pending" });
+        void logAudit(ctx, "update_patient", { entityType: "invite", description: `Created invite for ${input.email}` });
+        return { success: true };
+      }),
+    revoke: protectedProcedure.input(z.number()).mutation(async ({ input, ctx }) => {
+      requireRole(ctx, ["admin"]);
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await db.update(teamInvites).set({ status: "revoked", updatedAt: new Date() }).where(eq(teamInvites.id, input));
+      void logAudit(ctx, "update_patient", { entityType: "invite", entityId: input, description: `Revoked invite #${input}` });
+      return { success: true };
+    }),
   }),
 
   // ---- Admin: seed + system ----
@@ -453,17 +515,6 @@ export const appRouter = router({
         return getCCMTaskById(input.id);
       }),
 
-    updateTime: protectedProcedure
-      .input(z.object({ id: z.number(), timeSpentMinutes: z.number().min(0) }))
-      .mutation(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin", "staff"]);
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        await db.update(ccmTasks).set({ timeSpentMinutes: input.timeSpentMinutes, updatedAt: new Date() }).where(eq(ccmTasks.id, input.id));
-        await recomputeBilling(input.id, currentMonth());
-        return getCCMTaskById(input.id);
-      }),
-
     // Assignment: manual single, bulk, and rule-based
     assign: protectedProcedure
       .input(z.object({ taskIds: z.array(z.number()), staffId: z.number() }))
@@ -525,7 +576,6 @@ export const appRouter = router({
           escalationFlag: z.boolean().optional(),
           escalationReason: z.string().optional(),
           followUpActions: z.array(z.string()).optional(),
-          timeSpentMinutes: z.number().optional(),
           markCompleted: z.boolean().optional(),
         })
       )
@@ -554,7 +604,6 @@ export const appRouter = router({
           escalationFlag: input.escalationFlag || false,
           escalationReason: input.escalationReason,
           followUpActions: input.followUpActions || [],
-          timeSpentMinutes: input.timeSpentMinutes || 0,
         };
 
         let noteId: number;
@@ -568,7 +617,6 @@ export const appRouter = router({
 
         // Update task time + completion
         const taskUpdate: any = { updatedAt: new Date() };
-        if (input.timeSpentMinutes !== undefined) taskUpdate.timeSpentMinutes = input.timeSpentMinutes;
         if (input.markCompleted) {
           taskUpdate.ccmNoteCompleted = true;
           taskUpdate.status = input.escalationFlag ? "needs_provider_review" : "completed";
@@ -741,11 +789,72 @@ export const appRouter = router({
   // ---- Reference data ----
   clinics: router({
     list: protectedProcedure.query(async () => getAllClinics()),
+    create: protectedProcedure
+      .input(z.object({ name: z.string().min(1), location: z.string().min(1), address: z.string().optional(), phone: z.string().optional() }))
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin"]);
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        await db.insert(clinics).values(input);
+        return { success: true };
+      }),
+    update: protectedProcedure
+      .input(z.object({ id: z.number(), name: z.string().min(1), location: z.string().min(1), address: z.string().optional(), phone: z.string().optional() }))
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin"]);
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { id, ...updateData } = input;
+        await db.update(clinics).set(updateData).where(eq(clinics.id, id));
+        return { success: true };
+      }),
+    remove: protectedProcedure.input(z.number()).mutation(async ({ input, ctx }) => {
+      requireRole(ctx, ["admin"]);
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const assignedPatients = await db.select({ id: patients.id }).from(patients).where(eq(patients.clinicId, input)).limit(1);
+      const assignedProviders = await db.select({ id: providers.id }).from(providers).where(eq(providers.clinicId, input)).limit(1);
+      if (assignedPatients.length || assignedProviders.length) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This clinic is assigned to patients or providers. Reassign them before removing it." });
+      }
+      await db.delete(clinics).where(eq(clinics.id, input));
+      return { success: true };
+    }),
   }),
   providers: router({
     all: protectedProcedure.query(async () => getAllProviders()),
     listByClinic: protectedProcedure.input(z.number()).query(async ({ input }) => getProvidersByClinic(input)),
     getById: protectedProcedure.input(z.number()).query(async ({ input }) => getProviderById(input)),
+    create: protectedProcedure
+      .input(z.object({ name: z.string().min(1), title: z.string().optional(), clinicId: z.number().optional(), userId: z.number().optional() }))
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin"]);
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        await db.insert(providers).values(input);
+        return { success: true };
+      }),
+    update: protectedProcedure
+      .input(z.object({ id: z.number(), name: z.string().min(1), title: z.string().optional(), clinicId: z.number().optional(), userId: z.number().optional() }))
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin"]);
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { id, ...updateData } = input;
+        await db.update(providers).set(updateData).where(eq(providers.id, id));
+        return { success: true };
+      }),
+    remove: protectedProcedure.input(z.number()).mutation(async ({ input, ctx }) => {
+      requireRole(ctx, ["admin"]);
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const assignedPatients = await db.select({ id: patients.id }).from(patients).where(eq(patients.providerId, input)).limit(1);
+      if (assignedPatients.length) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This provider is assigned to patients. Reassign them before removing it." });
+      }
+      await db.delete(providers).where(eq(providers.id, input));
+      return { success: true };
+    }),
   }),
   staff: router({
     all: protectedProcedure.query(async ({ ctx }) => {
