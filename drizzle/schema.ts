@@ -63,6 +63,23 @@ export type Provider = typeof providers.$inferSelect;
 export type InsertProvider = typeof providers.$inferInsert;
 
 /**
+ * Pending team invitations for onboarding workers before first sign-in.
+ */
+export const teamInvites = mysqlTable("teamInvites", {
+  id: int("id").autoincrement().primaryKey(),
+  email: varchar("email", { length: 320 }).notNull(),
+  role: mysqlEnum("role", ["admin", "staff", "provider", "billing", "front_desk", "user"]).default("staff").notNull(),
+  clinicLocation: varchar("clinicLocation", { length: 255 }),
+  invitedByUserId: int("invitedByUserId").references(() => users.id),
+  status: mysqlEnum("status", ["pending", "accepted", "revoked"]).default("pending").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type TeamInvite = typeof teamInvites.$inferSelect;
+export type InsertTeamInvite = typeof teamInvites.$inferInsert;
+
+/**
  * Patients enrolled in CCM program
  */
 export const patients = mysqlTable("patients", {
@@ -307,7 +324,7 @@ export type ProductivityMetrics = typeof productivityMetrics.$inferSelect;
 export type InsertProductivityMetrics = typeof productivityMetrics.$inferInsert;
 
 /**
- * HIPAA audit log — records access and modifications to Protected Health Information (PHI).
+ * HIPAA audit log â€” records access and modifications to Protected Health Information (PHI).
  * Append-only; never updated or deleted.
  */
 export const auditLogs = mysqlTable("auditLogs", {
