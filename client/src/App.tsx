@@ -29,52 +29,57 @@ function Router() {
 
   return (
     <Switch>
-      <Route path={"/"} component={Home} />
+      <Route path="/" component={Home} />
       
       {/* Admin Routes */}
       {user && user.role === "admin" && (
         <>
-          <Route path={"/admin/dashboard"} component={AdminDashboard} />
-          <Route path={"/admin/worklist"} component={MonthlyWorklist} />
-          <Route path={"/admin/reporting"} component={ReportingDashboard} />
-          <Route path={"/admin/notifications"} component={NotificationCenter} />
+          <Route path="/admin" component={AdminDashboard} />
+          <Route path="/admin/dashboard" component={AdminDashboard} />
+          <Route path="/admin/worklist" component={MonthlyWorklist} />
+          <Route path="/admin/reporting" component={ReportingDashboard} />
+          <Route path="/admin/notifications" component={NotificationCenter} />
         </>
       )}
       
       {/* Staff Routes */}
       {user && (user.role === "staff" || user.role === "admin") && (
         <>
-          <Route path={"/staff/dashboard"} component={StaffDashboard} />
-          <Route path={"/staff/worklist"} component={MonthlyWorklist} />
-          <Route path={"/staff/notifications"} component={NotificationCenter} />
+          <Route path="/staff" component={StaffDashboard} />
+          <Route path="/staff/dashboard" component={StaffDashboard} />
+          <Route path="/staff/worklist" component={MonthlyWorklist} />
+          <Route path="/staff/notifications" component={NotificationCenter} />
         </>
       )}
       
       {/* Provider Routes */}
       {user && (user.role === "provider" || user.role === "admin") && (
         <>
-          <Route path={"/provider/dashboard"} component={ProviderDashboard} />
-          <Route path={"/provider/notifications"} component={NotificationCenter} />
+          <Route path="/provider" component={ProviderDashboard} />
+          <Route path="/provider/dashboard" component={ProviderDashboard} />
+          <Route path="/provider/notifications" component={NotificationCenter} />
         </>
       )}
       
       {/* Billing Routes */}
       {user && (user.role === "billing" || user.role === "admin") && (
         <>
-          <Route path={"/billing/dashboard"} component={BillingDashboard} />
-          <Route path={"/billing/notifications"} component={NotificationCenter} />
+          <Route path="/billing" component={BillingDashboard} />
+          <Route path="/billing/dashboard" component={BillingDashboard} />
+          <Route path="/billing/notifications" component={NotificationCenter} />
         </>
       )}
       
       {/* Front Desk Routes */}
       {user && (user.role === "front_desk" || user.role === "admin") && (
         <>
-          <Route path={"/front-desk/dashboard"} component={FrontDeskDashboard} />
-          <Route path={"/front-desk/notifications"} component={NotificationCenter} />
+          <Route path="/front-desk" component={FrontDeskDashboard} />
+          <Route path="/front-desk/dashboard" component={FrontDeskDashboard} />
+          <Route path="/front-desk/notifications" component={NotificationCenter} />
         </>
       )}
       
-      <Route path={"/404"} component={NotFound} />
+      <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>
   );
