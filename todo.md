@@ -28,11 +28,11 @@
 - [ ] Create monthly reset/rollover logic
 
 ## Staff Assignment Dashboard
-- [ ] Create assignment interface for practice manager
-- [ ] Implement manual patient assignment
-- [ ] Implement bulk assignment by provider/clinic/language
-- [ ] Add rule-based assignment by risk level and workload
-- [ ] Show staff workload and assignment counts
+- [x] Create assignment interface for practice manager
+- [x] Implement manual patient assignment
+- [x] Implement bulk assignment by provider/clinic/language
+- [x] Add rule-based assignment by risk level and workload
+- [x] Show staff workload and assignment counts
 - [ ] Create assignment history tracking
 
 ## CCM Call Workflow & Documentation
@@ -63,9 +63,9 @@
 ## Role-Based Dashboards
 - [x] Admin Dashboard: Overall program status, staff performance, clinic performance, urgent flags
 - [x] Staff Dashboard: Assigned patients, due patients, call status, timer, documentation form
-- [ ] Provider Dashboard: Flagged patients, escalation reasons, CCM note summaries, action recommendations
-- [ ] Billing Dashboard: Completed CCMs, documentation status, billing readiness, claims tracking
-- [ ] Front Desk Dashboard: Patients needing appointments, labs, testing, scheduling follow-up
+- [x] Provider Dashboard: Flagged patients, escalation reasons, CCM note summaries, action recommendations
+- [x] Billing Dashboard: Completed CCMs, documentation status, billing readiness, claims tracking
+- [x] Front Desk Dashboard: Patients needing appointments, labs, testing, scheduling follow-up
 
 ## Billing Readiness Tracker
 - [ ] Implement billing readiness checklist
