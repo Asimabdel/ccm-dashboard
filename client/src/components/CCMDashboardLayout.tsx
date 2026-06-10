@@ -5,9 +5,8 @@ import { trpc } from "@/lib/trpc";
 import {
   LogOut, Menu, X, Bell, LayoutDashboard, Users, ClipboardList,
   UserCog, AlertTriangle, Receipt, BarChart3, PhoneCall, CalendarClock,
-  ChevronDown, Check, ShieldCheck, Clock,
+  ChevronDown, Check, ShieldCheck, Search,
 } from "lucide-react";
-import { useIdleLogout } from "@/hooks/useIdleLogout";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuSeparator, DropdownMenuTrigger,
@@ -62,7 +61,6 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
   const [location, setLocation] = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const utils = trpc.useUtils();
-  const { warning, secondsLeft, stayLoggedIn, logoutNow } = useIdleLogout({ enabled: !!user });
 
   const { data: notifications } = trpc.notifications.list.useQuery(undefined, { refetchInterval: 30000 });
   const markRead = trpc.notifications.markRead.useMutation({
@@ -88,27 +86,31 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
   };
 
   return (
-    <div className="flex h-screen bg-[hsl(240_10%_97%)] dark:bg-slate-900">
+    <div className="flex h-screen bg-slate-100 text-slate-950 dark:bg-slate-950">
       {/* Sidebar */}
       <aside
         className={cn(
-          "transition-all duration-300 flex flex-col bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700",
+          "relative transition-all duration-300 flex flex-col bg-slate-950 text-slate-100 shadow-2xl shadow-slate-950/20",
           sidebarOpen ? "w-64" : "w-20"
         )}
       >
-        <div className="p-4 flex items-center justify-between border-b border-slate-100 dark:border-slate-700">
+        <div className="absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-sky-500/20 to-transparent pointer-events-none" />
+        <div className="relative p-4 flex items-center justify-between border-b border-white/10">
           <div className={cn(!sidebarOpen && "hidden", "flex items-center gap-2")}>
-            <div className="w-9 h-9 bg-[hsl(200_100%_50%)] rounded-xl flex items-center justify-center">
+            <div className="w-9 h-9 bg-sky-500 rounded-xl flex items-center justify-center shadow-lg shadow-sky-500/30">
               <span className="text-white font-bold text-xs">CCM</span>
             </div>
-            <span className="font-bold tracking-tight text-slate-900 dark:text-slate-50">Care Hub</span>
+            <div>
+              <span className="block font-bold tracking-tight text-white">Care Hub</span>
+              <span className="text-[10px] uppercase tracking-[0.25em] text-slate-400">Operations</span>
+            </div>
           </div>
-          <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg">
+          <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-1.5 hover:bg-white/10 rounded-lg text-slate-300">
             {sidebarOpen ? <X size={18} /> : <Menu size={18} />}
           </button>
         </div>
 
-        <nav className="flex-1 overflow-y-auto p-3 space-y-1">
+        <nav className="relative flex-1 overflow-y-auto p-3 space-y-1">
           {items.map((item) => {
             const Icon = item.icon;
             const active = location === item.path;
@@ -117,10 +119,10 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
                 key={item.path}
                 onClick={() => setLocation(item.path)}
                 className={cn(
-                  "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors",
+                  "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all",
                   active
-                    ? "bg-[hsl(200_100%_50%)] text-white"
-                    : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+                    ? "bg-white text-slate-950 shadow-lg shadow-black/20"
+                    : "text-slate-400 hover:bg-white/10 hover:text-white"
                 )}
                 title={item.label}
               >
@@ -131,10 +133,16 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
           })}
         </nav>
 
-        <div className="p-3 border-t border-slate-100 dark:border-slate-700">
+        <div className="relative p-3 border-t border-white/10">
+          {sidebarOpen && (
+            <div className="mb-3 rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+              <p className="text-xs font-semibold text-white">{user.name || "Team member"}</p>
+              <p className="mt-0.5 truncate text-[11px] text-slate-400">{user.email || currentRole.replace("_", " ")}</p>
+            </div>
+          )}
           <button
             onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:bg-white/10 hover:text-white"
           >
             <LogOut size={18} />
             {sidebarOpen && <span>Logout</span>}
@@ -144,7 +152,8 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
 
       {/* Main */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 px-6 py-3 flex items-center justify-between">
+        <header className="border-b border-slate-200/70 bg-white/85 px-6 py-3 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/85">
+          <div className="flex items-center justify-between gap-4">
           <div>
             <p className="text-[11px] uppercase tracking-widest font-light text-slate-400">Chronic Care Management</p>
             <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-slate-50">
@@ -152,12 +161,17 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
             </h1>
           </div>
 
+          <div className="hidden min-w-64 max-w-sm flex-1 items-center rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-400 lg:flex">
+            <Search size={16} className="mr-2" />
+            Search patients, worklists, providers...
+          </div>
+
           <div className="flex items-center gap-2">
             {/* Role switcher (admin-only preview) */}
             {user.role === "admin" && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600">
+                <button className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700">
                   <span className="hidden sm:inline">View as:</span>
                   <span className="font-semibold capitalize">{currentRole.replace("_", " ")}</span>
                   <ChevronDown size={14} />
@@ -183,7 +197,7 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
             {/* Notifications */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="relative p-2.5 rounded-xl bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600">
+                <button className="relative p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700">
                   <Bell size={18} />
                   {unread.length > 0 && (
                     <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-rose-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
@@ -225,26 +239,11 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
+          </div>
         </header>
 
-        <main className="flex-1 overflow-auto p-6">{children}</main>
+        <main className="flex-1 overflow-auto bg-[radial-gradient(circle_at_top_right,rgba(14,165,233,0.12),transparent_30%),linear-gradient(180deg,#f8fafc,#eef2f7)] p-5 sm:p-6 dark:from-slate-950 dark:to-slate-900">{children}</main>
       </div>
-
-      {/* HIPAA idle session timeout warning */}
-      {warning && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm">
-          <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-100 dark:border-slate-700 p-6 max-w-sm w-full mx-4 shadow-xl">
-            <div className="flex items-center gap-2 text-amber-600 mb-2">
-              <Clock size={20} /> <span className="font-semibold">Session expiring</span>
-            </div>
-            <p className="text-sm text-slate-600 dark:text-slate-300">For the security of protected health information, you will be signed out in <span className="font-bold text-slate-900 dark:text-slate-50">{secondsLeft}s</span> due to inactivity.</p>
-            <div className="flex gap-2 mt-5">
-              <button onClick={stayLoggedIn} className="flex-1 px-4 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800">Stay signed in</button>
-              <button onClick={logoutNow} className="px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50">Sign out</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import {
-  Users, ClipboardCheck, PhoneOff, AlertTriangle, Receipt, Clock, TrendingUp, Database, Loader2,
+  Users, ClipboardCheck, PhoneOff, AlertTriangle, Receipt, TrendingUp, Database, Loader2,
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
@@ -105,14 +105,13 @@ export default function AdminDashboard() {
       )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon={Users} label="Active Patients" value={s?.totalActivePatients ?? "—"} sub={`${s?.totalTasks ?? 0} tasks this month`} />
-        <StatCard icon={ClipboardCheck} label="Completed" value={s?.completed ?? "—"} sub={`${s?.completionPct ?? 0}% completion`} tone="good" />
-        <StatCard icon={PhoneOff} label="Not Reached" value={s?.notReached ?? "—"} sub="Called No Answer / Voicemail" tone="warn" />
-        <StatCard icon={AlertTriangle} label="Pending Escalations" value={s?.pendingEscalations ?? "—"} sub="Awaiting provider review" tone="bad" />
-        <StatCard icon={Clock} label="Total CCM Time" value={`${Math.round((s?.totalMinutes ?? 0) / 60)}h`} sub={`${s?.totalMinutes ?? 0} minutes logged`} />
-        <StatCard icon={Receipt} label="Ready for Billing" value={s?.readyForBilling ?? "—"} sub="Meets CMS criteria" tone="good" />
-        <StatCard icon={TrendingUp} label="In Progress" value={s?.inProgress ?? "—"} sub="Currently being worked" />
-        <StatCard icon={AlertTriangle} label="Needs Review" value={s?.needsReview ?? "—"} sub="Flagged for provider" tone="warn" />
+        <StatCard icon={Users} label="Active Patients" value={s?.totalActivePatients ?? "-"} sub={`${s?.totalTasks ?? 0} tasks this month`} />
+        <StatCard icon={ClipboardCheck} label="Completed" value={s?.completed ?? "-"} sub={`${s?.completionPct ?? 0}% completion`} tone="good" />
+        <StatCard icon={PhoneOff} label="Not Reached" value={s?.notReached ?? "-"} sub="Called No Answer / Voicemail" tone="warn" />
+        <StatCard icon={AlertTriangle} label="Pending Escalations" value={s?.pendingEscalations ?? "-"} sub="Awaiting provider review" tone="bad" />
+        <StatCard icon={Receipt} label="Ready for Billing" value={s?.readyForBilling ?? "-"} sub="Meets CMS criteria" tone="good" />
+        <StatCard icon={TrendingUp} label="In Progress" value={s?.inProgress ?? "-"} sub="Currently being worked" />
+        <StatCard icon={AlertTriangle} label="Needs Review" value={s?.needsReview ?? "-"} sub="Flagged for provider" tone="warn" />
       </div>
 
       <div className="mt-6 bg-white rounded-3xl p-6 border border-slate-100">
@@ -236,7 +235,7 @@ export default function AdminDashboard() {
             onClick={() => setLocation(a.path)}
             className="bg-white rounded-2xl p-5 border border-slate-100 text-left hover:border-slate-300 transition-colors font-semibold text-slate-800"
           >
-            {a.label} →
+            {a.label} {"->"}
           </button>
         ))}
       </div>

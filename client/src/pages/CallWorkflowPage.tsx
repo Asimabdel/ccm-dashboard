@@ -1,13 +1,12 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { trpc } from "@/lib/trpc";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, useRoute } from "wouter";
 import { toast } from "sonner";
 import {
-  Loader2, Play, Pause, Square, Sparkles, AlertTriangle, Save, ArrowLeft, Clock, Phone,
+  Loader2, Sparkles, AlertTriangle, Save, ArrowLeft, Phone,
 } from "lucide-react";
-import { fmtMinutes } from "@/lib/ccm";
 
 type Responses = {
   howFeeling: string; newSymptoms: string; medicationAdherence: string; refillsNeeded: string;
@@ -22,26 +21,24 @@ const EMPTY: Responses = {
 };
 
 const SCRIPT: { key: keyof Responses; question: string; placeholder: string }[] = [
-  { key: "howFeeling", question: "How have you been feeling since our last check-in?", placeholder: "General wellbeing, energy, mood…" },
-  { key: "newSymptoms", question: "Any new or worsening symptoms? (chest pain, shortness of breath, dizziness, swelling)", placeholder: "Describe any new symptoms…" },
-  { key: "medicationAdherence", question: "Are you taking all medications as prescribed?", placeholder: "Adherence, missed doses, side effects…" },
-  { key: "refillsNeeded", question: "Do you need any prescription refills?", placeholder: "Medications needing refill…" },
+  { key: "howFeeling", question: "How have you been feeling since our last check-in?", placeholder: "General wellbeing, energy, mood..." },
+  { key: "newSymptoms", question: "Any new or worsening symptoms? (chest pain, shortness of breath, dizziness, swelling)", placeholder: "Describe any new symptoms..." },
+  { key: "medicationAdherence", question: "Are you taking all medications as prescribed?", placeholder: "Adherence, missed doses, side effects..." },
+  { key: "refillsNeeded", question: "Do you need any prescription refills?", placeholder: "Medications needing refill..." },
   { key: "bloodPressureReading", question: "Most recent blood pressure reading?", placeholder: "e.g. 128/82" },
   { key: "bloodSugarReading", question: "Most recent blood sugar reading? (if applicable)", placeholder: "e.g. 110 mg/dL fasting" },
-  { key: "erHospitalizationSince", question: "Any ER visits or hospitalizations since last contact?", placeholder: "Dates, reason, outcome…" },
-  { key: "recentSpecialistVisits", question: "Any recent specialist visits?", placeholder: "Specialist, date, findings…" },
-  { key: "upcomingAppointments", question: "Any upcoming appointments scheduled?", placeholder: "Provider, date…" },
-  { key: "followUpNeeded", question: "What follow-up does this patient need?", placeholder: "Labs, referrals, scheduling, education…" },
-  { key: "patientConcerns", question: "Any other concerns from the patient?", placeholder: "Questions, social needs, barriers…" },
+  { key: "erHospitalizationSince", question: "Any ER visits or hospitalizations since last contact?", placeholder: "Dates, reason, outcome..." },
+  { key: "recentSpecialistVisits", question: "Any recent specialist visits?", placeholder: "Specialist, date, findings..." },
+  { key: "upcomingAppointments", question: "Any upcoming appointments scheduled?", placeholder: "Provider, date..." },
+  { key: "followUpNeeded", question: "What follow-up does this patient need?", placeholder: "Labs, referrals, scheduling, education..." },
+  { key: "patientConcerns", question: "Any other concerns from the patient?", placeholder: "Questions, social needs, barriers..." },
 ];
-
-function pad(n: number) { return n.toString().padStart(2, "0"); }
 
 export default function CallWorkflowPage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
-  const [, params] = useRoute("/workflow/:id");
+  const [, params] = useRoute("/workflow/:taskId");
   const [, setLocation] = useLocation();
-  const taskId = Number(params?.id);
+  const taskId = Number(params?.taskId);
 
   const task = trpc.worklist.getTask.useQuery(taskId, { enabled: !!user && !!taskId });
   const patientId = task.data?.patientId;
@@ -50,12 +47,9 @@ export default function CallWorkflowPage() {
   const utils = trpc.useUtils();
 
   const [responses, setResponses] = useState<Responses>(EMPTY);
-  const [seconds, setSeconds] = useState(0);
-  const [running, setRunning] = useState(false);
   const [generatedNote, setGeneratedNote] = useState("");
   const [escalate, setEscalate] = useState(false);
   const [escalationReason, setEscalationReason] = useState("");
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
   // hydrate from existing note (review mode)
@@ -71,21 +65,11 @@ export default function CallWorkflowPage() {
       });
       if (n.generatedNote) setGeneratedNote(n.generatedNote);
       if (n.escalationFlag) { setEscalate(true); setEscalationReason(n.escalationReason || ""); }
-      if (n.timeSpentMinutes) setSeconds(n.timeSpentMinutes * 60);
       setHydrated(true);
     } else if (task.data && !existingNote.data && !hydrated && existingNote.isFetched) {
-      if (task.data.timeSpentMinutes) setSeconds(task.data.timeSpentMinutes * 60);
       setHydrated(true);
     }
   }, [existingNote.data, existingNote.isFetched, task.data, hydrated]);
-
-  useEffect(() => {
-    if (running) { timer.current = setInterval(() => setSeconds((s) => s + 1), 1000); }
-    else if (timer.current) { clearInterval(timer.current); }
-    return () => { if (timer.current) clearInterval(timer.current); };
-  }, [running]);
-
-  const minutes = Math.max(1, Math.round(seconds / 60));
 
   const genNote = trpc.ccmNotesAI.generateNote.useMutation({
     onSuccess: (r) => { setGeneratedNote(typeof r.note === "string" ? r.note : String(r.note)); toast.success("Note drafted by AI. Review and edit as needed."); },
@@ -116,34 +100,24 @@ export default function CallWorkflowPage() {
       <button onClick={() => setLocation("/worklist")} className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 mb-4"><ArrowLeft size={15} /> Back to worklist</button>
 
       <div className="grid lg:grid-cols-3 gap-6">
-        {/* Left: patient + timer */}
+        {/* Left: patient context */}
         <div className="space-y-5">
           <div className="bg-white rounded-3xl border border-slate-100 p-6">
             <p className="text-xs uppercase tracking-wider text-slate-400 mb-1">Patient</p>
             <h2 className="text-2xl font-bold text-slate-900">{p?.name || <Loader2 className="animate-spin inline" />}</h2>
-            <p className="text-sm text-slate-500 mt-0.5">{p?.dateOfBirth ? `DOB ${new Date(p.dateOfBirth).toLocaleDateString()}` : ""} {p?.phoneNumber ? `· ${p.phoneNumber}` : ""}</p>
+            <p className="text-sm text-slate-500 mt-0.5">{p?.dateOfBirth ? `DOB ${new Date(p.dateOfBirth).toLocaleDateString()}` : ""} {p?.phoneNumber ? `- ${p.phoneNumber}` : ""}</p>
             <div className="mt-4 flex flex-wrap gap-1.5">
               {conditions.map((c) => <span key={c} className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-[hsl(200_60%_94%)] text-[hsl(200_80%_30%)]">{c}</span>)}
             </div>
             {p?.insurance && <p className="mt-4 text-sm text-slate-500">Insurance: <span className="text-slate-700">{p.insurance}</span></p>}
           </div>
 
-          <div className="bg-slate-900 text-white rounded-3xl p-6 text-center">
-            <div className="flex items-center justify-center gap-2 text-slate-300 text-xs uppercase tracking-wider mb-3"><Clock size={13} /> Call Timer</div>
-            <div className="text-5xl font-bold tabular-nums tracking-tight">{pad(Math.floor(seconds / 60))}:{pad(seconds % 60)}</div>
-            <p className="text-slate-400 text-xs mt-1">Billable: {fmtMinutes(minutes)}</p>
-            <div className="flex items-center justify-center gap-2 mt-5">
-              {!running ? (
-                <button onClick={() => setRunning(true)} className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-2xl bg-[hsl(150_60%_45%)] font-semibold text-sm hover:brightness-110 active:scale-[0.97] transition"><Play size={15} /> Start</button>
-              ) : (
-                <button onClick={() => setRunning(false)} className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-2xl bg-[hsl(40_95%_55%)] font-semibold text-sm hover:brightness-110 active:scale-[0.97] transition"><Pause size={15} /> Pause</button>
-              )}
-              <button onClick={() => { setRunning(false); }} className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-2xl bg-white/10 font-semibold text-sm hover:bg-white/20 active:scale-[0.97] transition"><Square size={15} /> Stop</button>
-            </div>
-            <div className="mt-4 flex items-center justify-center gap-2 text-xs">
-              <span className="text-slate-400">Manual entry:</span>
-              <input type="number" min={0} value={minutes} onChange={(e) => setSeconds(Math.max(0, Number(e.target.value)) * 60)} className="w-16 px-2 py-1 rounded-lg text-slate-900 text-center" /> <span className="text-slate-400">min</span>
-            </div>
+          <div className="bg-slate-900 text-white rounded-3xl p-6">
+            <p className="text-xs uppercase tracking-wider text-slate-400 mb-2">Documentation Flow</p>
+            <h3 className="text-xl font-bold">Focus on the care conversation</h3>
+            <p className="mt-3 text-sm leading-6 text-slate-300">
+              Capture the patient response, needed follow-up, and provider concerns without running a stopwatch.
+            </p>
           </div>
         </div>
 
@@ -179,7 +153,7 @@ export default function CallWorkflowPage() {
           <div className="bg-white rounded-3xl border border-slate-100 p-6">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2"><Sparkles size={16} className="text-[hsl(280_60%_55%)]" /><h3 className="font-bold text-slate-900">CCM Documentation Note</h3></div>
-              <button disabled={genNote.isPending} onClick={() => genNote.mutate({ patientName: p?.name || "Patient", timeSpentMinutes: minutes, responses })}
+              <button disabled={genNote.isPending} onClick={() => genNote.mutate({ patientName: p?.name || "Patient", responses })}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl bg-[hsl(280_60%_55%)] text-white text-sm font-semibold hover:brightness-110 active:scale-[0.97] transition disabled:opacity-50">
                 {genNote.isPending ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Generate with AI
               </button>
@@ -192,14 +166,14 @@ export default function CallWorkflowPage() {
             <button disabled={saveNote.isPending} onClick={() => saveNote.mutate({
               ccmTaskId: taskId, patientId: patientId!, ...responses, generatedNote,
               escalationFlag: escalate, escalationReason: escalate ? escalationReason : undefined,
-              timeSpentMinutes: minutes, markCompleted: false,
+              markCompleted: false,
             })} className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-2xl border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50 disabled:opacity-50">
               <Save size={15} /> Save Draft
             </button>
             <button disabled={saveNote.isPending} onClick={() => saveNote.mutate({
               ccmTaskId: taskId, patientId: patientId!, ...responses, generatedNote,
               escalationFlag: escalate, escalationReason: escalate ? escalationReason : undefined,
-              timeSpentMinutes: minutes, markCompleted: true,
+              markCompleted: true,
             })} className="inline-flex items-center gap-1.5 px-6 py-2.5 rounded-2xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 active:scale-[0.97] transition disabled:opacity-50">
               {saveNote.isPending ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Complete & Save
             </button>

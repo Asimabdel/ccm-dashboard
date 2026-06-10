@@ -490,7 +490,6 @@ export async function getAdminStats(month: string) {
   const notStarted = tasks.filter((t) => ["not_started", "assigned"].includes(t.status as string)).length;
   const readyForBilling = tasks.filter((t) => t.status === "ready_for_billing").length;
   const needsReview = tasks.filter((t) => t.providerReviewNeeded).length;
-  const totalMinutes = tasks.reduce((a, t) => a + (t.timeSpentMinutes || 0), 0);
 
   const pendingEsc = await db.select({ c: sql<number>`COUNT(*)` }).from(providerEscalations).where(eq(providerEscalations.escalationStatus, "pending"));
 
@@ -518,7 +517,6 @@ export async function getAdminStats(month: string) {
     needsReview,
     pendingEscalations: pendingEsc[0]?.c ?? 0,
     completionPct: total ? Math.round((completed / total) * 100) : 0,
-    totalMinutes,
     statusDistribution,
     priorityDistribution,
   };
@@ -535,21 +533,19 @@ export async function getStaffPerformance(month: string) {
       staffId: ccmTasks.assignedStaffId,
       staffName: staffAlias.name,
       status: ccmTasks.status,
-      timeSpentMinutes: ccmTasks.timeSpentMinutes,
       ccmNoteCompleted: ccmTasks.ccmNoteCompleted,
     })
     .from(ccmTasks)
     .leftJoin(staffAlias, eq(ccmTasks.assignedStaffId, staffAlias.id))
     .where(eq(ccmTasks.month, month));
 
-  const map = new Map<number, { staffId: number; staffName: string; assigned: number; completed: number; minutes: number }>();
+  const map = new Map<number, { staffId: number; staffName: string; assigned: number; completed: number }>();
   const completedStatuses = ["completed", "ready_for_billing", "billed"];
   for (const r of rows) {
     if (!r.staffId) continue;
-    const cur = map.get(r.staffId) || { staffId: r.staffId, staffName: r.staffName || "Unassigned", assigned: 0, completed: 0, minutes: 0 };
+    const cur = map.get(r.staffId) || { staffId: r.staffId, staffName: r.staffName || "Unassigned", assigned: 0, completed: 0 };
     cur.assigned += 1;
     if (completedStatuses.includes(r.status as string)) cur.completed += 1;
-    cur.minutes += r.timeSpentMinutes || 0;
     map.set(r.staffId, cur);
   }
   return Array.from(map.values());
@@ -739,7 +735,7 @@ export async function recomputeBilling(taskId: number, month: string) {
   const task = await getCCMTaskById(taskId);
   if (!task) return;
 
-  const timeMet = (task.timeSpentMinutes || 0) >= 20;
+  const timeMet = true;
   const docComplete = !!task.ccmNoteCompleted;
   const providerReviewDone = !task.providerReviewNeeded;
   let billingStatus:
@@ -747,10 +743,10 @@ export async function recomputeBilling(taskId: number, month: string) {
     | "provider_review_pending" | "ready_for_billing" | "billed"
     | "denied" | "needs_correction" = "not_started";
   if (task.status === "billed") billingStatus = "billed";
-  else if (timeMet && docComplete && providerReviewDone) billingStatus = "ready_for_billing";
+  else if (docComplete && providerReviewDone) billingStatus = "ready_for_billing";
   else if (task.status === "documentation_incomplete") billingStatus = "documentation_incomplete";
   else if (task.providerReviewNeeded) billingStatus = "provider_review_pending";
-  else if ((task.timeSpentMinutes || 0) > 0) billingStatus = "in_progress";
+  else if (task.status === "in_progress") billingStatus = "in_progress";
 
   const existing = await db.select().from(billingRecords).where(eq(billingRecords.ccmTaskId, taskId)).limit(1);
   const values = {
@@ -858,7 +854,7 @@ export async function writeAuditLog(entry: InsertAuditLog) {
   }
 }
 
-/** Fetch the most recent audit log entries (admin only — enforced at router). */
+/** Fetch the most recent audit log entries (admin only â€” enforced at router). */
 export async function getAuditLogs(opts?: { limit?: number; action?: string; userId?: number }) {
   const db = await getDb();
   if (!db) return [];
