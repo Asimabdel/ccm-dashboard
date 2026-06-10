@@ -7,7 +7,6 @@ export const ccmNotesRouter = router({
     .input(
       z.object({
         patientName: z.string(),
-        timeSpentMinutes: z.number(),
         responses: z.object({
           howFeeling: z.string().optional(),
           newSymptoms: z.string().optional(),
@@ -27,7 +26,6 @@ export const ccmNotesRouter = router({
       const prompt = `Generate a professional and concise CCM (Chronic Care Management) monthly follow-up note based on the following patient call responses. The note should be well-organized, clinically appropriate, and suitable for medical records.
 
 Patient Name: ${input.patientName}
-Call Duration: ${input.timeSpentMinutes} minutes
 Date: ${new Date().toLocaleDateString()}
 
 Call Assessment:
