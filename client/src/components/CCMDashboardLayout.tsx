@@ -5,7 +5,7 @@ import { trpc } from "@/lib/trpc";
 import {
   LogOut, Menu, X, Bell, LayoutDashboard, Users, ClipboardList,
   UserCog, AlertTriangle, Receipt, BarChart3, PhoneCall, CalendarClock,
-  ChevronDown, Check, ShieldCheck, Clock,
+  ChevronDown, Check, ShieldCheck, Clock, Building2, Stethoscope,
 } from "lucide-react";
 import { useIdleLogout } from "@/hooks/useIdleLogout";
 import {
@@ -27,7 +27,9 @@ const NAV: Record<string, NavItem[]> = {
     { label: "Billing", path: "/billing", icon: Receipt },
     { label: "Follow-ups", path: "/follow-ups", icon: CalendarClock },
     { label: "Reports", path: "/reports", icon: BarChart3 },
-    { label: "Team / Access", path: "/team", icon: UserCog },
+    { label: "Providers", path: "/providers", icon: Stethoscope },
+    { label: "Clinics", path: "/clinics", icon: Building2 },
+    { label: "Team & Access", path: "/team", icon: UserCog },
     { label: "Audit Log", path: "/audit", icon: ShieldCheck },
   ],
   staff: [
@@ -92,40 +94,43 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
       {/* Sidebar */}
       <aside
         className={cn(
-          "transition-all duration-300 flex flex-col bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700",
+          "transition-all duration-300 flex flex-col bg-white/95 dark:bg-slate-800 border-r border-slate-200/70 dark:border-slate-700 backdrop-blur-sm",
           sidebarOpen ? "w-64" : "w-20"
         )}
       >
         <div className="p-4 flex items-center justify-between border-b border-slate-100 dark:border-slate-700">
-          <div className={cn(!sidebarOpen && "hidden", "flex items-center gap-2")}>
-            <div className="w-9 h-9 bg-[hsl(200_100%_50%)] rounded-xl flex items-center justify-center">
+          <div className={cn(!sidebarOpen && "hidden", "flex items-center gap-2.5")}>
+            <div className="w-9 h-9 bg-gradient-to-br from-[hsl(200_100%_55%)] to-[hsl(210_100%_45%)] rounded-xl flex items-center justify-center shadow-glow-primary">
               <span className="text-white font-bold text-xs">CCM</span>
             </div>
-            <span className="font-bold tracking-tight text-slate-900 dark:text-slate-50">Care Hub</span>
+            <div className="leading-tight">
+              <span className="block font-bold tracking-tight text-slate-900 dark:text-slate-50">Care Hub</span>
+              <span className="block text-[10px] uppercase tracking-widest text-slate-400 font-medium">Operations</span>
+            </div>
           </div>
           <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg">
             {sidebarOpen ? <X size={18} /> : <Menu size={18} />}
           </button>
         </div>
 
-        <nav className="flex-1 overflow-y-auto p-3 space-y-1">
+        <nav className="flex-1 overflow-y-auto p-3 space-y-0.5">
           {items.map((item) => {
             const Icon = item.icon;
-            const active = location === item.path;
+            const active = location === item.path || (item.path !== "/" && location.startsWith(item.path + "/"));
             return (
               <button
                 key={item.path}
                 onClick={() => setLocation(item.path)}
                 className={cn(
-                  "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors",
+                  "group w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 active:scale-[0.98] relative",
                   active
-                    ? "bg-[hsl(200_100%_50%)] text-white"
-                    : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+                    ? "bg-gradient-to-r from-[hsl(200_100%_50%)] to-[hsl(205_100%_47%)] text-white shadow-glow-primary"
+                    : "text-slate-500 dark:text-slate-300 hover:bg-slate-100/80 dark:hover:bg-slate-700 hover:text-slate-900"
                 )}
                 title={item.label}
               >
-                <Icon size={18} className="shrink-0" />
-                {sidebarOpen && <span>{item.label}</span>}
+                <Icon size={18} className={cn("shrink-0 transition-transform duration-200", !active && "group-hover:scale-110")} />
+                {sidebarOpen && <span className="truncate">{item.label}</span>}
               </button>
             );
           })}
@@ -144,7 +149,7 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
 
       {/* Main */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 px-6 py-3 flex items-center justify-between">
+        <header className="bg-white/80 dark:bg-slate-800 border-b border-slate-200/70 dark:border-slate-700 px-6 py-3 flex items-center justify-between backdrop-blur-md sticky top-0 z-20">
           <div>
             <p className="text-[11px] uppercase tracking-widest font-light text-slate-400">Chronic Care Management</p>
             <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-slate-50">
@@ -227,7 +232,7 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
           </div>
         </header>
 
-        <main className="flex-1 overflow-auto p-6">{children}</main>
+        <main className="flex-1 overflow-auto p-6"><div className="animate-fade-in-up">{children}</div></main>
       </div>
 
       {/* HIPAA idle session timeout warning */}

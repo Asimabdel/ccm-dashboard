@@ -190,7 +190,6 @@ export async function seedDatabase(ownerOpenId: string | null) {
   activePatients.forEach((p, i) => {
     const status = statuses[i % statuses.length];
     const completedish = ["completed", "ready_for_billing", "billed", "needs_provider_review", "documentation_incomplete", "needs_appointment"].includes(status);
-    const timeSpent = completedish ? 20 + (i % 4) * 5 : status === "in_progress" ? 8 + (i % 5) : 0;
     taskValues.push({
       patientId: p.id,
       month,
@@ -198,7 +197,6 @@ export async function seedDatabase(ownerOpenId: string | null) {
       priorityLevel: p.priorityLevel,
       status,
       dateContacted: completedish || status === "in_progress" ? new Date(Date.now() - (i % 10) * 86400000) : null,
-      timeSpentMinutes: timeSpent,
       ccmNoteCompleted: completedish,
       providerReviewNeeded: status === "needs_provider_review",
       followUpAppointmentNeeded: status === "needs_appointment",
@@ -232,11 +230,10 @@ export async function seedDatabase(ownerOpenId: string | null) {
       upcomingAppointments: i % 2 === 0 ? "Follow-up with PCP in 4 weeks." : "None scheduled.",
       followUpNeeded: t.followUpAppointmentNeeded ? "Schedule office visit and labs." : "Routine monthly follow-up.",
       patientConcerns: escalate ? "Worried about new chest symptoms." : "No major concerns.",
-      generatedNote: `Chronic Care Management note for ${patient.name}. Conditions reviewed: ${(patient.chronicConditions || []).join(", ")}. Patient ${i % 2 === 0 ? "reports feeling stable" : "reports increased fatigue"}. Medication adherence assessed and reinforced. Total time spent: ${t.timeSpentMinutes} minutes.`,
+      generatedNote: `Chronic Care Management note for ${patient.name}. Conditions reviewed: ${(patient.chronicConditions || []).join(", ")}. Patient ${i % 2 === 0 ? "reports feeling stable" : "reports increased fatigue"}. Medication adherence assessed and reinforced.`,
       escalationReason: escalate ? "New cardiac symptoms requiring provider review." : null,
       escalationFlag: escalate,
       followUpActions: t.followUpAppointmentNeeded ? ["Schedule office visit", "Order A1C lab"] : [],
-      timeSpentMinutes: t.timeSpentMinutes,
     });
   });
   if (noteValues.length) await db.insert(ccmNotes).values(noteValues);
@@ -294,10 +291,9 @@ export async function seedDatabase(ownerOpenId: string | null) {
   // --- Billing records ---
   const billingValues: any[] = [];
   taskRows.forEach((t) => {
-    const timeSpent = t.timeSpentMinutes ?? 0;
-    const timeMet = timeSpent >= 20;
     const docComplete = t.ccmNoteCompleted;
     const providerReviewDone = !t.providerReviewNeeded;
+    const contacted = !!t.dateContacted || ["in_progress", "completed", "ready_for_billing", "billed"].includes(t.status as string);
     let billingStatus:
       | "not_started"
       | "in_progress"
@@ -308,16 +304,16 @@ export async function seedDatabase(ownerOpenId: string | null) {
       | "denied"
       | "needs_correction" = "not_started";
     if (t.status === "billed") billingStatus = "billed";
-    else if (timeMet && docComplete && providerReviewDone) billingStatus = "ready_for_billing";
-    else if (t.status === "documentation_incomplete" || (docComplete === false && timeSpent > 0)) billingStatus = "documentation_incomplete";
+    else if (docComplete && providerReviewDone) billingStatus = "ready_for_billing";
+    else if (t.status === "documentation_incomplete") billingStatus = "documentation_incomplete";
     else if (t.providerReviewNeeded) billingStatus = "provider_review_pending";
-    else if (timeSpent > 0) billingStatus = "in_progress";
+    else if (contacted) billingStatus = "in_progress";
 
     billingValues.push({
       ccmTaskId: t.id,
       patientId: t.patientId,
       month,
-      timeThresholdMet: timeMet,
+      timeThresholdMet: true,
       documentationComplete: docComplete,
       providerAssociated: true,
       carePlanReviewed: docComplete,
@@ -378,7 +374,6 @@ export async function seedDatabase(ownerOpenId: string | null) {
     const notReached = staffTasks.filter((t) => ["called_no_answer", "voicemail_left"].includes(t.status as string)).length;
     const review = staffTasks.filter((t) => t.providerReviewNeeded).length;
     const ready = staffTasks.filter((t) => t.billingReady).length;
-    const time = staffTasks.reduce((a, t) => a + (t.timeSpentMinutes || 0), 0);
     pmValues.push({
       month,
       staffId: su.id,
@@ -386,7 +381,7 @@ export async function seedDatabase(ownerOpenId: string | null) {
       clinicId: clinicRows.find((c) => c.location === su.clinicLocation)?.id ?? null,
       totalCCMsCompleted: completed,
       totalCCMsAssigned: staffTasks.length,
-      totalTimeSpentMinutes: time,
+      totalTimeSpentMinutes: 0,
       patientsNotReached: notReached,
       patientsNeedingReview: review,
       patientsReadyForBilling: ready,

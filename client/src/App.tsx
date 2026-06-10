@@ -18,6 +18,8 @@ import ReportsPage from "./pages/ReportsPage";
 import BulkImportPage from "./pages/BulkImportPage";
 import AuditLogPage from "./pages/AuditLogPage";
 import TeamAccessPage from "./pages/TeamAccessPage";
+import ClinicsPage from "./pages/ClinicsPage";
+import ProvidersPage from "./pages/ProvidersPage";
 
 function Router() {
   return (
@@ -29,6 +31,8 @@ function Router() {
       <Route path="/patients/:id" component={PatientDetailPage} />
       <Route path="/audit" component={AuditLogPage} />
       <Route path="/team" component={TeamAccessPage} />
+      <Route path="/clinics" component={ClinicsPage} />
+      <Route path="/providers" component={ProvidersPage} />
       <Route path="/worklist" component={WorklistPage} />
       <Route path="/workflow" component={CallWorkflowPage} />
       <Route path="/workflow/:taskId" component={CallWorkflowPage} />

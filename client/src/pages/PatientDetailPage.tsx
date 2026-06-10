@@ -4,7 +4,7 @@ import { trpc } from "@/lib/trpc";
 import { useParams, useLocation } from "wouter";
 import { ArrowLeft, Loader2, Phone, Calendar, Shield, Globe, User, Activity, FileText, ClipboardList } from "lucide-react";
 import {
-  PRIORITY_LABELS, STATUS_LABELS, priorityBadgeClass, statusBadgeClass, fmtDate, fmtMinutes, FOLLOWUP_TYPE_LABELS, FOLLOWUP_STATUS_LABELS,
+  PRIORITY_LABELS, STATUS_LABELS, priorityBadgeClass, statusBadgeClass, fmtDate, FOLLOWUP_TYPE_LABELS, FOLLOWUP_STATUS_LABELS,
 } from "@/lib/ccm";
 
 function Section({ title, icon: Icon, children }: { title: string; icon: React.ElementType; children: React.ReactNode }) {
@@ -82,7 +82,7 @@ export default function PatientDetailPage() {
                 <div key={t.id} className="flex items-center justify-between p-3 rounded-2xl bg-slate-50">
                   <div>
                     <p className="font-medium text-slate-800">{t.month}</p>
-                    <p className="text-xs text-slate-400">{fmtMinutes(t.timeSpentMinutes)} · Contacted {fmtDate(t.dateContacted)}</p>
+                    <p className="text-xs text-slate-400">Contacted {fmtDate(t.dateContacted)}</p>
                   </div>
                   <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${statusBadgeClass(t.status ?? "not_started")}`}>{STATUS_LABELS[t.status ?? "not_started"] || t.status}</span>
                 </div>
@@ -97,7 +97,7 @@ export default function PatientDetailPage() {
               {d.notes.map((n) => (
                 <div key={n.id} className="p-4 rounded-2xl bg-slate-50">
                   <div className="flex items-center justify-between mb-2">
-                    <p className="text-xs font-semibold text-slate-500">{fmtDate(n.createdAt)} · {fmtMinutes(n.timeSpentMinutes)}</p>
+                    <p className="text-xs font-semibold text-slate-500">{fmtDate(n.createdAt)}</p>
                   </div>
                   <p className="text-sm text-slate-700 whitespace-pre-wrap line-clamp-6">{n.generatedNote || "—"}</p>
                 </div>

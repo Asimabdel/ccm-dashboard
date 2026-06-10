@@ -69,3 +69,19 @@
 - [x] Add Admin "Team / Access" page (/team) to assign roles per worker
 - [x] Bootstrap: project owner (OWNER_OPEN_ID) auto-promoted to admin on upsert
 - [x] Vitest: non-admin cannot self-escalate; cannot reach users/audit/import (24 tests pass)
+
+## Round 3: Modernize UI, invites, providers/clinics CRUD, remove timers
+- [x] Schema: teamInvites table (email, role, clinicLocation, status, invitedBy, timestamps)
+- [x] Backend: invites.send (admin) — pre-assign role by email
+- [x] Backend: invites.list / invites.revoke (admin)
+- [x] Backend: on user upsert, auto-apply pending invite role + clinic by email
+- [x] Backend: users.remove — remove team member (self-removal lockout guard)
+- [x] Backend: providers CRUD (list/create/update/remove, admin, reassign guard)
+- [x] Backend: clinics CRUD (list/create/update/remove, admin, reassign guard)
+- [x] Remove call-duration timer + manual time entry from Call Workflow
+- [x] Remove time/minutes tracking from billing + stats + seed (backend + UI)
+- [x] Frontend: Team & Access page — invite form + pending invites + remove member
+- [x] Frontend: Providers management page (add/edit/remove)
+- [x] Frontend: Clinics management page (add/edit/remove)
+- [x] UI modernization pass (soft shadows, gradient accents, motion, sticky header)
+- [x] Vitest: invites/team/clinic/provider access control + lockout guards (32 tests pass)

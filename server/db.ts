@@ -14,6 +14,7 @@ import {
   notifications,
   productivityMetrics,
   auditLogs,
+  teamInvites,
   type InsertAuditLog,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
@@ -74,6 +75,30 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       updateSet.role = "admin";
     }
 
+    // Claim a pending team invite matching this email (assign role + clinic on first sign-in).
+    let claimedInvite: { id: number; role: typeof teamInvites.$inferSelect["role"]; clinicLocation: string | null } | null = null;
+    if (user.email && user.openId !== ENV.ownerOpenId) {
+      const existing = await db.select().from(users).where(eq(users.openId, user.openId)).limit(1);
+      const isNewOrUnassigned = !existing.length || existing[0].role === "user";
+      if (isNewOrUnassigned) {
+        const invites = await db
+          .select()
+          .from(teamInvites)
+          .where(and(eq(teamInvites.email, user.email), eq(teamInvites.status, "pending")))
+          .limit(1);
+        if (invites.length) {
+          const inv = invites[0];
+          claimedInvite = { id: inv.id, role: inv.role, clinicLocation: inv.clinicLocation };
+          values.role = inv.role;
+          updateSet.role = inv.role;
+          if (inv.clinicLocation) {
+            values.clinicLocation = inv.clinicLocation;
+            updateSet.clinicLocation = inv.clinicLocation;
+          }
+        }
+      }
+    }
+
     if (!values.lastSignedIn) {
       values.lastSignedIn = new Date();
     }
@@ -85,6 +110,10 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     await db.insert(users).values(values).onDuplicateKeyUpdate({
       set: updateSet,
     });
+
+    if (claimedInvite) {
+      await db.update(teamInvites).set({ status: "accepted", updatedAt: new Date() }).where(eq(teamInvites.id, claimedInvite.id));
+    }
   } catch (error) {
     console.error("[Database] Failed to upsert user:", error);
     throw error;
@@ -490,7 +519,6 @@ export async function getAdminStats(month: string) {
   const notStarted = tasks.filter((t) => ["not_started", "assigned"].includes(t.status as string)).length;
   const readyForBilling = tasks.filter((t) => t.status === "ready_for_billing").length;
   const needsReview = tasks.filter((t) => t.providerReviewNeeded).length;
-  const totalMinutes = tasks.reduce((a, t) => a + (t.timeSpentMinutes || 0), 0);
 
   const pendingEsc = await db.select({ c: sql<number>`COUNT(*)` }).from(providerEscalations).where(eq(providerEscalations.escalationStatus, "pending"));
 
@@ -518,7 +546,6 @@ export async function getAdminStats(month: string) {
     needsReview,
     pendingEscalations: pendingEsc[0]?.c ?? 0,
     completionPct: total ? Math.round((completed / total) * 100) : 0,
-    totalMinutes,
     statusDistribution,
     priorityDistribution,
   };
@@ -535,21 +562,19 @@ export async function getStaffPerformance(month: string) {
       staffId: ccmTasks.assignedStaffId,
       staffName: staffAlias.name,
       status: ccmTasks.status,
-      timeSpentMinutes: ccmTasks.timeSpentMinutes,
       ccmNoteCompleted: ccmTasks.ccmNoteCompleted,
     })
     .from(ccmTasks)
     .leftJoin(staffAlias, eq(ccmTasks.assignedStaffId, staffAlias.id))
     .where(eq(ccmTasks.month, month));
 
-  const map = new Map<number, { staffId: number; staffName: string; assigned: number; completed: number; minutes: number }>();
+  const map = new Map<number, { staffId: number; staffName: string; assigned: number; completed: number }>();
   const completedStatuses = ["completed", "ready_for_billing", "billed"];
   for (const r of rows) {
     if (!r.staffId) continue;
-    const cur = map.get(r.staffId) || { staffId: r.staffId, staffName: r.staffName || "Unassigned", assigned: 0, completed: 0, minutes: 0 };
+    const cur = map.get(r.staffId) || { staffId: r.staffId, staffName: r.staffName || "Unassigned", assigned: 0, completed: 0 };
     cur.assigned += 1;
     if (completedStatuses.includes(r.status as string)) cur.completed += 1;
-    cur.minutes += r.timeSpentMinutes || 0;
     map.set(r.staffId, cur);
   }
   return Array.from(map.values());
@@ -739,25 +764,25 @@ export async function recomputeBilling(taskId: number, month: string) {
   const task = await getCCMTaskById(taskId);
   if (!task) return;
 
-  const timeMet = (task.timeSpentMinutes || 0) >= 20;
   const docComplete = !!task.ccmNoteCompleted;
   const providerReviewDone = !task.providerReviewNeeded;
+  const contacted = !!task.dateContacted || ["in_progress", "completed", "ready_for_billing", "billed"].includes(task.status as string);
   let billingStatus:
     | "not_started" | "in_progress" | "documentation_incomplete"
     | "provider_review_pending" | "ready_for_billing" | "billed"
     | "denied" | "needs_correction" = "not_started";
   if (task.status === "billed") billingStatus = "billed";
-  else if (timeMet && docComplete && providerReviewDone) billingStatus = "ready_for_billing";
+  else if (docComplete && providerReviewDone) billingStatus = "ready_for_billing";
   else if (task.status === "documentation_incomplete") billingStatus = "documentation_incomplete";
   else if (task.providerReviewNeeded) billingStatus = "provider_review_pending";
-  else if ((task.timeSpentMinutes || 0) > 0) billingStatus = "in_progress";
+  else if (contacted) billingStatus = "in_progress";
 
   const existing = await db.select().from(billingRecords).where(eq(billingRecords.ccmTaskId, taskId)).limit(1);
   const values = {
     ccmTaskId: taskId,
     patientId: task.patientId,
     month,
-    timeThresholdMet: timeMet,
+    timeThresholdMet: true,
     documentationComplete: docComplete,
     providerAssociated: true,
     carePlanReviewed: docComplete,

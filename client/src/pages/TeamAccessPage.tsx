@@ -2,7 +2,12 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
-import { Loader2, UserCog, ShieldCheck } from "lucide-react";
+import { useState } from "react";
+import { Loader2, UserCog, ShieldCheck, Mail, UserPlus, Trash2, X, Clock, CheckCircle2 } from "lucide-react";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const ROLE_OPTIONS = [
   { value: "admin", label: "Admin / Practice Manager" },
@@ -12,6 +17,8 @@ const ROLE_OPTIONS = [
   { value: "front_desk", label: "Front Desk" },
   { value: "user", label: "No access (pending)" },
 ] as const;
+
+const ASSIGNABLE = ROLE_OPTIONS.filter((r) => r.value !== "user");
 
 function roleBadge(role: string): string {
   switch (role) {
@@ -28,11 +35,33 @@ export default function TeamAccessPage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
   const isAdmin = user?.role === "admin";
   const users = trpc.users.list.useQuery(undefined, { enabled: isAdmin });
+  const invites = trpc.invites.list.useQuery(undefined, { enabled: isAdmin });
   const utils = trpc.useUtils();
+
+  const [email, setEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<string>("staff");
+  const [clinicLocation, setClinicLocation] = useState("");
+  const [removeTarget, setRemoveTarget] = useState<{ id: number; name: string } | null>(null);
 
   const setRole = trpc.users.setRole.useMutation({
     onSuccess: () => { utils.users.list.invalidate(); toast.success("Role updated."); },
     onError: (e) => toast.error(e.message),
+  });
+  const sendInvite = trpc.invites.send.useMutation({
+    onSuccess: () => {
+      utils.invites.list.invalidate();
+      toast.success("Invite created. The teammate gets this role automatically when they first sign in with that email.");
+      setEmail(""); setClinicLocation("");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const revokeInvite = trpc.invites.revoke.useMutation({
+    onSuccess: () => { utils.invites.list.invalidate(); toast.success("Invite revoked."); },
+    onError: (e) => toast.error(e.message),
+  });
+  const removeMember = trpc.users.remove.useMutation({
+    onSuccess: () => { utils.users.list.invalidate(); toast.success("Access revoked."); setRemoveTarget(null); },
+    onError: (e) => { toast.error(e.message); setRemoveTarget(null); },
   });
 
   if (loading || !user) {
@@ -41,22 +70,79 @@ export default function TeamAccessPage() {
 
   if (!isAdmin) {
     return (
-      <CCMDashboardLayout title="Team / Access">
+      <CCMDashboardLayout title="Team & Access">
         <div className="bg-white rounded-3xl border border-slate-100 p-10 text-center text-slate-500">
-          Worker access management is restricted to administrators.
+          Team management is restricted to administrators.
         </div>
       </CCMDashboardLayout>
     );
   }
 
+  const field = "px-3 py-2.5 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)] transition";
+  const pendingInvites = (invites.data || []).filter((i) => i.status === "pending");
+
   return (
-    <CCMDashboardLayout title="Team / Access">
+    <CCMDashboardLayout title="Team & Access">
       <div className="flex items-center gap-2 mb-5 text-slate-500 text-sm">
         <ShieldCheck size={16} className="text-emerald-600" />
-        Each worker signs in with their own Manus account. Assign their role here to grant the minimum access necessary for their job (HIPAA minimum-necessary principle).
+        Workers sign in with their own Manus account. Invite by email to pre-assign a role, then manage access here (HIPAA minimum-necessary principle).
       </div>
 
+      {/* Invite form */}
+      <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_28px_-18px_rgba(15,23,42,0.18)] p-6 mb-6">
+        <div className="flex items-center gap-2 mb-4"><UserPlus size={17} className="text-[hsl(200_100%_45%)]" /><h3 className="font-bold text-slate-900">Invite a team member</h3></div>
+        <form
+          className="grid sm:grid-cols-[1fr_auto_1fr_auto] gap-3 items-end"
+          onSubmit={(e) => { e.preventDefault(); if (!email) return; sendInvite.mutate({ email, role: inviteRole as any, clinicLocation: clinicLocation || undefined }); }}
+        >
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1.5">Work email</label>
+            <div className="relative">
+              <Mail size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" />
+              <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nurse@clinic.com" className={`${field} w-full pl-9`} />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1.5">Role</label>
+            <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)} className={field}>
+              {ASSIGNABLE.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1.5">Clinic location <span className="text-slate-300">(optional)</span></label>
+            <input value={clinicLocation} onChange={(e) => setClinicLocation(e.target.value)} placeholder="e.g. Downtown" className={`${field} w-full`} />
+          </div>
+          <button type="submit" disabled={sendInvite.isPending || !email}
+            className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 active:scale-[0.97] transition disabled:opacity-50">
+            {sendInvite.isPending ? <Loader2 size={15} className="animate-spin" /> : <UserPlus size={15} />} Send invite
+          </button>
+        </form>
+      </div>
+
+      {/* Pending invites */}
+      {pendingInvites.length > 0 && (
+        <div className="bg-white rounded-3xl border border-slate-100 p-6 mb-6">
+          <div className="flex items-center gap-2 mb-4"><Clock size={16} className="text-amber-500" /><h3 className="font-bold text-slate-900">Pending invites</h3></div>
+          <div className="space-y-2">
+            {pendingInvites.map((inv) => (
+              <div key={inv.id} className="flex items-center justify-between p-3 rounded-2xl bg-slate-50">
+                <div className="min-w-0">
+                  <p className="font-medium text-slate-800 truncate">{inv.email}</p>
+                  <p className="text-xs text-slate-400">Will join as <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${roleBadge(inv.role)}`}>{inv.role.replace("_", " ")}</span>{inv.clinicLocation ? ` · ${inv.clinicLocation}` : ""}</p>
+                </div>
+                <button onClick={() => revokeInvite.mutate(inv.id)} disabled={revokeInvite.isPending}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-rose-500 hover:text-rose-700 px-2.5 py-1.5 rounded-lg hover:bg-rose-50 transition disabled:opacity-50">
+                  <X size={13} /> Revoke
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Members */}
       <div className="bg-white rounded-3xl border border-slate-100 overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2"><UserCog size={16} className="text-slate-400" /><h3 className="font-bold text-slate-900">Team members</h3></div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -65,13 +151,15 @@ export default function TeamAccessPage() {
                 <th className="px-5 py-3 font-medium">Email</th>
                 <th className="px-5 py-3 font-medium">Current Role</th>
                 <th className="px-5 py-3 font-medium">Assign Role</th>
+                <th className="px-5 py-3 font-medium text-right">Access</th>
               </tr>
             </thead>
             <tbody>
-              {users.isLoading && <tr><td colSpan={4} className="px-5 py-12 text-center"><Loader2 className="animate-spin text-slate-300 mx-auto" /></td></tr>}
-              {!users.isLoading && (users.data || []).length === 0 && <tr><td colSpan={4} className="px-5 py-12 text-center text-slate-400 font-light">No workers yet. Invite staff to sign in, then assign their role here.</td></tr>}
+              {users.isLoading && <tr><td colSpan={5} className="px-5 py-12 text-center"><Loader2 className="animate-spin text-slate-300 mx-auto" /></td></tr>}
+              {!users.isLoading && (users.data || []).length === 0 && <tr><td colSpan={5} className="px-5 py-12 text-center text-slate-400 font-light">No workers yet. Invite staff above; they appear here after first sign-in.</td></tr>}
               {(users.data || []).map((u) => {
                 const isSelf = u.id === user.id;
+                const hasAccess = u.role !== "user";
                 return (
                   <tr key={u.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60">
                     <td className="px-5 py-3">
@@ -93,6 +181,18 @@ export default function TeamAccessPage() {
                         {ROLE_OPTIONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
                       </select>
                     </td>
+                    <td className="px-5 py-3 text-right">
+                      {isSelf ? (
+                        <span className="inline-flex items-center gap-1 text-xs text-slate-300"><CheckCircle2 size={13} /> Owner</span>
+                      ) : hasAccess ? (
+                        <button onClick={() => setRemoveTarget({ id: u.id, name: u.name || u.email || "this member" })}
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-rose-500 hover:text-rose-700 px-2.5 py-1.5 rounded-lg hover:bg-rose-50 transition">
+                          <Trash2 size={13} /> Remove
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-300">No access</span>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
@@ -100,7 +200,27 @@ export default function TeamAccessPage() {
           </table>
         </div>
       </div>
-      <p className="mt-3 text-sm font-light text-slate-400 flex items-center gap-1.5"><UserCog size={14} /> {(users.data || []).length} workers</p>
+      <p className="mt-3 text-sm font-light text-slate-400 flex items-center gap-1.5"><UserCog size={14} /> {(users.data || []).length} workers · {pendingInvites.length} pending invites</p>
+
+      <AlertDialog open={!!removeTarget} onOpenChange={(o) => !o && setRemoveTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove team member?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This revokes all access for <span className="font-semibold text-slate-700">{removeTarget?.name}</span>. They will no longer be able to view any patient data unless re-invited. This is logged in the audit trail.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-rose-600 hover:bg-rose-700"
+              onClick={() => removeTarget && removeMember.mutate(removeTarget.id)}
+            >
+              {removeMember.isPending ? <Loader2 size={15} className="animate-spin" /> : "Remove access"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </CCMDashboardLayout>
   );
 }

@@ -1,13 +1,12 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { trpc } from "@/lib/trpc";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, useRoute } from "wouter";
 import { toast } from "sonner";
 import {
-  Loader2, Play, Pause, Square, Sparkles, AlertTriangle, Save, ArrowLeft, Clock, Phone,
+  Loader2, Sparkles, AlertTriangle, Save, ArrowLeft, Phone, ShieldCheck, Activity,
 } from "lucide-react";
-import { fmtMinutes } from "@/lib/ccm";
 
 type Responses = {
   howFeeling: string; newSymptoms: string; medicationAdherence: string; refillsNeeded: string;
@@ -35,8 +34,6 @@ const SCRIPT: { key: keyof Responses; question: string; placeholder: string }[] 
   { key: "patientConcerns", question: "Any other concerns from the patient?", placeholder: "Questions, social needs, barriers…" },
 ];
 
-function pad(n: number) { return n.toString().padStart(2, "0"); }
-
 export default function CallWorkflowPage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
   const [, params] = useRoute("/workflow/:id");
@@ -50,12 +47,9 @@ export default function CallWorkflowPage() {
   const utils = trpc.useUtils();
 
   const [responses, setResponses] = useState<Responses>(EMPTY);
-  const [seconds, setSeconds] = useState(0);
-  const [running, setRunning] = useState(false);
   const [generatedNote, setGeneratedNote] = useState("");
   const [escalate, setEscalate] = useState(false);
   const [escalationReason, setEscalationReason] = useState("");
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
   // hydrate from existing note (review mode)
@@ -71,21 +65,11 @@ export default function CallWorkflowPage() {
       });
       if (n.generatedNote) setGeneratedNote(n.generatedNote);
       if (n.escalationFlag) { setEscalate(true); setEscalationReason(n.escalationReason || ""); }
-      if (n.timeSpentMinutes) setSeconds(n.timeSpentMinutes * 60);
       setHydrated(true);
     } else if (task.data && !existingNote.data && !hydrated && existingNote.isFetched) {
-      if (task.data.timeSpentMinutes) setSeconds(task.data.timeSpentMinutes * 60);
       setHydrated(true);
     }
   }, [existingNote.data, existingNote.isFetched, task.data, hydrated]);
-
-  useEffect(() => {
-    if (running) { timer.current = setInterval(() => setSeconds((s) => s + 1), 1000); }
-    else if (timer.current) { clearInterval(timer.current); }
-    return () => { if (timer.current) clearInterval(timer.current); };
-  }, [running]);
-
-  const minutes = Math.max(1, Math.round(seconds / 60));
 
   const genNote = trpc.ccmNotesAI.generateNote.useMutation({
     onSuccess: (r) => { setGeneratedNote(typeof r.note === "string" ? r.note : String(r.note)); toast.success("Note drafted by AI. Review and edit as needed."); },
@@ -113,12 +97,12 @@ export default function CallWorkflowPage() {
 
   return (
     <CCMDashboardLayout title="Guided CCM Call">
-      <button onClick={() => setLocation("/worklist")} className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 mb-4"><ArrowLeft size={15} /> Back to worklist</button>
+      <button onClick={() => setLocation("/worklist")} className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 mb-4 transition-colors"><ArrowLeft size={15} /> Back to worklist</button>
 
       <div className="grid lg:grid-cols-3 gap-6">
-        {/* Left: patient + timer */}
+        {/* Left: patient context */}
         <div className="space-y-5">
-          <div className="bg-white rounded-3xl border border-slate-100 p-6">
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_28px_-18px_rgba(15,23,42,0.18)] p-6">
             <p className="text-xs uppercase tracking-wider text-slate-400 mb-1">Patient</p>
             <h2 className="text-2xl font-bold text-slate-900">{p?.name || <Loader2 className="animate-spin inline" />}</h2>
             <p className="text-sm text-slate-500 mt-0.5">{p?.dateOfBirth ? `DOB ${new Date(p.dateOfBirth).toLocaleDateString()}` : ""} {p?.phoneNumber ? `· ${p.phoneNumber}` : ""}</p>
@@ -128,35 +112,32 @@ export default function CallWorkflowPage() {
             {p?.insurance && <p className="mt-4 text-sm text-slate-500">Insurance: <span className="text-slate-700">{p.insurance}</span></p>}
           </div>
 
-          <div className="bg-slate-900 text-white rounded-3xl p-6 text-center">
-            <div className="flex items-center justify-center gap-2 text-slate-300 text-xs uppercase tracking-wider mb-3"><Clock size={13} /> Call Timer</div>
-            <div className="text-5xl font-bold tabular-nums tracking-tight">{pad(Math.floor(seconds / 60))}:{pad(seconds % 60)}</div>
-            <p className="text-slate-400 text-xs mt-1">Billable: {fmtMinutes(minutes)}</p>
-            <div className="flex items-center justify-center gap-2 mt-5">
-              {!running ? (
-                <button onClick={() => setRunning(true)} className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-2xl bg-[hsl(150_60%_45%)] font-semibold text-sm hover:brightness-110 active:scale-[0.97] transition"><Play size={15} /> Start</button>
-              ) : (
-                <button onClick={() => setRunning(false)} className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-2xl bg-[hsl(40_95%_55%)] font-semibold text-sm hover:brightness-110 active:scale-[0.97] transition"><Pause size={15} /> Pause</button>
-              )}
-              <button onClick={() => { setRunning(false); }} className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-2xl bg-white/10 font-semibold text-sm hover:bg-white/20 active:scale-[0.97] transition"><Square size={15} /> Stop</button>
-            </div>
-            <div className="mt-4 flex items-center justify-center gap-2 text-xs">
-              <span className="text-slate-400">Manual entry:</span>
-              <input type="number" min={0} value={minutes} onChange={(e) => setSeconds(Math.max(0, Number(e.target.value)) * 60)} className="w-16 px-2 py-1 rounded-lg text-slate-900 text-center" /> <span className="text-slate-400">min</span>
+          <div className="bg-gradient-to-br from-slate-900 to-slate-800 text-white rounded-3xl p-6 shadow-[0_18px_40px_-22px_rgba(15,23,42,0.6)]">
+            <div className="flex items-center gap-2 text-slate-300 text-xs uppercase tracking-wider mb-3"><Phone size={13} /> Call in progress</div>
+            <p className="text-sm text-slate-300 leading-relaxed">Work through the script on the right, then generate or write the CCM note. Flag the patient if anything needs provider attention.</p>
+            <div className="mt-5 flex items-center gap-2 text-xs text-slate-400">
+              <ShieldCheck size={14} className="text-emerald-400" /> Access to this record is audit-logged.
             </div>
           </div>
+
+          {conditions.length > 0 && (
+            <div className="bg-white rounded-3xl border border-slate-100 p-6">
+              <div className="flex items-center gap-2 mb-3 text-slate-700"><Activity size={15} className="text-[hsl(200_100%_45%)]" /><span className="text-sm font-semibold">Care focus</span></div>
+              <p className="text-xs text-slate-500 leading-relaxed">Review adherence and symptoms for each chronic condition, and confirm the care plan is current.</p>
+            </div>
+          )}
         </div>
 
         {/* Right: script + form */}
         <div className="lg:col-span-2 space-y-5">
-          <div className="bg-white rounded-3xl border border-slate-100 p-6">
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_28px_-18px_rgba(15,23,42,0.18)] p-6">
             <div className="flex items-center gap-2 mb-5"><Phone size={16} className="text-[hsl(200_100%_45%)]" /><h3 className="font-bold text-slate-900">Call Script & Documentation</h3></div>
             <div className="space-y-5">
               {SCRIPT.map((q, i) => (
                 <div key={q.key}>
                   <label className="block text-sm font-medium text-slate-700 mb-1.5"><span className="text-slate-300 mr-1.5">{i + 1}.</span>{q.question}</label>
                   <textarea value={responses[q.key]} onChange={(e) => set(q.key, e.target.value)} placeholder={q.placeholder} rows={2}
-                    className="w-full px-3.5 py-2.5 rounded-2xl border border-slate-200 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)] focus:border-transparent" />
+                    className="w-full px-3.5 py-2.5 rounded-2xl border border-slate-200 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)] focus:border-transparent transition" />
                 </div>
               ))}
             </div>
@@ -176,10 +157,10 @@ export default function CallWorkflowPage() {
           </div>
 
           {/* AI note */}
-          <div className="bg-white rounded-3xl border border-slate-100 p-6">
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_28px_-18px_rgba(15,23,42,0.18)] p-6">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2"><Sparkles size={16} className="text-[hsl(280_60%_55%)]" /><h3 className="font-bold text-slate-900">CCM Documentation Note</h3></div>
-              <button disabled={genNote.isPending} onClick={() => genNote.mutate({ patientName: p?.name || "Patient", timeSpentMinutes: minutes, responses })}
+              <button disabled={genNote.isPending} onClick={() => genNote.mutate({ patientName: p?.name || "Patient", responses })}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl bg-[hsl(280_60%_55%)] text-white text-sm font-semibold hover:brightness-110 active:scale-[0.97] transition disabled:opacity-50">
                 {genNote.isPending ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Generate with AI
               </button>
@@ -192,14 +173,14 @@ export default function CallWorkflowPage() {
             <button disabled={saveNote.isPending} onClick={() => saveNote.mutate({
               ccmTaskId: taskId, patientId: patientId!, ...responses, generatedNote,
               escalationFlag: escalate, escalationReason: escalate ? escalationReason : undefined,
-              timeSpentMinutes: minutes, markCompleted: false,
-            })} className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-2xl border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50 disabled:opacity-50">
+              markCompleted: false,
+            })} className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-2xl border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50 active:scale-[0.97] disabled:opacity-50 transition">
               <Save size={15} /> Save Draft
             </button>
             <button disabled={saveNote.isPending} onClick={() => saveNote.mutate({
               ccmTaskId: taskId, patientId: patientId!, ...responses, generatedNote,
               escalationFlag: escalate, escalationReason: escalate ? escalationReason : undefined,
-              timeSpentMinutes: minutes, markCompleted: true,
+              markCompleted: true,
             })} className="inline-flex items-center gap-1.5 px-6 py-2.5 rounded-2xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 active:scale-[0.97] transition disabled:opacity-50">
               {saveNote.isPending ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Complete & Save
             </button>

@@ -145,13 +145,13 @@ export function currentMonthStr(): string {
 }
 
 export function fmtDate(d?: Date | string | null): string {
-  if (!d) return "-";
+  if (!d) return "—";
   const date = typeof d === "string" ? new Date(d) : d;
   return date.toLocaleDateString();
 }
 
 export function fmtDateTime(d?: Date | string | null): string {
-  if (!d) return "-";
+  if (!d) return "—";
   const date = typeof d === "string" ? new Date(d) : d;
   return date.toLocaleString();
 }

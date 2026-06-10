@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import {
-  Users, ClipboardCheck, PhoneOff, AlertTriangle, Receipt, Clock, TrendingUp, Database, Loader2,
+  Users, ClipboardCheck, PhoneOff, AlertTriangle, Receipt, TrendingUp, Database, Loader2,
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
@@ -16,9 +16,9 @@ import { STATUS_LABELS, currentMonthStr } from "@/lib/ccm";
 const ACCENT = "hsl(200 100% 50%)";
 const PIE_COLORS = ["#34d399", "#60a5fa", "#fbbf24", "#fb7185", "#a78bfa", "#94a3b8", "#f472b6", "#22d3ee"];
 
-function StatCard({ icon: Icon, label, value, sub, tone = "default" }: {
+function StatCard({ icon: Icon, label, value, sub, tone = "default", index = 0 }: {
   icon: React.ElementType; label: string; value: string | number; sub?: string;
-  tone?: "default" | "good" | "warn" | "bad";
+  tone?: "default" | "good" | "warn" | "bad"; index?: number;
 }) {
   const iconBg = {
     default: "bg-slate-100 text-slate-600",
@@ -27,14 +27,17 @@ function StatCard({ icon: Icon, label, value, sub, tone = "default" }: {
     bad: "bg-rose-100 text-rose-600",
   }[tone];
   return (
-    <div className="bg-white rounded-3xl p-5 border border-slate-100">
+    <div
+      className="group bg-white rounded-3xl p-5 border border-slate-100 shadow-soft hover:shadow-soft-lg hover:-translate-y-0.5 transition-all duration-300 animate-fade-in-up"
+      style={{ animationDelay: `${index * 45}ms` }}
+    >
       <div className="flex items-start justify-between">
         <div>
           <p className="text-xs font-light uppercase tracking-wider text-slate-400">{label}</p>
           <p className="mt-2 text-3xl font-extrabold tracking-tight text-slate-900">{value}</p>
           {sub && <p className="mt-1 text-xs font-light text-slate-400">{sub}</p>}
         </div>
-        <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${iconBg}`}>
+        <div className={`w-10 h-10 rounded-2xl flex items-center justify-center transition-transform duration-300 group-hover:scale-110 ${iconBg}`}>
           <Icon size={18} />
         </div>
       </div>
@@ -105,14 +108,14 @@ export default function AdminDashboard() {
       )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon={Users} label="Active Patients" value={s?.totalActivePatients ?? "—"} sub={`${s?.totalTasks ?? 0} tasks this month`} />
-        <StatCard icon={ClipboardCheck} label="Completed" value={s?.completed ?? "—"} sub={`${s?.completionPct ?? 0}% completion`} tone="good" />
-        <StatCard icon={PhoneOff} label="Not Reached" value={s?.notReached ?? "—"} sub="Called No Answer / Voicemail" tone="warn" />
-        <StatCard icon={AlertTriangle} label="Pending Escalations" value={s?.pendingEscalations ?? "—"} sub="Awaiting provider review" tone="bad" />
-        <StatCard icon={Clock} label="Total CCM Time" value={`${Math.round((s?.totalMinutes ?? 0) / 60)}h`} sub={`${s?.totalMinutes ?? 0} minutes logged`} />
-        <StatCard icon={Receipt} label="Ready for Billing" value={s?.readyForBilling ?? "—"} sub="Meets CMS criteria" tone="good" />
-        <StatCard icon={TrendingUp} label="In Progress" value={s?.inProgress ?? "—"} sub="Currently being worked" />
-        <StatCard icon={AlertTriangle} label="Needs Review" value={s?.needsReview ?? "—"} sub="Flagged for provider" tone="warn" />
+        <StatCard index={0} icon={Users} label="Active Patients" value={s?.totalActivePatients ?? "—"} sub={`${s?.totalTasks ?? 0} tasks this month`} />
+        <StatCard index={1} icon={ClipboardCheck} label="Completed" value={s?.completed ?? "—"} sub={`${s?.completionPct ?? 0}% completion`} tone="good" />
+        <StatCard index={2} icon={PhoneOff} label="Not Reached" value={s?.notReached ?? "—"} sub="Called No Answer / Voicemail" tone="warn" />
+        <StatCard index={3} icon={AlertTriangle} label="Pending Escalations" value={s?.pendingEscalations ?? "—"} sub="Awaiting provider review" tone="bad" />
+        <StatCard index={4} icon={ClipboardCheck} label="Not Started" value={s?.notStarted ?? "—"} sub="Awaiting first contact" />
+        <StatCard index={5} icon={Receipt} label="Ready for Billing" value={s?.readyForBilling ?? "—"} sub="Documentation complete" tone="good" />
+        <StatCard index={6} icon={TrendingUp} label="In Progress" value={s?.inProgress ?? "—"} sub="Currently being worked" />
+        <StatCard index={7} icon={AlertTriangle} label="Needs Review" value={s?.needsReview ?? "—"} sub="Flagged for provider" tone="warn" />
       </div>
 
       <div className="mt-6 bg-white rounded-3xl p-6 border border-slate-100">
@@ -234,9 +237,9 @@ export default function AdminDashboard() {
           <button
             key={a.path}
             onClick={() => setLocation(a.path)}
-            className="bg-white rounded-2xl p-5 border border-slate-100 text-left hover:border-slate-300 transition-colors font-semibold text-slate-800"
+            className="group bg-white rounded-2xl p-5 border border-slate-100 shadow-soft text-left hover:shadow-soft-lg hover:-translate-y-0.5 transition-all duration-300 font-semibold text-slate-800"
           >
-            {a.label} →
+            <span className="inline-flex items-center gap-1.5">{a.label} <span className="transition-transform duration-300 group-hover:translate-x-1">→</span></span>
           </button>
         ))}
       </div>
