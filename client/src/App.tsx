@@ -11,6 +11,8 @@ import ProviderDashboard from "./pages/ProviderDashboard";
 import BillingDashboard from "./pages/BillingDashboard";
 import FrontDeskDashboard from "./pages/FrontDeskDashboard";
 import MonthlyWorklist from "./pages/MonthlyWorklist";
+import ReportingDashboard from "./pages/ReportingDashboard";
+import NotificationCenter from "./pages/NotificationCenter";
 import { useAuth } from "./_core/hooks/useAuth";
 import { Loader2 } from "lucide-react";
 
@@ -34,6 +36,8 @@ function Router() {
         <>
           <Route path={"/admin/dashboard"} component={AdminDashboard} />
           <Route path={"/admin/worklist"} component={MonthlyWorklist} />
+          <Route path={"/admin/reporting"} component={ReportingDashboard} />
+          <Route path={"/admin/notifications"} component={NotificationCenter} />
         </>
       )}
       
@@ -42,22 +46,32 @@ function Router() {
         <>
           <Route path={"/staff/dashboard"} component={StaffDashboard} />
           <Route path={"/staff/worklist"} component={MonthlyWorklist} />
+          <Route path={"/staff/notifications"} component={NotificationCenter} />
         </>
       )}
       
       {/* Provider Routes */}
       {user && (user.role === "provider" || user.role === "admin") && (
-        <Route path={"/provider/dashboard"} component={ProviderDashboard} />
+        <>
+          <Route path={"/provider/dashboard"} component={ProviderDashboard} />
+          <Route path={"/provider/notifications"} component={NotificationCenter} />
+        </>
       )}
       
       {/* Billing Routes */}
       {user && (user.role === "billing" || user.role === "admin") && (
-        <Route path={"/billing/dashboard"} component={BillingDashboard} />
+        <>
+          <Route path={"/billing/dashboard"} component={BillingDashboard} />
+          <Route path={"/billing/notifications"} component={NotificationCenter} />
+        </>
       )}
       
       {/* Front Desk Routes */}
       {user && (user.role === "front_desk" || user.role === "admin") && (
-        <Route path={"/front-desk/dashboard"} component={FrontDeskDashboard} />
+        <>
+          <Route path={"/front-desk/dashboard"} component={FrontDeskDashboard} />
+          <Route path={"/front-desk/notifications"} component={NotificationCenter} />
+        </>
       )}
       
       <Route path={"/404"} component={NotFound} />

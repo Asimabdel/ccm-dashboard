@@ -75,18 +75,18 @@
 - [ ] Create billing export functionality
 
 ## Automated Notifications
-- [ ] Implement urgent symptom alerts to practice manager
-- [ ] Create escalation notifications to providers
-- [ ] Add staff reminders for patients not reached
-- [ ] Add staff reminders for missing documentation
-- [ ] Implement billing readiness notifications
-- [ ] Create notification center UI
+- [x] Implement urgent symptom alerts to practice manager
+- [x] Create escalation notifications to providers
+- [x] Add staff reminders for patients not reached
+- [x] Add staff reminders for missing documentation
+- [x] Implement billing readiness notifications
+- [x] Create notification center UI
 
 ## Reporting & Analytics
-- [ ] Create monthly CCM completion report
-- [ ] Build staff productivity report
-- [ ] Create provider panel performance report
-- [ ] Build clinic performance report
+- [x] Create monthly CCM completion report
+- [x] Build staff productivity report
+- [x] Create provider panel performance report
+- [x] Build clinic performance report
 - [ ] Create high-risk patient report
 - [ ] Build patients not reached report
 - [ ] Create billing readiness report
