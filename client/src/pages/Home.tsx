@@ -2,6 +2,9 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { useLocation } from "wouter";
 import { useEffect } from "react";
 import { Spinner } from "@/components/ui/spinner";
+import { Button } from "@/components/ui/button";
+import { getLoginUrl } from "@/const";
+import { ArrowRight } from "lucide-react";
 
 /**
  * Home page that redirects to appropriate dashboard based on user role
@@ -48,16 +51,27 @@ export default function Home() {
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center max-w-md">
-          <h1 className="text-3xl font-bold text-gray-900 mb-4">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
+        <div className="text-center max-w-md px-6">
+          <h1 className="text-4xl font-bold text-gray-900 mb-4">
             CCM Operations Dashboard
           </h1>
-          <p className="text-gray-600 mb-8">
+          <p className="text-gray-600 mb-2">
             A comprehensive Chronic Care Management platform for streamlined patient outreach, documentation, and provider coordination.
           </p>
-          <p className="text-sm text-gray-500">
-            Please log in to access your dashboard.
+          <p className="text-sm text-gray-500 mb-8">
+            Manage your CCM program efficiently with real-time analytics, automated workflows, and role-based dashboards.
+          </p>
+          
+          <a href={getLoginUrl()}>
+            <Button className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg flex items-center justify-center gap-2 transition-all duration-200">
+              Log In to Dashboard
+              <ArrowRight className="w-5 h-5" />
+            </Button>
+          </a>
+
+          <p className="text-xs text-gray-500 mt-6">
+            Powered by Manus • Secure OAuth Authentication
           </p>
         </div>
       </div>
