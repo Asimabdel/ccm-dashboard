@@ -20,8 +20,18 @@ export function registerOAuthRoutes(app: Express) {
     }
 
     try {
-      const tokenResponse = await sdk.exchangeCodeForToken(code, state);
+      // Decode state to get the redirect URI
+      let redirectUri = "";
+      try {
+        redirectUri = atob(state);
+      } catch (e) {
+        redirectUri = state;
+      }
+
+      const tokenResponse = await sdk.exchangeCodeForToken(code, redirectUri);
+      console.log("[OAuth] Token exchange successful");
       const userInfo = await sdk.getUserInfo(tokenResponse.accessToken);
+      console.log("[OAuth] User info retrieved:", userInfo.openId);
 
       if (!userInfo.openId) {
         res.status(400).json({ error: "openId missing from user info" });
