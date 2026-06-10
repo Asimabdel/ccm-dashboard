@@ -15,6 +15,9 @@ import EscalationsPage from "./pages/EscalationsPage";
 import BillingPage from "./pages/BillingPage";
 import FollowUpsPage from "./pages/FollowUpsPage";
 import ReportsPage from "./pages/ReportsPage";
+import BulkImportPage from "./pages/BulkImportPage";
+import AuditLogPage from "./pages/AuditLogPage";
+import TeamAccessPage from "./pages/TeamAccessPage";
 
 function Router() {
   return (
@@ -22,7 +25,10 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/admin" component={AdminDashboard} />
       <Route path="/patients" component={PatientsPage} />
+      <Route path="/patients/import" component={BulkImportPage} />
       <Route path="/patients/:id" component={PatientDetailPage} />
+      <Route path="/audit" component={AuditLogPage} />
+      <Route path="/team" component={TeamAccessPage} />
       <Route path="/worklist" component={WorklistPage} />
       <Route path="/workflow" component={CallWorkflowPage} />
       <Route path="/workflow/:taskId" component={CallWorkflowPage} />

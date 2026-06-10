@@ -34,7 +34,15 @@ import {
   getUnreadNotifications,
   getFirstUserByRole,
   setUserRole,
+  getAllUsers,
   getDb,
+  writeAuditLog,
+  getAuditLogs,
+  getDuplicateNameGroups,
+  bulkInsertPatients,
+  findExistingByNames,
+  updatePatientRPM,
+  normalizeName,
 } from "./db";
 import {
   patients,
@@ -46,12 +54,32 @@ import {
 } from "../drizzle/schema";
 import { ccmNotesRouter } from "./routers/ccmNotes";
 import { seedDatabase, isSeeded, currentMonth } from "./seed";
+import { parsePatientCsv, findInBatchDuplicates } from "../shared/csvImport";
+import { clinics, providers } from "../drizzle/schema";
 
 // ---- Role guards ----
 function requireRole(ctx: any, roles: string[]) {
   if (!ctx.user || !roles.includes(ctx.user.role)) {
     throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this resource." });
   }
+}
+
+/** Fire-and-forget HIPAA audit logging from a tRPC context. */
+function logAudit(
+  ctx: any,
+  action: string,
+  opts: { entityType?: string; entityId?: number; description?: string } = {}
+) {
+  return writeAuditLog({
+    userId: ctx.user?.id,
+    userName: ctx.user?.name ?? null,
+    userRole: ctx.user?.role ?? null,
+    action: action as any,
+    entityType: opts.entityType,
+    entityId: opts.entityId,
+    description: opts.description,
+    ipAddress: (ctx.req?.headers?.["x-forwarded-for"] as string)?.split(",")[0] || ctx.req?.ip || null,
+  });
 }
 
 const statusEnum = z.enum([
@@ -72,12 +100,36 @@ export const appRouter = router({
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
       return { success: true } as const;
     }),
-    // Demo role switcher so the owner can preview every role-based dashboard
+    // Admin-only role switcher so the owner/admin can preview every role-based
+    // dashboard. Regular workers CANNOT self-escalate — their role is assigned
+    // by an admin via the Team / Access page (users.setRole).
     setRole: protectedProcedure
       .input(z.object({ role: z.enum(["admin", "staff", "provider", "billing", "front_desk"]) }))
       .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin"]);
         await setUserRole(ctx.user.id, input.role);
+        void logAudit(ctx, "update_patient", { description: `Admin previewed role: ${input.role}` });
         return { success: true, role: input.role };
+      }),
+  }),
+
+  // ---- Admin: worker access management (RBAC) ----
+  users: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx, ["admin"]);
+      return getAllUsers();
+    }),
+    setRole: protectedProcedure
+      .input(z.object({ userId: z.number(), role: z.enum(["admin", "staff", "provider", "billing", "front_desk", "user"]) }))
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin"]);
+        // Prevent an admin from accidentally removing their own admin access (lockout guard).
+        if (input.userId === ctx.user.id && input.role !== "admin") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "You cannot change your own admin role. Ask another admin to do this." });
+        }
+        await setUserRole(input.userId, input.role);
+        void logAudit(ctx, "update_patient", { entityType: "user", entityId: input.userId, description: `Set user #${input.userId} role to ${input.role}` });
+        return { success: true };
       }),
   }),
 
@@ -131,13 +183,21 @@ export const appRouter = router({
       )
       .query(async ({ input, ctx }) => {
         requireRole(ctx, ["admin", "staff", "provider", "billing", "front_desk"]);
+        void logAudit(ctx, "list_patients", { entityType: "patient", description: "Viewed patient list" });
         return getEnrichedPatients(input || {});
       }),
+
+    /** Map of normalized name -> { ids, sameDob } for duplicate flagging in the UI. */
+    duplicates: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx, ["admin", "staff", "provider", "billing", "front_desk"]);
+      return getDuplicateNameGroups();
+    }),
 
     detail: protectedProcedure
       .input(z.number())
       .query(async ({ input, ctx }) => {
         requireRole(ctx, ["admin", "staff", "provider", "billing", "front_desk"]);
+        void logAudit(ctx, "view_patient", { entityType: "patient", entityId: input, description: `Viewed patient #${input}` });
         return getPatientDetail(input);
       }),
 
@@ -179,7 +239,108 @@ export const appRouter = router({
           consentStatus: input.consentStatus || "pending",
           assignedStaffId: input.assignedStaffId,
         });
+        void logAudit(ctx, "create_patient", { entityType: "patient", description: `Created patient "${input.name}"` });
         return { success: true };
+      }),
+
+    /** Update RPM enrollment fields for a single patient. */
+    updateRPM: protectedProcedure
+      .input(
+        z.object({
+          id: z.number(),
+          rpmEnrolled: z.boolean().optional(),
+          rpmStatus: z.enum(["not_enrolled", "eligible", "enrolled", "active", "declined", "inactive"]).optional(),
+          rpmDeviceType: z.string().nullable().optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "staff", "front_desk"]);
+        const { id, ...data } = input;
+        const result = await updatePatientRPM(id, data);
+        void logAudit(ctx, "update_rpm", { entityType: "patient", entityId: id, description: `Updated RPM for patient #${id}` });
+        return result;
+      }),
+
+    /**
+     * Preview a CSV import: parse, validate, and flag duplicates (in-batch and
+     * against existing patients) without writing anything.
+     */
+    bulkImportPreview: protectedProcedure
+      .input(z.object({ csv: z.string() }))
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "front_desk"]);
+        const { rows, headerError } = parsePatientCsv(input.csv);
+        if (headerError) return { headerError, rows: [], inBatchDuplicates: [], existingDuplicates: {}, clinicOptions: [], providerOptions: [] };
+        const inBatch = findInBatchDuplicates(rows);
+        const existing = await findExistingByNames(rows.map((r) => r.name));
+        const allClinics = await getAllClinics();
+        const allProviders = await getAllProviders();
+        return {
+          rows,
+          inBatchDuplicates: Array.from(inBatch),
+          existingDuplicates: existing,
+          clinicOptions: allClinics.map((c) => ({ id: c.id, name: c.name })),
+          providerOptions: allProviders.map((p) => ({ id: p.provider.id, name: p.provider.name })),
+        };
+      }),
+
+    /**
+     * Commit a bulk import. Resolves clinic/provider by name or accepts a
+     * default clinicId/providerId. Skips rows with validation errors.
+     */
+    bulkImportCommit: protectedProcedure
+      .input(
+        z.object({
+          csv: z.string(),
+          defaultClinicId: z.number(),
+          defaultProviderId: z.number(),
+          skipExistingDuplicates: z.boolean().default(true),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "front_desk"]);
+        const { rows, headerError } = parsePatientCsv(input.csv);
+        if (headerError) throw new TRPCError({ code: "BAD_REQUEST", message: headerError });
+
+        const allClinics = await getAllClinics();
+        const allProviders = await getAllProviders();
+        const clinicByName = new Map(allClinics.map((c) => [c.name.toLowerCase().trim(), c.id]));
+        const providerByName = new Map(allProviders.map((p) => [p.provider.name.toLowerCase().trim(), p.provider.id]));
+        const existing = await findExistingByNames(rows.map((r) => r.name));
+
+        const valid = rows.filter((r) => r.errors.length === 0);
+        const toInsert = valid.filter((r) => {
+          if (!input.skipExistingDuplicates) return true;
+          return !existing[normalizeName(r.name)];
+        });
+
+        const mapped = toInsert.map((r) => ({
+          name: r.name,
+          dateOfBirth: r.dateOfBirth ? new Date(r.dateOfBirth) : null,
+          phoneNumber: r.phoneNumber,
+          clinicId: (r.clinic && clinicByName.get(r.clinic.toLowerCase().trim())) || input.defaultClinicId,
+          providerId: (r.provider && providerByName.get(r.provider.toLowerCase().trim())) || input.defaultProviderId,
+          preferredLanguage: r.preferredLanguage,
+          chronicConditions: r.chronicConditions,
+          insurance: r.insurance,
+          riskLevel: (r.riskLevel as any) || "medium",
+          consentStatus: (r.consentStatus as any) || "pending",
+          rpmEnrolled: r.rpmEnrolled ?? false,
+          rpmStatus: (r.rpmEnrolled ? "enrolled" : "not_enrolled") as any,
+          rpmDeviceType: r.rpmDeviceType,
+        }));
+
+        const inserted = await bulkInsertPatients(mapped);
+        void logAudit(ctx, "bulk_import_patients", {
+          entityType: "patient",
+          description: `Bulk imported ${inserted} patients (skipped ${valid.length - inserted} duplicates, ${rows.length - valid.length} invalid)`,
+        });
+        return {
+          inserted,
+          skippedDuplicates: valid.length - inserted,
+          invalid: rows.length - valid.length,
+          total: rows.length,
+        };
       }),
 
     update: protectedProcedure
@@ -207,7 +368,18 @@ export const appRouter = router({
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { id, ...updateData } = input;
         await db.update(patients).set(updateData).where(eq(patients.id, id));
+        void logAudit(ctx, "update_patient", { entityType: "patient", entityId: id, description: `Updated patient #${id}` });
         return getPatientById(id);
+      }),
+  }),
+
+  // ---- HIPAA audit log ----
+  audit: router({
+    list: protectedProcedure
+      .input(z.object({ limit: z.number().max(500).optional(), action: z.string().optional(), userId: z.number().optional() }).optional())
+      .query(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin"]);
+        return getAuditLogs(input || {});
       }),
   }),
 

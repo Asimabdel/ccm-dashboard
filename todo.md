@@ -49,3 +49,23 @@
 - [x] Vitest tests pass (labels + RBAC, 11 tests)
 - [x] TypeScript passes (0 errors), dev server healthy
 - [x] Fixed OAuth login (clinicLocation/languagesSpoken columns present in DB)
+
+## Enhancement: Bulk import, RPM, duplicates, HIPAA, worker logins
+- [x] Add RPM fields to patients (rpmEnrolled, rpmDeviceType, rpmStatus)
+- [x] RPM enrollment control next to each patient in Patient Database (inline popover)
+- [x] Bulk patient import (paste CSV / upload CSV) with preview + commit
+- [x] Duplicate-name detection: flag patients sharing the same name (+ sameDob signal)
+- [x] Surface duplicate flags in bulk import preview AND patient list
+- [x] Keep Manus OAuth for worker logins; roles assigned per worker via DB/role switcher
+- [x] HIPAA: audit log table + record reads/writes of PHI (list/view/create/update/import/rpm)
+- [x] HIPAA: audit log viewer (admin only) at /audit
+- [x] HIPAA: idle session timeout with auto-logout + 60s warning modal
+- [x] HIPAA: RBAC reinforcement (import limited to admin/front_desk; audit admin-only)
+- [x] Vitest: bulk import parsing + validation + duplicate detection (8 tests)
+
+## RBAC hardening (HIPAA access control)
+- [x] Make `auth.setRole` admin-only (no self-escalation by regular workers)
+- [x] Add admin-managed `users.list` + `users.setRole` procedures (self-demotion guard)
+- [x] Add Admin "Team / Access" page (/team) to assign roles per worker
+- [x] Bootstrap: project owner (OWNER_OPEN_ID) auto-promoted to admin on upsert
+- [x] Vitest: non-admin cannot self-escalate; cannot reach users/audit/import (24 tests pass)

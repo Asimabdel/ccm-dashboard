@@ -4,11 +4,12 @@ import { trpc } from "@/lib/trpc";
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
-import { Search, Plus, Loader2, UserPlus, X } from "lucide-react";
-import { PRIORITY_LABELS, priorityBadgeClass, statusBadgeClass } from "@/lib/ccm";
+import { Search, Plus, Loader2, UserPlus, X, Upload, AlertTriangle, Activity } from "lucide-react";
+import { PRIORITY_LABELS, priorityBadgeClass, statusBadgeClass, RPM_STATUS_LABELS } from "@/lib/ccm";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 const CONDITIONS = [
   "Hypertension", "Type 2 Diabetes", "COPD", "CHF", "CKD", "Hyperlipidemia",
@@ -168,9 +169,24 @@ export default function PatientsPage() {
     clinicId: clinicFilter || undefined,
   }), [search, riskFilter, clinicFilter]);
   const patients = trpc.patients.list.useQuery(filters, { enabled: !!user });
+  const duplicates = trpc.patients.duplicates.useQuery(undefined, { enabled: !!user });
   const utils = trpc.useUtils();
 
   const canEnroll = !!user && ["admin", "staff", "front_desk"].includes(user.role);
+  const canImport = !!user && ["admin", "front_desk"].includes(user.role);
+
+  const updateRPM = trpc.patients.updateRPM.useMutation({
+    onSuccess: () => { utils.patients.list.invalidate(); toast.success("RPM updated."); },
+    onError: (e) => toast.error(e.message),
+  });
+
+  // Set of patient ids that share a name with another patient
+  const dupIds = useMemo(() => {
+    const s = new Set<number>();
+    const groups = duplicates.data || {};
+    for (const key of Object.keys(groups)) for (const id of groups[key].ids) s.add(id);
+    return s;
+  }, [duplicates.data]);
 
   if (loading || !user) {
     return <div className="min-h-screen flex items-center justify-center bg-[hsl(240_10%_97%)]"><Loader2 className="animate-spin text-slate-400" /></div>;
@@ -203,6 +219,11 @@ export default function PatientsPage() {
               <X size={14} /> Clear
             </button>
           )}
+          {canImport && (
+            <button onClick={() => setLocation("/patients/import")} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50">
+              <Upload size={16} /> Bulk Import
+            </button>
+          )}
           {canEnroll && <EnrollDialog onDone={() => utils.patients.list.invalidate()} />}
         </div>
       </div>
@@ -218,20 +239,28 @@ export default function PatientsPage() {
                 <th className="px-5 py-3 font-medium">Clinic</th>
                 <th className="px-5 py-3 font-medium">Risk</th>
                 <th className="px-5 py-3 font-medium">Status</th>
+                <th className="px-5 py-3 font-medium">RPM</th>
               </tr>
             </thead>
             <tbody>
               {patients.isLoading && (
-                <tr><td colSpan={6} className="px-5 py-12 text-center"><Loader2 className="animate-spin text-slate-300 mx-auto" /></td></tr>
+                <tr><td colSpan={7} className="px-5 py-12 text-center"><Loader2 className="animate-spin text-slate-300 mx-auto" /></td></tr>
               )}
               {!patients.isLoading && (patients.data || []).length === 0 && (
-                <tr><td colSpan={6} className="px-5 py-12 text-center text-slate-400 font-light">No patients found.</td></tr>
+                <tr><td colSpan={7} className="px-5 py-12 text-center text-slate-400 font-light">No patients found.</td></tr>
               )}
               {(patients.data || []).map((r) => (
                 <tr key={r.patient.id} onClick={() => setLocation(`/patients/${r.patient.id}`)}
                   className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60 cursor-pointer">
                   <td className="px-5 py-3">
-                    <p className="font-semibold text-slate-800">{r.patient.name}</p>
+                    <p className="font-semibold text-slate-800 flex items-center gap-1.5">
+                      {r.patient.name}
+                      {dupIds.has(r.patient.id) && (
+                        <span title="Possible duplicate: another patient shares this name" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-semibold">
+                          <AlertTriangle size={10} /> Duplicate
+                        </span>
+                      )}
+                    </p>
                     <p className="text-xs text-slate-400">{r.patient.phoneNumber}</p>
                   </td>
                   <td className="px-5 py-3">
@@ -248,6 +277,40 @@ export default function PatientsPage() {
                   <td className="px-5 py-3 text-slate-600">{r.clinicName || "—"}</td>
                   <td className="px-5 py-3"><span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${priorityBadgeClass(r.patient.riskLevel ?? "medium")}`}>{PRIORITY_LABELS[r.patient.riskLevel ?? "medium"] || r.patient.riskLevel}</span></td>
                   <td className="px-5 py-3"><span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${statusBadgeClass(r.patient.ccmEnrollmentStatus ?? "active")}`}>{r.patient.ccmEnrollmentStatus}</span></td>
+                  <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
+                    {canEnroll ? (
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <button className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold ${r.patient.rpmEnrolled ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-500"} hover:brightness-95`}>
+                            <Activity size={11} /> {r.patient.rpmEnrolled ? (RPM_STATUS_LABELS[r.patient.rpmStatus ?? "enrolled"] || "Enrolled") : "Not Enrolled"}
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-60 space-y-2" align="end">
+                          <p className="text-xs font-semibold text-slate-700">RPM Enrollment</p>
+                          <label className="flex items-center gap-2 text-sm">
+                            <input type="checkbox" className="accent-emerald-600" checked={!!r.patient.rpmEnrolled}
+                              onChange={(e) => updateRPM.mutate({ id: r.patient.id, rpmEnrolled: e.target.checked, rpmStatus: e.target.checked ? "enrolled" : "not_enrolled" })} />
+                            Enrolled in RPM
+                          </label>
+                          <div>
+                            <label className="text-[11px] text-slate-500">Status</label>
+                            <select className="w-full px-2 py-1.5 rounded-lg border border-slate-200 text-sm" value={r.patient.rpmStatus ?? "not_enrolled"}
+                              onChange={(e) => updateRPM.mutate({ id: r.patient.id, rpmStatus: e.target.value as any, rpmEnrolled: !(["not_enrolled", "declined"].includes(e.target.value)) })}>
+                              {Object.keys(RPM_STATUS_LABELS).map((s) => <option key={s} value={s}>{RPM_STATUS_LABELS[s]}</option>)}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-[11px] text-slate-500">Device Type</label>
+                            <input className="w-full px-2 py-1.5 rounded-lg border border-slate-200 text-sm" defaultValue={r.patient.rpmDeviceType ?? ""}
+                              placeholder="e.g. BP cuff, glucometer"
+                              onBlur={(e) => { if (e.target.value !== (r.patient.rpmDeviceType ?? "")) updateRPM.mutate({ id: r.patient.id, rpmDeviceType: e.target.value || null }); }} />
+                          </div>
+                        </PopoverContent>
+                      </Popover>
+                    ) : (
+                      <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${r.patient.rpmEnrolled ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-500"}`}>{r.patient.rpmEnrolled ? (RPM_STATUS_LABELS[r.patient.rpmStatus ?? "enrolled"] || "Enrolled") : "Not Enrolled"}</span>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

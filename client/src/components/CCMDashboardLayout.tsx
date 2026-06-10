@@ -5,8 +5,9 @@ import { trpc } from "@/lib/trpc";
 import {
   LogOut, Menu, X, Bell, LayoutDashboard, Users, ClipboardList,
   UserCog, AlertTriangle, Receipt, BarChart3, PhoneCall, CalendarClock,
-  ChevronDown, Check,
+  ChevronDown, Check, ShieldCheck, Clock,
 } from "lucide-react";
+import { useIdleLogout } from "@/hooks/useIdleLogout";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuSeparator, DropdownMenuTrigger,
@@ -26,6 +27,8 @@ const NAV: Record<string, NavItem[]> = {
     { label: "Billing", path: "/billing", icon: Receipt },
     { label: "Follow-ups", path: "/follow-ups", icon: CalendarClock },
     { label: "Reports", path: "/reports", icon: BarChart3 },
+    { label: "Team / Access", path: "/team", icon: UserCog },
+    { label: "Audit Log", path: "/audit", icon: ShieldCheck },
   ],
   staff: [
     { label: "My Worklist", path: "/worklist", icon: ClipboardList },
@@ -59,6 +62,7 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
   const [location, setLocation] = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const utils = trpc.useUtils();
+  const { warning, secondsLeft, stayLoggedIn, logoutNow } = useIdleLogout({ enabled: !!user });
 
   const { data: notifications } = trpc.notifications.list.useQuery(undefined, { refetchInterval: 30000 });
   const markRead = trpc.notifications.markRead.useMutation({
@@ -149,7 +153,8 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Role switcher (demo) */}
+            {/* Role switcher (admin-only preview) */}
+            {user.role === "admin" && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600">
@@ -173,6 +178,7 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
+            )}
 
             {/* Notifications */}
             <DropdownMenu>
@@ -223,6 +229,22 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
 
         <main className="flex-1 overflow-auto p-6">{children}</main>
       </div>
+
+      {/* HIPAA idle session timeout warning */}
+      {warning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-100 dark:border-slate-700 p-6 max-w-sm w-full mx-4 shadow-xl">
+            <div className="flex items-center gap-2 text-amber-600 mb-2">
+              <Clock size={20} /> <span className="font-semibold">Session expiring</span>
+            </div>
+            <p className="text-sm text-slate-600 dark:text-slate-300">For the security of protected health information, you will be signed out in <span className="font-bold text-slate-900 dark:text-slate-50">{secondsLeft}s</span> due to inactivity.</p>
+            <div className="flex gap-2 mt-5">
+              <button onClick={stayLoggedIn} className="flex-1 px-4 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800">Stay signed in</button>
+              <button onClick={logoutNow} className="px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50">Sign out</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

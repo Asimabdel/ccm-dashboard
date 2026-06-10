@@ -13,6 +13,8 @@ import {
   billingRecords,
   notifications,
   productivityMetrics,
+  auditLogs,
+  type InsertAuditLog,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
@@ -817,9 +819,181 @@ export async function getFirstUserByRole(role: string) {
   return r[0];
 }
 
-/** Update current user's role (used by demo role switcher) */
+/** Update a user's role (admin-managed access control). */
 export async function setUserRole(userId: number, role: "admin" | "staff" | "provider" | "billing" | "front_desk" | "user") {
   const db = await getDb();
   if (!db) return;
   await db.update(users).set({ role }).where(eq(users.id, userId));
+}
+
+/** List all worker accounts for the admin Team / Access page. */
+export async function getAllUsers() {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: users.id,
+      openId: users.openId,
+      name: users.name,
+      email: users.email,
+      role: users.role,
+      createdAt: users.createdAt,
+    })
+    .from(users)
+    .orderBy(desc(users.createdAt));
+}
+
+// ---------------------------------------------------------------------------
+// HIPAA audit logging
+// ---------------------------------------------------------------------------
+
+/** Append a record to the immutable HIPAA audit log. Never throws into callers. */
+export async function writeAuditLog(entry: InsertAuditLog) {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    await db.insert(auditLogs).values(entry);
+  } catch (e) {
+    console.warn("[Audit] Failed to write audit log:", e);
+  }
+}
+
+/** Fetch the most recent audit log entries (admin only — enforced at router). */
+export async function getAuditLogs(opts?: { limit?: number; action?: string; userId?: number }) {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions: any[] = [];
+  if (opts?.action) conditions.push(eq(auditLogs.action, opts.action as any));
+  if (opts?.userId) conditions.push(eq(auditLogs.userId, opts.userId));
+  return db
+    .select()
+    .from(auditLogs)
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(auditLogs.createdAt))
+    .limit(opts?.limit ?? 200);
+}
+
+// ---------------------------------------------------------------------------
+// Duplicate detection
+// ---------------------------------------------------------------------------
+
+/** Normalize a name for comparison: lowercase, collapse whitespace, trim. */
+export function normalizeName(name: string): string {
+  return name.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** Format a date to YYYY-MM-DD for DOB comparison, or "" if absent. */
+function dobKey(d?: Date | null): string {
+  if (!d) return "";
+  const dt = new Date(d);
+  if (isNaN(dt.getTime())) return "";
+  return dt.toISOString().slice(0, 10);
+}
+
+/**
+ * Returns a Map keyed by normalized name -> array of patient ids sharing that name.
+ * Only includes names with 2+ patients (i.e. actual duplicates).
+ */
+export async function getDuplicateNameGroups(): Promise<Record<string, { ids: number[]; sameDob: boolean }>> {
+  const db = await getDb();
+  if (!db) return {};
+  const rows = await db.select({ id: patients.id, name: patients.name, dob: patients.dateOfBirth }).from(patients);
+  const groups: Record<string, { ids: number[]; dobs: string[] }> = {};
+  for (const r of rows) {
+    const key = normalizeName(r.name);
+    if (!groups[key]) groups[key] = { ids: [], dobs: [] };
+    groups[key].ids.push(r.id);
+    groups[key].dobs.push(dobKey(r.dob));
+  }
+  const result: Record<string, { ids: number[]; sameDob: boolean }> = {};
+  for (const [key, g] of Object.entries(groups)) {
+    if (g.ids.length > 1) {
+      // sameDob is true when at least two records share an identical, non-empty DOB
+      const counts: Record<string, number> = {};
+      let repeatedDob = false;
+      for (const d of g.dobs) {
+        if (!d) continue;
+        counts[d] = (counts[d] || 0) + 1;
+        if (counts[d] > 1) repeatedDob = true;
+      }
+      result[key] = { ids: g.ids, sameDob: repeatedDob };
+    }
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Bulk patient import
+// ---------------------------------------------------------------------------
+
+export type BulkPatientRow = {
+  name: string;
+  dateOfBirth?: Date | null;
+  phoneNumber: string;
+  clinicId: number;
+  providerId: number;
+  preferredLanguage?: string;
+  chronicConditions?: string[];
+  insurance?: string;
+  riskLevel?: "high" | "medium" | "low";
+  consentStatus?: "consented" | "pending" | "declined";
+  rpmEnrolled?: boolean;
+  rpmStatus?: "not_enrolled" | "eligible" | "enrolled" | "active" | "declined" | "inactive";
+  rpmDeviceType?: string;
+};
+
+/** Insert many patients in one transaction-ish batch. Returns inserted count. */
+export async function bulkInsertPatients(rows: BulkPatientRow[]): Promise<number> {
+  const db = await getDb();
+  if (!db || rows.length === 0) return 0;
+  const values = rows.map((r) => ({
+    name: r.name,
+    dateOfBirth: r.dateOfBirth ?? null,
+    phoneNumber: r.phoneNumber,
+    clinicId: r.clinicId,
+    providerId: r.providerId,
+    preferredLanguage: r.preferredLanguage || "English",
+    chronicConditions: r.chronicConditions || [],
+    insurance: r.insurance,
+    riskLevel: r.riskLevel || "medium",
+    priorityLevel: r.riskLevel || "medium",
+    ccmEnrollmentStatus: "active" as const,
+    consentStatus: r.consentStatus || "pending",
+    rpmEnrolled: r.rpmEnrolled ?? false,
+    rpmStatus: r.rpmStatus || (r.rpmEnrolled ? "enrolled" : "not_enrolled"),
+    rpmDeviceType: r.rpmDeviceType,
+  }));
+  await db.insert(patients).values(values);
+  return values.length;
+}
+
+/** Find existing patients whose normalized name matches any in the provided list. */
+export async function findExistingByNames(names: string[]): Promise<Record<string, number[]>> {
+  const db = await getDb();
+  if (!db || names.length === 0) return {};
+  const rows = await db.select({ id: patients.id, name: patients.name }).from(patients);
+  const wanted = new Set(names.map(normalizeName));
+  const map: Record<string, number[]> = {};
+  for (const r of rows) {
+    const key = normalizeName(r.name);
+    if (wanted.has(key)) {
+      if (!map[key]) map[key] = [];
+      map[key].push(r.id);
+    }
+  }
+  return map;
+}
+
+// ---------------------------------------------------------------------------
+// RPM
+// ---------------------------------------------------------------------------
+
+export async function updatePatientRPM(
+  patientId: number,
+  data: { rpmEnrolled?: boolean; rpmStatus?: string; rpmDeviceType?: string | null }
+) {
+  const db = await getDb();
+  if (!db) return undefined;
+  await db.update(patients).set(data as any).where(eq(patients.id, patientId));
+  return getPatientById(patientId);
 }

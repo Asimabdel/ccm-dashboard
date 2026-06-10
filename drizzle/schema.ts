@@ -84,6 +84,10 @@ export const patients = mysqlTable("patients", {
   nextAppointment: datetime("nextAppointment"),
   lastCCMDate: datetime("lastCCMDate"),
   notes: text("notes"),
+  // Remote Patient Monitoring (RPM) enrollment
+  rpmEnrolled: boolean("rpmEnrolled").default(false),
+  rpmStatus: mysqlEnum("rpmStatus", ["not_enrolled", "eligible", "enrolled", "active", "declined", "inactive"]).default("not_enrolled"),
+  rpmDeviceType: varchar("rpmDeviceType", { length: 100 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -301,3 +305,36 @@ export const productivityMetrics = mysqlTable("productivityMetrics", {
 
 export type ProductivityMetrics = typeof productivityMetrics.$inferSelect;
 export type InsertProductivityMetrics = typeof productivityMetrics.$inferInsert;
+
+/**
+ * HIPAA audit log — records access and modifications to Protected Health Information (PHI).
+ * Append-only; never updated or deleted.
+ */
+export const auditLogs = mysqlTable("auditLogs", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").references(() => users.id),
+  userName: varchar("userName", { length: 255 }),
+  userRole: varchar("userRole", { length: 50 }),
+  action: mysqlEnum("action", [
+    "view_patient",
+    "list_patients",
+    "create_patient",
+    "update_patient",
+    "bulk_import_patients",
+    "update_rpm",
+    "view_worklist",
+    "complete_ccm_note",
+    "view_billing",
+    "export_data",
+    "login",
+    "logout",
+  ]).notNull(),
+  entityType: varchar("entityType", { length: 50 }),
+  entityId: int("entityId"),
+  description: text("description"),
+  ipAddress: varchar("ipAddress", { length: 64 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type AuditLog = typeof auditLogs.$inferSelect;
+export type InsertAuditLog = typeof auditLogs.$inferInsert;

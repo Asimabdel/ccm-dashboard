@@ -28,6 +28,20 @@ export const PRIORITY_LABELS: Record<string, string> = {
   low: "Low",
 };
 
+export const RPM_STATUS_LABELS: Record<string, string> = {
+  not_enrolled: "Not Enrolled",
+  eligible: "Eligible",
+  enrolled: "Enrolled",
+  active: "Active",
+  declined: "Declined",
+  inactive: "Inactive",
+};
+
+/** Normalize a name for duplicate comparison (mirrors server logic). */
+export function normalizeName(name: string): string {
+  return name.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
 export const ESCALATION_STATUS_LABELS: Record<string, string> = {
   pending: "Pending",
   reviewed: "Reviewed",
