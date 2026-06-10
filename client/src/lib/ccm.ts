@@ -1,4 +1,4 @@
-// Centralized CCM label maps & helpers — exact wording per spec.
+// Centralized CCM label maps and helpers - exact wording per spec.
 
 export const STATUS_LABELS: Record<string, string> = {
   not_started: "Not Started",
@@ -140,23 +140,18 @@ export function escalationBadgeClass(status: string): string {
   }
 }
 
-export function fmtMinutes(min?: number | null): string {
-  const m = min || 0;
-  return `${m} min`;
-}
-
 export function currentMonthStr(): string {
   return new Date().toISOString().slice(0, 7);
 }
 
 export function fmtDate(d?: Date | string | null): string {
-  if (!d) return "—";
+  if (!d) return "-";
   const date = typeof d === "string" ? new Date(d) : d;
   return date.toLocaleDateString();
 }
 
 export function fmtDateTime(d?: Date | string | null): string {
-  if (!d) return "—";
+  if (!d) return "-";
   const date = typeof d === "string" ? new Date(d) : d;
   return date.toLocaleString();
 }
