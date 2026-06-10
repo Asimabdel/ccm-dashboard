@@ -1,0 +1,2 @@
+ALTER TABLE `ccmTasks` ADD `priorityLevel` enum('high','medium','low') DEFAULT 'medium';--> statement-breakpoint
+ALTER TABLE `patients` ADD `priorityLevel` enum('high','medium','low') DEFAULT 'medium';

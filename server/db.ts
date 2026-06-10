@@ -357,3 +357,469 @@ export async function getStaffByClinic(clinicLocation: string | null) {
     .from(users)
     .where(eq(users.clinicLocation, clinicLocation));
 }
+
+
+// ============================================================
+// Enriched queries (with joins) and dashboard aggregations
+// ============================================================
+
+import { alias } from "drizzle-orm/mysql-core";
+import { inArray } from "drizzle-orm";
+
+/** Worklist row enriched with patient + staff + provider + clinic info */
+export async function getWorklistForMonth(month: string, filters?: {
+  status?: string;
+  priorityLevel?: "high" | "medium" | "low";
+  assignedStaffId?: number;
+  clinicId?: number;
+  providerId?: number;
+}) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const staffAlias = alias(users, "staff");
+
+  const conditions = [eq(ccmTasks.month, month)];
+  if (filters?.status) conditions.push(eq(ccmTasks.status, filters.status as any));
+  if (filters?.priorityLevel) conditions.push(eq(ccmTasks.priorityLevel, filters.priorityLevel));
+  if (filters?.assignedStaffId) conditions.push(eq(ccmTasks.assignedStaffId, filters.assignedStaffId));
+  if (filters?.clinicId) conditions.push(eq(patients.clinicId, filters.clinicId));
+  if (filters?.providerId) conditions.push(eq(patients.providerId, filters.providerId));
+
+  const rows = await db
+    .select({
+      task: ccmTasks,
+      patient: patients,
+      staffName: staffAlias.name,
+      providerName: providers.name,
+      clinicName: clinics.name,
+      clinicLocation: clinics.location,
+    })
+    .from(ccmTasks)
+    .innerJoin(patients, eq(ccmTasks.patientId, patients.id))
+    .leftJoin(staffAlias, eq(ccmTasks.assignedStaffId, staffAlias.id))
+    .leftJoin(providers, eq(patients.providerId, providers.id))
+    .leftJoin(clinics, eq(patients.clinicId, clinics.id))
+    .where(and(...conditions))
+    .orderBy(desc(ccmTasks.priorityLevel), desc(ccmTasks.updatedAt));
+
+  return rows;
+}
+
+/** Enriched patient list with provider, clinic, staff names */
+export async function getEnrichedPatients(filters?: {
+  clinicId?: number;
+  providerId?: number;
+  riskLevel?: "high" | "medium" | "low";
+  enrollmentStatus?: string;
+  search?: string;
+}) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const staffAlias = alias(users, "staff");
+  const conditions: any[] = [];
+  if (filters?.clinicId) conditions.push(eq(patients.clinicId, filters.clinicId));
+  if (filters?.providerId) conditions.push(eq(patients.providerId, filters.providerId));
+  if (filters?.riskLevel) conditions.push(eq(patients.riskLevel, filters.riskLevel));
+  if (filters?.enrollmentStatus) conditions.push(eq(patients.ccmEnrollmentStatus, filters.enrollmentStatus as any));
+
+  const rows = await db
+    .select({
+      patient: patients,
+      providerName: providers.name,
+      clinicName: clinics.name,
+      clinicLocation: clinics.location,
+      staffName: staffAlias.name,
+    })
+    .from(patients)
+    .leftJoin(providers, eq(patients.providerId, providers.id))
+    .leftJoin(clinics, eq(patients.clinicId, clinics.id))
+    .leftJoin(staffAlias, eq(patients.assignedStaffId, staffAlias.id))
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(patients.createdAt));
+
+  if (filters?.search) {
+    const s = filters.search.toLowerCase();
+    return rows.filter((r) => r.patient.name.toLowerCase().includes(s) || r.patient.phoneNumber.includes(s));
+  }
+  return rows;
+}
+
+/** Full patient detail incl. tasks, notes, follow-ups */
+export async function getPatientDetail(patientId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+
+  const patient = await getPatientById(patientId);
+  if (!patient) return undefined;
+
+  const tasks = await db.select().from(ccmTasks).where(eq(ccmTasks.patientId, patientId)).orderBy(desc(ccmTasks.month));
+  const notes = await db.select().from(ccmNotes).where(eq(ccmNotes.patientId, patientId)).orderBy(desc(ccmNotes.createdAt));
+  const fus = await db.select().from(followUpItems).where(eq(followUpItems.patientId, patientId)).orderBy(desc(followUpItems.createdAt));
+  const prov = patient.providerId ? await getProviderById(patient.providerId) : undefined;
+  const clinicArr = await db.select().from(clinics).where(eq(clinics.id, patient.clinicId)).limit(1);
+  const staffArr = patient.assignedStaffId ? await db.select().from(users).where(eq(users.id, patient.assignedStaffId)).limit(1) : [];
+
+  return {
+    patient,
+    tasks,
+    notes,
+    followUps: fus,
+    provider: prov,
+    clinic: clinicArr[0],
+    staff: staffArr[0],
+  };
+}
+
+/** Admin dashboard aggregate stats for a month */
+export async function getAdminStats(month: string) {
+  const db = await getDb();
+  if (!db) return null;
+
+  const tasks = await db.select().from(ccmTasks).where(eq(ccmTasks.month, month));
+  const activePats = await db.select().from(patients).where(eq(patients.ccmEnrollmentStatus, "active"));
+
+  const completedStatuses = ["completed", "ready_for_billing", "billed"];
+  const total = tasks.length;
+  const completed = tasks.filter((t) => completedStatuses.includes(t.status as string)).length;
+  const inProgress = tasks.filter((t) => t.status === "in_progress").length;
+  const notReached = tasks.filter((t) => ["called_no_answer", "voicemail_left", "wrong_number"].includes(t.status as string)).length;
+  const notStarted = tasks.filter((t) => ["not_started", "assigned"].includes(t.status as string)).length;
+  const readyForBilling = tasks.filter((t) => t.status === "ready_for_billing").length;
+  const needsReview = tasks.filter((t) => t.providerReviewNeeded).length;
+  const totalMinutes = tasks.reduce((a, t) => a + (t.timeSpentMinutes || 0), 0);
+
+  const pendingEsc = await db.select({ c: sql<number>`COUNT(*)` }).from(providerEscalations).where(eq(providerEscalations.escalationStatus, "pending"));
+
+  // status distribution
+  const statusDistribution: Record<string, number> = {};
+  tasks.forEach((t) => {
+    statusDistribution[t.status as string] = (statusDistribution[t.status as string] || 0) + 1;
+  });
+
+  // priority distribution
+  const priorityDistribution: Record<string, number> = { high: 0, medium: 0, low: 0 };
+  tasks.forEach((t) => {
+    const p = (t.priorityLevel || "medium") as string;
+    priorityDistribution[p] = (priorityDistribution[p] || 0) + 1;
+  });
+
+  return {
+    totalActivePatients: activePats.length,
+    totalTasks: total,
+    completed,
+    inProgress,
+    notReached,
+    notStarted,
+    readyForBilling,
+    needsReview,
+    pendingEscalations: pendingEsc[0]?.c ?? 0,
+    completionPct: total ? Math.round((completed / total) * 100) : 0,
+    totalMinutes,
+    statusDistribution,
+    priorityDistribution,
+  };
+}
+
+/** Per-staff performance for a month (with names) */
+export async function getStaffPerformance(month: string) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const staffAlias = alias(users, "staff");
+  const rows = await db
+    .select({
+      staffId: ccmTasks.assignedStaffId,
+      staffName: staffAlias.name,
+      status: ccmTasks.status,
+      timeSpentMinutes: ccmTasks.timeSpentMinutes,
+      ccmNoteCompleted: ccmTasks.ccmNoteCompleted,
+    })
+    .from(ccmTasks)
+    .leftJoin(staffAlias, eq(ccmTasks.assignedStaffId, staffAlias.id))
+    .where(eq(ccmTasks.month, month));
+
+  const map = new Map<number, { staffId: number; staffName: string; assigned: number; completed: number; minutes: number }>();
+  const completedStatuses = ["completed", "ready_for_billing", "billed"];
+  for (const r of rows) {
+    if (!r.staffId) continue;
+    const cur = map.get(r.staffId) || { staffId: r.staffId, staffName: r.staffName || "Unassigned", assigned: 0, completed: 0, minutes: 0 };
+    cur.assigned += 1;
+    if (completedStatuses.includes(r.status as string)) cur.completed += 1;
+    cur.minutes += r.timeSpentMinutes || 0;
+    map.set(r.staffId, cur);
+  }
+  return Array.from(map.values());
+}
+
+/** Per-clinic performance for a month */
+export async function getClinicPerformance(month: string) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const rows = await db
+    .select({
+      clinicId: clinics.id,
+      clinicName: clinics.name,
+      location: clinics.location,
+      status: ccmTasks.status,
+    })
+    .from(ccmTasks)
+    .innerJoin(patients, eq(ccmTasks.patientId, patients.id))
+    .innerJoin(clinics, eq(patients.clinicId, clinics.id))
+    .where(eq(ccmTasks.month, month));
+
+  const map = new Map<number, { clinicId: number; clinicName: string; location: string; total: number; completed: number }>();
+  const completedStatuses = ["completed", "ready_for_billing", "billed"];
+  for (const r of rows) {
+    const cur = map.get(r.clinicId) || { clinicId: r.clinicId, clinicName: r.clinicName, location: r.location, total: 0, completed: 0 };
+    cur.total += 1;
+    if (completedStatuses.includes(r.status as string)) cur.completed += 1;
+    map.set(r.clinicId, cur);
+  }
+  return Array.from(map.values());
+}
+
+/** Daily completion trend for a month (based on dateContacted of completed tasks) */
+export async function getDailyCompletionTrend(month: string) {
+  const db = await getDb();
+  if (!db) return [];
+  const completedStatuses = ["completed", "ready_for_billing", "billed"];
+  const tasks = await db.select().from(ccmTasks).where(eq(ccmTasks.month, month));
+  const byDay: Record<string, number> = {};
+  tasks.forEach((t) => {
+    if (completedStatuses.includes(t.status as string) && t.dateContacted) {
+      const day = new Date(t.dateContacted).toISOString().slice(0, 10);
+      byDay[day] = (byDay[day] || 0) + 1;
+    }
+  });
+  return Object.entries(byDay)
+    .map(([date, count]) => ({ date, count }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/** Enriched escalations with patient + note info */
+export async function getEnrichedEscalations(filters?: { providerId?: number; status?: string }) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const conditions: any[] = [];
+  if (filters?.providerId) conditions.push(eq(providerEscalations.providerId, filters.providerId));
+  if (filters?.status) conditions.push(eq(providerEscalations.escalationStatus, filters.status as any));
+
+  return db
+    .select({
+      escalation: providerEscalations,
+      patient: patients,
+      note: ccmNotes,
+      providerName: providers.name,
+    })
+    .from(providerEscalations)
+    .innerJoin(patients, eq(providerEscalations.patientId, patients.id))
+    .leftJoin(ccmNotes, eq(providerEscalations.ccmNoteId, ccmNotes.id))
+    .leftJoin(providers, eq(providerEscalations.providerId, providers.id))
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(providerEscalations.createdAt));
+}
+
+/** Enriched billing records with patient info */
+export async function getEnrichedBilling(month: string, status?: string) {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions = [eq(billingRecords.month, month)];
+  if (status) conditions.push(eq(billingRecords.billingStatus, status as any));
+  return db
+    .select({
+      billing: billingRecords,
+      patient: patients,
+      task: ccmTasks,
+    })
+    .from(billingRecords)
+    .innerJoin(patients, eq(billingRecords.patientId, patients.id))
+    .leftJoin(ccmTasks, eq(billingRecords.ccmTaskId, ccmTasks.id))
+    .where(and(...conditions))
+    .orderBy(desc(billingRecords.updatedAt));
+}
+
+/** Enriched follow-up items with patient info */
+export async function getEnrichedFollowUps(filters?: { status?: string; type?: string }) {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions: any[] = [];
+  if (filters?.status) conditions.push(eq(followUpItems.status, filters.status as any));
+  if (filters?.type) conditions.push(eq(followUpItems.type, filters.type as any));
+  return db
+    .select({
+      followUp: followUpItems,
+      patient: patients,
+      clinicName: clinics.name,
+    })
+    .from(followUpItems)
+    .innerJoin(patients, eq(followUpItems.patientId, patients.id))
+    .leftJoin(clinics, eq(patients.clinicId, clinics.id))
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(followUpItems.createdAt));
+}
+
+/** Staff workload: number of active assigned patients & open tasks per staff */
+export async function getStaffWorkload(month: string) {
+  const db = await getDb();
+  if (!db) return [];
+  const staffUsers = await db
+    .select()
+    .from(users)
+    .where(inArray(users.role, ["staff"] as any));
+
+  const tasks = await db.select().from(ccmTasks).where(eq(ccmTasks.month, month));
+  const completedStatuses = ["completed", "ready_for_billing", "billed"];
+
+  return staffUsers.map((s) => {
+    const theirs = tasks.filter((t) => t.assignedStaffId === s.id);
+    const open = theirs.filter((t) => !completedStatuses.includes(t.status as string)).length;
+    return {
+      staffId: s.id,
+      name: s.name,
+      clinicLocation: s.clinicLocation,
+      languagesSpoken: s.languagesSpoken,
+      totalAssigned: theirs.length,
+      openTasks: open,
+      completed: theirs.length - open,
+    };
+  });
+}
+
+/** All staff users (for assignment dropdowns) */
+export async function getAllStaffUsers() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(users).where(inArray(users.role, ["staff", "admin"] as any));
+}
+
+/** All providers with clinic name */
+export async function getAllProviders() {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({ provider: providers, clinicName: clinics.name, location: clinics.location })
+    .from(providers)
+    .leftJoin(clinics, eq(providers.clinicId, clinics.id));
+}
+
+/** Generate monthly worklist tasks for all active patients lacking a task this month */
+export async function generateMonthlyWorklist(month: string) {
+  const db = await getDb();
+  if (!db) return { created: 0 };
+
+  const activePats = await db.select().from(patients).where(eq(patients.ccmEnrollmentStatus, "active"));
+  const existing = await db.select().from(ccmTasks).where(eq(ccmTasks.month, month));
+  const existingPatientIds = new Set(existing.map((t) => t.patientId));
+
+  const toCreate = activePats.filter((p) => !existingPatientIds.has(p.id));
+  if (!toCreate.length) return { created: 0 };
+
+  await db.insert(ccmTasks).values(
+    toCreate.map((p) => ({
+      patientId: p.id,
+      month,
+      assignedStaffId: p.assignedStaffId,
+      priorityLevel: p.priorityLevel || p.riskLevel || "medium",
+      status: p.assignedStaffId ? ("assigned" as const) : ("not_started" as const),
+    }))
+  );
+  return { created: toCreate.length };
+}
+
+/** Recompute billing readiness for a task and upsert billing record */
+export async function recomputeBilling(taskId: number, month: string) {
+  const db = await getDb();
+  if (!db) return;
+  const task = await getCCMTaskById(taskId);
+  if (!task) return;
+
+  const timeMet = (task.timeSpentMinutes || 0) >= 20;
+  const docComplete = !!task.ccmNoteCompleted;
+  const providerReviewDone = !task.providerReviewNeeded;
+  let billingStatus:
+    | "not_started" | "in_progress" | "documentation_incomplete"
+    | "provider_review_pending" | "ready_for_billing" | "billed"
+    | "denied" | "needs_correction" = "not_started";
+  if (task.status === "billed") billingStatus = "billed";
+  else if (timeMet && docComplete && providerReviewDone) billingStatus = "ready_for_billing";
+  else if (task.status === "documentation_incomplete") billingStatus = "documentation_incomplete";
+  else if (task.providerReviewNeeded) billingStatus = "provider_review_pending";
+  else if ((task.timeSpentMinutes || 0) > 0) billingStatus = "in_progress";
+
+  const existing = await db.select().from(billingRecords).where(eq(billingRecords.ccmTaskId, taskId)).limit(1);
+  const values = {
+    ccmTaskId: taskId,
+    patientId: task.patientId,
+    month,
+    timeThresholdMet: timeMet,
+    documentationComplete: docComplete,
+    providerAssociated: true,
+    carePlanReviewed: docComplete,
+    noMissingFields: docComplete,
+    providerReviewCompleted: providerReviewDone,
+    billingStatus,
+  };
+  if (existing.length) {
+    await db.update(billingRecords).set(values).where(eq(billingRecords.id, existing[0].id));
+  } else {
+    await db.insert(billingRecords).values(values);
+  }
+
+  // keep task.billingReady in sync
+  await db.update(ccmTasks).set({ billingReady: billingStatus === "ready_for_billing" }).where(eq(ccmTasks.id, taskId));
+}
+
+/** Create a notification */
+export async function createNotification(n: {
+  userId: number;
+  type: "urgent_symptom" | "escalation" | "missing_documentation" | "not_reached" | "billing_ready";
+  title: string;
+  content?: string;
+  relatedPatientId?: number | null;
+  relatedCCMTaskId?: number | null;
+}) {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(notifications).values({
+    userId: n.userId,
+    type: n.type,
+    title: n.title,
+    content: n.content,
+    relatedPatientId: n.relatedPatientId ?? null,
+    relatedCCMTaskId: n.relatedCCMTaskId ?? null,
+    read: false,
+  });
+}
+
+/** Mark notification read */
+export async function markNotificationRead(id: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(notifications).set({ read: true }).where(eq(notifications.id, id));
+}
+
+/** Get all notifications for a user (read + unread) */
+export async function getAllNotifications(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(notifications).where(eq(notifications.userId, userId)).orderBy(desc(notifications.createdAt));
+}
+
+/** Find first user by role (for routing notifications) */
+export async function getFirstUserByRole(role: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const r = await db.select().from(users).where(eq(users.role, role as any)).limit(1);
+  return r[0];
+}
+
+/** Update current user's role (used by demo role switcher) */
+export async function setUserRole(userId: number, role: "admin" | "staff" | "provider" | "billing" | "front_desk" | "user") {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(users).set({ role }).where(eq(users.id, userId));
+}

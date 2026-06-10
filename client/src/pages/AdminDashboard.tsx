@@ -1,390 +1,244 @@
+import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
-import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { useLocation } from "wouter";
-import { Users, ClipboardList, AlertCircle, CheckCircle2, TrendingUp, Activity, Clock, Target } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { useState } from "react";
+import { useLocation } from "wouter";
+import { toast } from "sonner";
 import {
-  LineChart,
-  Line,
-  BarChart,
-  Bar,
-  PieChart,
-  Pie,
-  Cell,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
+  Users, ClipboardCheck, PhoneOff, AlertTriangle, Receipt, Clock, TrendingUp, Database, Loader2,
+} from "lucide-react";
+import {
+  ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
+  PieChart, Pie, Cell, BarChart, Bar, Legend,
 } from "recharts";
+import { STATUS_LABELS, currentMonthStr } from "@/lib/ccm";
 
-// Mock data for charts
-const dailyCompletionData = [
-  { date: "Jun 1", completed: 12, target: 15 },
-  { date: "Jun 2", completed: 18, target: 15 },
-  { date: "Jun 3", completed: 14, target: 15 },
-  { date: "Jun 4", completed: 22, target: 15 },
-  { date: "Jun 5", completed: 19, target: 15 },
-  { date: "Jun 6", completed: 25, target: 15 },
-  { date: "Jun 7", completed: 28, target: 15 },
-  { date: "Jun 8", completed: 31, target: 15 },
-  { date: "Jun 9", completed: 35, target: 15 },
-  { date: "Jun 10", completed: 42, target: 15 },
-];
+const ACCENT = "hsl(200 100% 50%)";
+const PIE_COLORS = ["#34d399", "#60a5fa", "#fbbf24", "#fb7185", "#a78bfa", "#94a3b8", "#f472b6", "#22d3ee"];
 
-const staffPerformanceData = [
-  { name: "Sarah Johnson", completed: 28, pending: 7, total: 35 },
-  { name: "Michael Chen", completed: 24, pending: 11, total: 35 },
-  { name: "Emma Davis", completed: 31, pending: 4, total: 35 },
-  { name: "James Wilson", completed: 19, pending: 16, total: 35 },
-  { name: "Lisa Anderson", completed: 26, pending: 9, total: 35 },
-];
-
-const statusDistributionData = [
-  { name: "Completed", value: 128, color: "#10b981" },
-  { name: "In Progress", value: 45, color: "#3b82f6" },
-  { name: "Called No Answer", value: 23, color: "#f59e0b" },
-  { name: "Not Started", value: 12, color: "#ef4444" },
-];
-
-const clinicPerformanceData = [
-  { clinic: "Downtown", ccms: 85, completed: 72, percentage: 85 },
-  { clinic: "Midtown", ccms: 62, completed: 48, percentage: 77 },
-  { clinic: "Uptown", ccms: 58, completed: 45, percentage: 78 },
-  { clinic: "Westside", ccms: 63, completed: 51, percentage: 81 },
-];
-
-const callDurationData = [
-  { range: "0-5 min", count: 18 },
-  { range: "5-10 min", count: 45 },
-  { range: "10-15 min", count: 62 },
-  { range: "15-20 min", count: 38 },
-  { range: "20+ min", count: 12 },
-];
+function StatCard({ icon: Icon, label, value, sub, tone = "default" }: {
+  icon: React.ElementType; label: string; value: string | number; sub?: string;
+  tone?: "default" | "good" | "warn" | "bad";
+}) {
+  const iconBg = {
+    default: "bg-slate-100 text-slate-600",
+    good: "bg-emerald-100 text-emerald-600",
+    warn: "bg-amber-100 text-amber-600",
+    bad: "bg-rose-100 text-rose-600",
+  }[tone];
+  return (
+    <div className="bg-white rounded-3xl p-5 border border-slate-100">
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="text-xs font-light uppercase tracking-wider text-slate-400">{label}</p>
+          <p className="mt-2 text-3xl font-extrabold tracking-tight text-slate-900">{value}</p>
+          {sub && <p className="mt-1 text-xs font-light text-slate-400">{sub}</p>}
+        </div>
+        <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${iconBg}`}>
+          <Icon size={18} />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function AdminDashboard() {
+  const { user, loading: authLoading } = useAuth({ redirectOnUnauthenticated: true });
   const [, setLocation] = useLocation();
-  const currentMonth = new Date().toISOString().slice(0, 7);
+  const [month] = useState(currentMonthStr());
+  const utils = trpc.useUtils();
 
-  const { data: patients } = trpc.patients.list.useQuery({ activeOnly: true });
-  const { data: tasks } = trpc.ccmTasks.listForMonth.useQuery(currentMonth);
-  const { data: escalations } = trpc.escalations.listPending.useQuery();
-  const { data: billingReady } = trpc.billing.readyCount.useQuery(currentMonth);
+  const isAdmin = !!user && user.role === "admin";
+  const seedStatus = trpc.admin.seedStatus.useQuery(undefined, { enabled: !!user });
+  const stats = trpc.admin.stats.useQuery({ month }, { enabled: isAdmin });
+  const staffPerf = trpc.admin.staffPerformance.useQuery({ month }, { enabled: isAdmin });
+  const clinicPerf = trpc.admin.clinicPerformance.useQuery({ month }, { enabled: isAdmin });
+  const trend = trpc.admin.dailyTrend.useQuery({ month }, { enabled: isAdmin });
 
-  const completedTasks = tasks?.filter((t) => t.status === "completed").length || 0;
-  const inProgressTasks = tasks?.filter((t) => t.status === "in_progress").length || 0;
-  const totalTasks = tasks?.length || 128;
-  const completionPercentage = tasks ? Math.round((completedTasks / totalTasks) * 100) : 0;
-  const avgCallDuration = 12.5; // minutes
+  const seed = trpc.admin.seed.useMutation({
+    onSuccess: async (s: any) => {
+      toast.success(`Seeded ${s.patients} patients, ${s.tasks} tasks, ${s.notes} notes.`);
+      await utils.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  if (authLoading || !user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[hsl(240_10%_97%)]">
+        <Loader2 className="animate-spin text-slate-400" />
+      </div>
+    );
+  }
+
+  const s = stats.data;
+  const statusData = s
+    ? Object.entries(s.statusDistribution).map(([k, v]) => ({ name: STATUS_LABELS[k] || k, value: v as number }))
+    : [];
+  const staffData = (staffPerf.data || []).map((p) => ({
+    name: (p.staffName || "Unassigned").split(" ")[0],
+    Completed: p.completed,
+    Remaining: Math.max(p.assigned - p.completed, 0),
+  }));
+  const trendData = (trend.data || []).map((d) => ({ date: d.date.slice(5), Completed: d.count }));
 
   return (
-    <CCMDashboardLayout>
-      <div className="space-y-6">
-        {/* Header */}
-        <div>
-          <h2 className="text-3xl font-bold text-slate-900 dark:text-slate-50 mb-2">Program Overview</h2>
-          <p className="text-slate-600 dark:text-slate-400">
-            Real-time metrics for June 2026 • Last updated 2 minutes ago
-          </p>
+    <CCMDashboardLayout title="Program Overview">
+      {seedStatus.data && !seedStatus.data.seeded && (
+        <div className="mb-6 rounded-3xl border border-blue-100 bg-blue-50/60 p-5 flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <Database className="text-blue-500" size={20} />
+            <div>
+              <p className="font-semibold text-slate-800">No data yet</p>
+              <p className="text-sm font-light text-slate-500">Load realistic demo data to explore the full system.</p>
+            </div>
+          </div>
+          <button
+            onClick={() => seed.mutate()}
+            disabled={seed.isPending}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 disabled:opacity-60"
+          >
+            {seed.isPending ? <Loader2 size={16} className="animate-spin" /> : <Database size={16} />}
+            Load demo data
+          </button>
         </div>
+      )}
 
-        {/* Key Metrics Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <Card className="p-6 border border-slate-200 dark:border-slate-700">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-slate-600 dark:text-slate-400">Active Patients</p>
-                <p className="text-3xl font-bold text-slate-900 dark:text-slate-50 mt-2">
-                  {patients?.length || 268}
-                </p>
-                <p className="text-xs text-slate-500 mt-1">Enrolled in CCM</p>
-              </div>
-              <Users className="w-10 h-10 text-blue-400 opacity-60" />
-            </div>
-          </Card>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard icon={Users} label="Active Patients" value={s?.totalActivePatients ?? "—"} sub={`${s?.totalTasks ?? 0} tasks this month`} />
+        <StatCard icon={ClipboardCheck} label="Completed" value={s?.completed ?? "—"} sub={`${s?.completionPct ?? 0}% completion`} tone="good" />
+        <StatCard icon={PhoneOff} label="Not Reached" value={s?.notReached ?? "—"} sub="Called No Answer / Voicemail" tone="warn" />
+        <StatCard icon={AlertTriangle} label="Pending Escalations" value={s?.pendingEscalations ?? "—"} sub="Awaiting provider review" tone="bad" />
+        <StatCard icon={Clock} label="Total CCM Time" value={`${Math.round((s?.totalMinutes ?? 0) / 60)}h`} sub={`${s?.totalMinutes ?? 0} minutes logged`} />
+        <StatCard icon={Receipt} label="Ready for Billing" value={s?.readyForBilling ?? "—"} sub="Meets CMS criteria" tone="good" />
+        <StatCard icon={TrendingUp} label="In Progress" value={s?.inProgress ?? "—"} sub="Currently being worked" />
+        <StatCard icon={AlertTriangle} label="Needs Review" value={s?.needsReview ?? "—"} sub="Flagged for provider" tone="warn" />
+      </div>
 
-          <Card className="p-6 border border-slate-200 dark:border-slate-700">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-slate-600 dark:text-slate-400">Total CCMs This Month</p>
-                <p className="text-3xl font-bold text-slate-900 dark:text-slate-50 mt-2">
-                  {totalTasks}
-                </p>
-                <p className="text-xs text-slate-500 mt-1">Due for completion</p>
-              </div>
-              <ClipboardList className="w-10 h-10 text-green-400 opacity-60" />
-            </div>
-          </Card>
-
-          <Card className="p-6 border border-slate-200 dark:border-slate-700">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-slate-600 dark:text-slate-400">Completed</p>
-                <p className="text-3xl font-bold text-slate-900 dark:text-slate-50 mt-2">
-                  {completedTasks}
-                </p>
-                <p className="text-xs text-green-600 dark:text-green-400 mt-1">{completionPercentage}% completion</p>
-              </div>
-              <CheckCircle2 className="w-10 h-10 text-green-500 opacity-60" />
-            </div>
-          </Card>
-
-          <Card className="p-6 border border-slate-200 dark:border-slate-700">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-slate-600 dark:text-slate-400">Pending Escalations</p>
-                <p className="text-3xl font-bold text-slate-900 dark:text-slate-50 mt-2">
-                  {escalations?.length || 8}
-                </p>
-                <p className="text-xs text-red-600 dark:text-red-400 mt-1">Require attention</p>
-              </div>
-              <AlertCircle className="w-10 h-10 text-red-400 opacity-60" />
-            </div>
-          </Card>
+      <div className="mt-6 bg-white rounded-3xl p-6 border border-slate-100">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-bold text-slate-900 tracking-tight">Monthly Completion</h3>
+          <span className="text-sm font-light text-slate-400">{s?.completed ?? 0} of {s?.totalTasks ?? 0}</span>
         </div>
-
-        {/* Secondary Metrics */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Card className="p-6 border border-slate-200 dark:border-slate-700">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-slate-600 dark:text-slate-400">In Progress</p>
-                <p className="text-2xl font-bold text-slate-900 dark:text-slate-50 mt-2">{inProgressTasks}</p>
-              </div>
-              <Activity className="w-8 h-8 text-blue-400 opacity-60" />
-            </div>
-          </Card>
-
-          <Card className="p-6 border border-slate-200 dark:border-slate-700">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-slate-600 dark:text-slate-400">Avg Call Duration</p>
-                <p className="text-2xl font-bold text-slate-900 dark:text-slate-50 mt-2">{avgCallDuration} min</p>
-              </div>
-              <Clock className="w-8 h-8 text-purple-400 opacity-60" />
-            </div>
-          </Card>
-
-          <Card className="p-6 border border-slate-200 dark:border-slate-700">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-slate-600 dark:text-slate-400">Ready for Billing</p>
-                <p className="text-2xl font-bold text-slate-900 dark:text-slate-50 mt-2">{billingReady || 89}</p>
-              </div>
-              <TrendingUp className="w-8 h-8 text-purple-400 opacity-60" />
-            </div>
-          </Card>
+        <div className="h-3 rounded-full bg-slate-100 overflow-hidden">
+          <div
+            className="h-full rounded-full transition-all duration-700"
+            style={{ width: `${s?.completionPct ?? 0}%`, background: `linear-gradient(90deg, hsl(200 100% 60%), hsl(345 80% 70%))` }}
+          />
         </div>
+        <p className="mt-2 text-sm font-light text-slate-500">{s?.completionPct ?? 0}% of this month's CCM outreach is complete.</p>
+      </div>
 
-        {/* Charts Row 1 */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Daily Completion Trend */}
-          <Card className="p-6 border border-slate-200 dark:border-slate-700">
-            <h3 className="font-bold text-lg mb-4 text-slate-900 dark:text-slate-50">Daily Completion Trend</h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={dailyCompletionData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="date" stroke="#64748b" />
-                <YAxis stroke="#64748b" />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "#1e293b",
-                    border: "1px solid #475569",
-                    borderRadius: "8px",
-                  }}
-                  labelStyle={{ color: "#f1f5f9" }}
-                />
-                <Legend />
-                <Line type="monotone" dataKey="completed" stroke="#10b981" strokeWidth={2} name="Completed" />
-                <Line type="monotone" dataKey="target" stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 5" name="Target" />
+      <div className="mt-6 grid lg:grid-cols-2 gap-6">
+        <div className="bg-white rounded-3xl p-6 border border-slate-100">
+          <h3 className="font-bold text-slate-900 tracking-tight mb-4">Daily Completion Trend</h3>
+          {trendData.length === 0 ? (
+            <p className="text-sm font-light text-slate-400 py-12 text-center">No completions recorded yet.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={260}>
+              <LineChart data={trendData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef2f7" />
+                <XAxis dataKey="date" stroke="#94a3b8" fontSize={12} />
+                <YAxis stroke="#94a3b8" fontSize={12} allowDecimals={false} />
+                <RTooltip />
+                <Line type="monotone" dataKey="Completed" stroke={ACCENT} strokeWidth={2.5} dot={{ r: 3 }} />
               </LineChart>
             </ResponsiveContainer>
-          </Card>
+          )}
+        </div>
 
-          {/* Status Distribution */}
-          <Card className="p-6 border border-slate-200 dark:border-slate-700">
-            <h3 className="font-bold text-lg mb-4 text-slate-900 dark:text-slate-50">Status Distribution</h3>
-            <ResponsiveContainer width="100%" height={300}>
+        <div className="bg-white rounded-3xl p-6 border border-slate-100">
+          <h3 className="font-bold text-slate-900 tracking-tight mb-4">Status Distribution</h3>
+          {statusData.length === 0 ? (
+            <p className="text-sm font-light text-slate-400 py-12 text-center">No tasks yet.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={260}>
               <PieChart>
-                <Pie
-                  data={statusDistributionData}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ name, value }) => `${name}: ${value}`}
-                  outerRadius={80}
-                  fill="#8884d8"
-                  dataKey="value"
-                >
-                  {statusDistributionData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
+                <Pie data={statusData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} innerRadius={50} paddingAngle={2}>
+                  {statusData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
                 </Pie>
-                <Tooltip />
+                <RTooltip />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
               </PieChart>
             </ResponsiveContainer>
-          </Card>
+          )}
         </div>
+      </div>
 
-        {/* Charts Row 2 */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Staff Performance */}
-          <Card className="p-6 border border-slate-200 dark:border-slate-700">
-            <h3 className="font-bold text-lg mb-4 text-slate-900 dark:text-slate-50">Staff Performance</h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={staffPerformanceData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="name" stroke="#64748b" />
-                <YAxis stroke="#64748b" />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "#1e293b",
-                    border: "1px solid #475569",
-                    borderRadius: "8px",
-                  }}
-                  labelStyle={{ color: "#f1f5f9" }}
-                />
-                <Legend />
-                <Bar dataKey="completed" fill="#10b981" name="Completed" />
-                <Bar dataKey="pending" fill="#f59e0b" name="Pending" />
-              </BarChart>
-            </ResponsiveContainer>
-          </Card>
+      <div className="mt-6 bg-white rounded-3xl p-6 border border-slate-100">
+        <h3 className="font-bold text-slate-900 tracking-tight mb-4">Staff Performance</h3>
+        {staffData.length === 0 ? (
+          <p className="text-sm font-light text-slate-400 py-12 text-center">No staff assignments yet.</p>
+        ) : (
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={staffData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#eef2f7" />
+              <XAxis dataKey="name" stroke="#94a3b8" fontSize={12} />
+              <YAxis stroke="#94a3b8" fontSize={12} allowDecimals={false} />
+              <RTooltip />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Bar dataKey="Completed" stackId="a" fill="#34d399" />
+              <Bar dataKey="Remaining" stackId="a" fill="#fbbf24" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </div>
 
-          {/* Call Duration Distribution */}
-          <Card className="p-6 border border-slate-200 dark:border-slate-700">
-            <h3 className="font-bold text-lg mb-4 text-slate-900 dark:text-slate-50">Call Duration Distribution</h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={callDurationData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="range" stroke="#64748b" />
-                <YAxis stroke="#64748b" />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "#1e293b",
-                    border: "1px solid #475569",
-                    borderRadius: "8px",
-                  }}
-                  labelStyle={{ color: "#f1f5f9" }}
-                />
-                <Bar dataKey="count" fill="#3b82f6" name="Number of Calls" />
-              </BarChart>
-            </ResponsiveContainer>
-          </Card>
-        </div>
-
-        {/* Clinic Performance Table */}
-        <Card className="p-6 border border-slate-200 dark:border-slate-700">
-          <h3 className="font-bold text-lg mb-4 text-slate-900 dark:text-slate-50">Clinic Performance</h3>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-700">
-                  <th className="text-left py-3 px-4 font-semibold text-slate-900 dark:text-slate-50">Clinic</th>
-                  <th className="text-center py-3 px-4 font-semibold text-slate-900 dark:text-slate-50">Total CCMs</th>
-                  <th className="text-center py-3 px-4 font-semibold text-slate-900 dark:text-slate-50">Completed</th>
-                  <th className="text-center py-3 px-4 font-semibold text-slate-900 dark:text-slate-50">Completion %</th>
-                </tr>
-              </thead>
-              <tbody>
-                {clinicPerformanceData.map((clinic, idx) => (
-                  <tr key={idx} className="border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800">
-                    <td className="py-3 px-4 text-slate-900 dark:text-slate-50">{clinic.clinic}</td>
-                    <td className="text-center py-3 px-4 text-slate-600 dark:text-slate-400">{clinic.ccms}</td>
-                    <td className="text-center py-3 px-4 text-slate-600 dark:text-slate-400">{clinic.completed}</td>
-                    <td className="text-center py-3 px-4">
-                      <div className="flex items-center justify-center gap-2">
-                        <div className="w-16 bg-slate-200 dark:bg-slate-700 rounded-full h-2">
-                          <div
-                            className="bg-green-500 h-2 rounded-full"
-                            style={{ width: `${clinic.percentage}%` }}
-                          />
+      <div className="mt-6 bg-white rounded-3xl p-6 border border-slate-100">
+        <h3 className="font-bold text-slate-900 tracking-tight mb-4">Clinic Performance</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs uppercase tracking-wider text-slate-400 border-b border-slate-100">
+                <th className="pb-3 font-medium">Clinic</th>
+                <th className="pb-3 font-medium">Location</th>
+                <th className="pb-3 font-medium">Total</th>
+                <th className="pb-3 font-medium">Completed</th>
+                <th className="pb-3 font-medium w-48">Progress</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(clinicPerf.data || []).map((c) => {
+                const pct = c.total ? Math.round((c.completed / c.total) * 100) : 0;
+                return (
+                  <tr key={c.clinicId} className="border-b border-slate-50 last:border-0">
+                    <td className="py-3 font-medium text-slate-800">{c.clinicName}</td>
+                    <td className="py-3 text-slate-500">{c.location}</td>
+                    <td className="py-3 text-slate-500">{c.total}</td>
+                    <td className="py-3 text-slate-500">{c.completed}</td>
+                    <td className="py-3">
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
+                          <div className="h-full bg-[hsl(200_100%_50%)] rounded-full" style={{ width: `${pct}%` }} />
                         </div>
-                        <span className="text-sm font-semibold text-slate-900 dark:text-slate-50 w-10 text-right">
-                          {clinic.percentage}%
-                        </span>
+                        <span className="text-xs text-slate-400 w-9 text-right">{pct}%</span>
                       </div>
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-
-        {/* Monthly Progress */}
-        <Card className="p-6 border border-slate-200 dark:border-slate-700">
-          <h3 className="font-bold text-lg mb-4 text-slate-900 dark:text-slate-50">Monthly Progress</h3>
-          <div className="space-y-4">
-            <div>
-              <div className="flex justify-between mb-2">
-                <span className="text-sm font-medium text-slate-900 dark:text-slate-50">Overall Completion Rate</span>
-                <span className="text-sm font-bold text-green-600 dark:text-green-400">{completionPercentage}%</span>
-              </div>
-              <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-3">
-                <div
-                  className="bg-gradient-to-r from-green-400 to-green-600 h-3 rounded-full transition-all duration-300"
-                  style={{ width: `${completionPercentage}%` }}
-                />
-              </div>
-            </div>
-            <p className="text-sm text-slate-600 dark:text-slate-400">
-              {completedTasks} of {totalTasks} CCMs completed • {totalTasks - completedTasks} remaining
-            </p>
-          </div>
-        </Card>
-
-        {/* Quick Actions */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Card className="p-6 border border-slate-200 dark:border-slate-700">
-            <h3 className="font-bold text-lg mb-4 text-slate-900 dark:text-slate-50">Quick Actions</h3>
-            <div className="space-y-2">
-              <Button
-                className="w-full justify-start"
-                variant="outline"
-                onClick={() => setLocation("/admin/worklist")}
-              >
-                View Monthly Worklist
-              </Button>
-              <Button
-                className="w-full justify-start"
-                variant="outline"
-                onClick={() => setLocation("/admin/assignment")}
-              >
-                Assign Patients to Staff
-              </Button>
-              <Button
-                className="w-full justify-start"
-                variant="outline"
-                onClick={() => setLocation("/admin/reporting")}
-              >
-                View Detailed Reports
-              </Button>
-            </div>
-          </Card>
-
-          <Card className="p-6 border border-slate-200 dark:border-slate-700">
-            <h3 className="font-bold text-lg mb-4 text-slate-900 dark:text-slate-50">Alerts & Notifications</h3>
-            <div className="space-y-3">
-              <div className="flex items-start gap-3 p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
-                <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-medium text-red-900 dark:text-red-100">8 Pending Escalations</p>
-                  <p className="text-xs text-red-700 dark:text-red-200">Require provider review</p>
-                </div>
-              </div>
-              <div className="flex items-start gap-3 p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
-                <Target className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-medium text-yellow-900 dark:text-yellow-100">23 Calls Not Answered</p>
-                  <p className="text-xs text-yellow-700 dark:text-yellow-200">Retry recommended</p>
-                </div>
-              </div>
-            </div>
-          </Card>
+                );
+              })}
+              {(clinicPerf.data || []).length === 0 && (
+                <tr><td colSpan={5} className="py-10 text-center text-slate-400 font-light">No clinic data yet.</td></tr>
+              )}
+            </tbody>
+          </table>
         </div>
+      </div>
+
+      <div className="mt-6 grid sm:grid-cols-3 gap-4">
+        {[
+          { label: "Monthly Worklist", path: "/worklist" },
+          { label: "Staff Assignment", path: "/assignment" },
+          { label: "Reports", path: "/reports" },
+        ].map((a) => (
+          <button
+            key={a.path}
+            onClick={() => setLocation(a.path)}
+            className="bg-white rounded-2xl p-5 border border-slate-100 text-left hover:border-slate-300 transition-colors font-semibold text-slate-800"
+          >
+            {a.label} →
+          </button>
+        ))}
       </div>
     </CCMDashboardLayout>
   );

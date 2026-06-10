@@ -78,6 +78,7 @@ export const patients = mysqlTable("patients", {
   ccmEnrollmentStatus: mysqlEnum("ccmEnrollmentStatus", ["active", "inactive", "declined", "transferred"]).default("active"),
   consentStatus: mysqlEnum("consentStatus", ["consented", "pending", "declined"]).default("pending"),
   riskLevel: mysqlEnum("riskLevel", ["high", "medium", "low"]).default("medium"),
+  priorityLevel: mysqlEnum("priorityLevel", ["high", "medium", "low"]).default("medium"),
   assignedStaffId: int("assignedStaffId").references(() => users.id),
   lastOfficeVisit: datetime("lastOfficeVisit"),
   nextAppointment: datetime("nextAppointment"),
@@ -98,6 +99,7 @@ export const ccmTasks = mysqlTable("ccmTasks", {
   patientId: int("patientId").references(() => patients.id).notNull(),
   month: varchar("month", { length: 7 }).notNull(), // YYYY-MM format
   assignedStaffId: int("assignedStaffId").references(() => users.id),
+  priorityLevel: mysqlEnum("priorityLevel", ["high", "medium", "low"]).default("medium"),
   status: mysqlEnum("status", [
     "not_started",
     "assigned",
@@ -112,6 +114,8 @@ export const ccmTasks = mysqlTable("ccmTasks", {
     "documentation_incomplete",
     "ready_for_billing",
     "billed",
+    "cancelled",
+    "unable_to_reach",
     "declined_ccm",
     "inactive",
   ]).default("not_started"),

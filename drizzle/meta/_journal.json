@@ -15,6 +15,13 @@
       "when": 1781049767807,
       "tag": "0001_organic_pride",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1781098036294,
+      "tag": "0002_conscious_the_hand",
+      "breakpoints": true
     }
   ]
 }

@@ -6,79 +6,31 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import AdminDashboard from "./pages/AdminDashboard";
-import StaffDashboard from "./pages/StaffDashboard";
-import ProviderDashboard from "./pages/ProviderDashboard";
-import BillingDashboard from "./pages/BillingDashboard";
-import FrontDeskDashboard from "./pages/FrontDeskDashboard";
-import MonthlyWorklist from "./pages/MonthlyWorklist";
-import ReportingDashboard from "./pages/ReportingDashboard";
-import NotificationCenter from "./pages/NotificationCenter";
-import { useAuth } from "./_core/hooks/useAuth";
-import { Loader2 } from "lucide-react";
+import PatientsPage from "./pages/PatientsPage";
+import PatientDetailPage from "./pages/PatientDetailPage";
+import WorklistPage from "./pages/WorklistPage";
+import CallWorkflowPage from "./pages/CallWorkflowPage";
+import StaffAssignmentPage from "./pages/StaffAssignmentPage";
+import EscalationsPage from "./pages/EscalationsPage";
+import BillingPage from "./pages/BillingPage";
+import FollowUpsPage from "./pages/FollowUpsPage";
+import ReportsPage from "./pages/ReportsPage";
 
 function Router() {
-  const { user, loading } = useAuth();
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-      </div>
-    );
-  }
-
   return (
     <Switch>
       <Route path="/" component={Home} />
-      
-      {/* Admin Routes */}
-      {user && user.role === "admin" && (
-        <>
-          <Route path="/admin" component={AdminDashboard} />
-          <Route path="/admin/dashboard" component={AdminDashboard} />
-          <Route path="/admin/worklist" component={MonthlyWorklist} />
-          <Route path="/admin/reporting" component={ReportingDashboard} />
-          <Route path="/admin/notifications" component={NotificationCenter} />
-        </>
-      )}
-      
-      {/* Staff Routes */}
-      {user && (user.role === "staff" || user.role === "admin") && (
-        <>
-          <Route path="/staff" component={StaffDashboard} />
-          <Route path="/staff/dashboard" component={StaffDashboard} />
-          <Route path="/staff/worklist" component={MonthlyWorklist} />
-          <Route path="/staff/notifications" component={NotificationCenter} />
-        </>
-      )}
-      
-      {/* Provider Routes */}
-      {user && (user.role === "provider" || user.role === "admin") && (
-        <>
-          <Route path="/provider" component={ProviderDashboard} />
-          <Route path="/provider/dashboard" component={ProviderDashboard} />
-          <Route path="/provider/notifications" component={NotificationCenter} />
-        </>
-      )}
-      
-      {/* Billing Routes */}
-      {user && (user.role === "billing" || user.role === "admin") && (
-        <>
-          <Route path="/billing" component={BillingDashboard} />
-          <Route path="/billing/dashboard" component={BillingDashboard} />
-          <Route path="/billing/notifications" component={NotificationCenter} />
-        </>
-      )}
-      
-      {/* Front Desk Routes */}
-      {user && (user.role === "front_desk" || user.role === "admin") && (
-        <>
-          <Route path="/front-desk" component={FrontDeskDashboard} />
-          <Route path="/front-desk/dashboard" component={FrontDeskDashboard} />
-          <Route path="/front-desk/notifications" component={NotificationCenter} />
-        </>
-      )}
-      
+      <Route path="/admin" component={AdminDashboard} />
+      <Route path="/patients" component={PatientsPage} />
+      <Route path="/patients/:id" component={PatientDetailPage} />
+      <Route path="/worklist" component={WorklistPage} />
+      <Route path="/workflow" component={CallWorkflowPage} />
+      <Route path="/workflow/:taskId" component={CallWorkflowPage} />
+      <Route path="/assignment" component={StaffAssignmentPage} />
+      <Route path="/escalations" component={EscalationsPage} />
+      <Route path="/billing" component={BillingPage} />
+      <Route path="/follow-ups" component={FollowUpsPage} />
+      <Route path="/reports" component={ReportsPage} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>
