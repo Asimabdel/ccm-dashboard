@@ -1,5 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Syne:wght@400;500;600;700&display=swap");
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -63,8 +61,9 @@
   }
 
   body {
-    @apply bg-background text-foreground font-sans;
-    font-family: "Inter", sans-serif;
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
 
   /* Typography */
@@ -74,68 +73,109 @@
   h4,
   h5,
   h6 {
-    font-family: "Syne", sans-serif;
+    font-family: "Syne", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-weight: 700;
     letter-spacing: -0.02em;
   }
 
   h1 {
-    @apply text-4xl font-bold tracking-tight;
+    font-size: 2.25rem;
+    font-weight: bold;
+    letter-spacing: -0.02em;
   }
 
   h2 {
-    @apply text-3xl font-bold tracking-tight;
+    font-size: 1.875rem;
+    font-weight: bold;
+    letter-spacing: -0.02em;
   }
 
   h3 {
-    @apply text-2xl font-bold tracking-tight;
+    font-size: 1.5rem;
+    font-weight: bold;
+    letter-spacing: -0.02em;
   }
 
   h4 {
-    @apply text-xl font-bold;
+    font-size: 1.25rem;
+    font-weight: bold;
   }
 
   h5 {
-    @apply text-lg font-bold;
+    font-size: 1.125rem;
+    font-weight: bold;
   }
 
   h6 {
-    @apply text-base font-bold;
+    font-size: 1rem;
+    font-weight: bold;
   }
 
   p {
-    @apply text-base leading-relaxed;
+    font-size: 1rem;
+    line-height: 1.625;
   }
 
   .text-muted {
-    @apply text-muted-foreground text-sm;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.875rem;
   }
 
   .text-subtle {
-    @apply text-muted-foreground text-xs font-light;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.75rem;
+    font-weight: 300;
   }
 
   /* Flex defaults */
   .flex {
-    @apply flex min-w-0 min-h-0;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
   }
 
   /* Container */
   .container {
-    @apply w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8;
+    width: 100%;
+    max-width: 80rem;
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  @media (min-width: 640px) {
+    .container {
+      padding-left: 1.5rem;
+      padding-right: 1.5rem;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .container {
+      padding-left: 2rem;
+      padding-right: 2rem;
+    }
   }
 
   /* Geometric accents */
   .accent-shape {
-    @apply absolute pointer-events-none;
+    position: absolute;
+    pointer-events: none;
   }
 
   .accent-shape-blue {
-    @apply bg-blue-200 opacity-20 rounded-full blur-3xl;
+    background-color: rgb(191 219 254 / 0.2);
+    opacity: 0.2;
+    border-radius: 9999px;
+    filter: blur(3rem);
   }
 
   .accent-shape-pink {
-    @apply bg-pink-200 opacity-20 rounded-full blur-3xl;
+    background-color: rgb(249 168 212 / 0.2);
+    opacity: 0.2;
+    border-radius: 9999px;
+    filter: blur(3rem);
   }
 
   /* Smooth transitions */
@@ -144,124 +184,153 @@
   input,
   textarea,
   select {
-    @apply transition-all duration-200;
+    transition-property: all;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 200ms;
   }
 
   /* Focus styles */
   :focus-visible {
-    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+    outline: none;
+    box-shadow: 0 0 0 2px hsl(var(--ring)), 0 0 0 4px hsl(var(--ring) / 0.1);
   }
 
   /* Scrollbar styling */
   ::-webkit-scrollbar {
-    @apply w-2 h-2;
+    width: 0.5rem;
+    height: 0.5rem;
   }
 
   ::-webkit-scrollbar-track {
-    @apply bg-background;
+    background-color: hsl(var(--background));
   }
 
   ::-webkit-scrollbar-thumb {
-    @apply bg-muted rounded-full hover:bg-muted-foreground;
+    background-color: hsl(var(--muted));
+    border-radius: 9999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground));
   }
 }
 
 @layer components {
   /* Button styles with Scandinavian aesthetic */
   .btn-primary {
-    @apply px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90 active:scale-95 transition-all duration-200;
+    padding: 0.5rem 1rem;
+    background-color: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+    border-radius: 0.5rem;
+    font-weight: 500;
+    transition: all 200ms;
+  }
+
+  .btn-primary:hover {
+    opacity: 0.9;
+  }
+
+  .btn-primary:active {
+    transform: scale(0.95);
   }
 
   .btn-secondary {
-    @apply px-4 py-2 bg-secondary text-secondary-foreground rounded-lg font-medium hover:opacity-90 active:scale-95 transition-all duration-200;
+    padding: 0.5rem 1rem;
+    background-color: hsl(var(--secondary));
+    color: hsl(var(--secondary-foreground));
+    border-radius: 0.5rem;
+    font-weight: 500;
+    transition: all 200ms;
+  }
+
+  .btn-secondary:hover {
+    opacity: 0.9;
+  }
+
+  .btn-secondary:active {
+    transform: scale(0.95);
   }
 
   .btn-outline {
-    @apply px-4 py-2 border border-border rounded-lg font-medium hover:bg-muted active:scale-95 transition-all duration-200;
+    padding: 0.5rem 1rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.5rem;
+    font-weight: 500;
+    transition: all 200ms;
+  }
+
+  .btn-outline:hover {
+    background-color: hsl(var(--muted));
+  }
+
+  .btn-outline:active {
+    transform: scale(0.95);
   }
 
   /* Card with subtle shadow */
   .card-subtle {
-    @apply bg-card rounded-lg p-6 shadow-sm border border-border;
+    background-color: hsl(var(--card));
+    border-radius: 0.5rem;
+    padding: 1.5rem;
+    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    border: 1px solid hsl(var(--border));
   }
 
   /* Status badges */
   .badge-status {
-    @apply inline-flex items-center px-3 py-1 rounded-full text-xs font-medium;
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 500;
   }
 
   .badge-high {
-    @apply bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100;
+    background-color: rgb(254 226 226);
+    color: rgb(127 29 29);
+  }
+
+  .dark .badge-high {
+    background-color: rgb(127 29 29);
+    color: rgb(254 226 226);
   }
 
   .badge-medium {
-    @apply bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-100;
+    background-color: rgb(254 243 199);
+    color: rgb(113 63 18);
+  }
+
+  .dark .badge-medium {
+    background-color: rgb(113 63 18);
+    color: rgb(254 243 199);
   }
 
   .badge-low {
-    @apply bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100;
+    background-color: rgb(219 234 254);
+    color: rgb(30 58 138);
   }
 
-  /* Minimal divider */
-  .divider {
-    @apply h-px bg-border my-4;
-  }
-
-  /* Spacing utilities */
-  .space-tight {
-    @apply space-y-2;
-  }
-
-  .space-normal {
-    @apply space-y-4;
-  }
-
-  .space-generous {
-    @apply space-y-6;
+  .dark .badge-low {
+    background-color: rgb(30 58 138);
+    color: rgb(219 234 254);
   }
 }
 
 @layer utilities {
-  /* Scandinavian spacing */
-  .gap-tight {
-    @apply gap-2;
+  /* Utility for smooth animations */
+  .transition-smooth {
+    transition-property: all;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 300ms;
   }
 
-  .gap-normal {
-    @apply gap-4;
+  /* Utility for subtle shadows */
+  .shadow-subtle {
+    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   }
 
-  .gap-generous {
-    @apply gap-6;
-  }
-
-  /* Text utilities */
-  .text-balance {
-    text-wrap: balance;
-  }
-
-  /* Grid layouts */
-  .grid-auto {
-    @apply grid auto-cols-fr gap-4;
-  }
-
-  /* Hover effects */
-  .hover-lift {
-    @apply hover:shadow-lg hover:-translate-y-1 transition-all duration-200;
-  }
-
-  /* Loading animation */
-  @keyframes pulse-subtle {
-    0%,
-    100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.5;
-    }
-  }
-
-  .animate-pulse-subtle {
-    animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  .shadow-soft {
+    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
   }
 }
