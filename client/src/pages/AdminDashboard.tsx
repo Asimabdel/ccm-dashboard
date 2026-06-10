@@ -23,7 +23,7 @@ export default function AdminDashboard() {
       <div className="space-y-6">
         {/* Header */}
         <div>
-          <h2 className="text-3xl font-bold text-foreground mb-2">Program Overview</h2>
+          <h2 className="text-3xl font-bold text-slate-900 dark:text-slate-50 mb-2">Program Overview</h2>
           <p className="text-muted-foreground">
             Real-time metrics for {currentMonth}
           </p>
@@ -35,7 +35,7 @@ export default function AdminDashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Active Patients</p>
-                <p className="text-3xl font-bold text-foreground mt-2">
+                <p className="text-3xl font-bold text-slate-900 dark:text-slate-50 mt-2">
                   {patients?.length || 0}
                 </p>
               </div>
@@ -47,7 +47,7 @@ export default function AdminDashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Total CCMs</p>
-                <p className="text-3xl font-bold text-foreground mt-2">
+                <p className="text-3xl font-bold text-slate-900 dark:text-slate-50 mt-2">
                   {tasks?.length || 0}
                 </p>
               </div>
@@ -59,7 +59,7 @@ export default function AdminDashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Completed</p>
-                <p className="text-3xl font-bold text-foreground mt-2">
+                <p className="text-3xl font-bold text-slate-900 dark:text-slate-50 mt-2">
                   {completedTasks}
                 </p>
               </div>
@@ -71,7 +71,7 @@ export default function AdminDashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Escalations</p>
-                <p className="text-3xl font-bold text-foreground mt-2">
+                <p className="text-3xl font-bold text-slate-900 dark:text-slate-50 mt-2">
                   {escalations?.length || 0}
                 </p>
               </div>
@@ -83,7 +83,7 @@ export default function AdminDashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Ready for Billing</p>
-                <p className="text-3xl font-bold text-foreground mt-2">
+                <p className="text-3xl font-bold text-slate-900 dark:text-slate-50 mt-2">
                   {billingReady || 0}
                 </p>
               </div>

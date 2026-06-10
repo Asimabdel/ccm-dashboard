@@ -257,7 +257,7 @@ export function AIChatBox({
                         "max-w-[80%] rounded-lg px-4 py-2.5",
                         message.role === "user"
                           ? "bg-primary text-primary-foreground"
-                          : "bg-muted text-foreground"
+                          : "bg-muted text-slate-900 dark:text-slate-50"
                       )}
                     >
                       {message.role === "assistant" ? (
@@ -306,7 +306,7 @@ export function AIChatBox({
       <form
         ref={inputAreaRef}
         onSubmit={handleSubmit}
-        className="flex gap-2 p-4 border-t bg-background/50 items-end"
+        className="flex gap-2 p-4 border-t bg-slate-50 dark:bg-slate-900/50 items-end"
       >
         <Textarea
           ref={textareaRef}

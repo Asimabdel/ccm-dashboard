@@ -59,7 +59,7 @@ export function CCMDashboardLayout({ children }: CCMDashboardLayoutProps) {
   };
 
   return (
-    <div className="flex h-screen bg-background">
+    <div className="flex h-screen bg-slate-50 dark:bg-slate-900">
       {/* Sidebar */}
       <aside
         className={`${
@@ -72,7 +72,7 @@ export function CCMDashboardLayout({ children }: CCMDashboardLayoutProps) {
             <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
               <span className="text-white font-bold text-sm">CCM</span>
             </div>
-            <span className="font-bold text-foreground">CCM Dashboard</span>
+            <span className="font-bold text-slate-900 dark:text-slate-50">CCM Dashboard</span>
           </div>
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -90,7 +90,7 @@ export function CCMDashboardLayout({ children }: CCMDashboardLayoutProps) {
               onClick={() => setLocation(item.path)}
               className={`w-full text-left px-4 py-2 rounded-lg transition-colors ${
                 sidebarOpen ? "text-sm" : "text-xs"
-              } hover:bg-muted text-muted-foreground hover:text-foreground`}
+              } hover:bg-muted text-muted-foreground hover:text-slate-900 dark:text-slate-50`}
               title={item.label}
             >
               {sidebarOpen ? item.label : item.label.charAt(0)}
@@ -101,7 +101,7 @@ export function CCMDashboardLayout({ children }: CCMDashboardLayoutProps) {
         {/* User info */}
         <div className="p-4 border-t border-muted space-y-2">
           <div className={`${!sidebarOpen && "hidden"} text-xs`}>
-            <p className="font-medium text-foreground truncate">{user.name}</p>
+            <p className="font-medium text-slate-900 dark:text-slate-50 truncate">{user.name}</p>
             <p className="text-muted-foreground capitalize">{user.role}</p>
           </div>
           <button
@@ -119,7 +119,7 @@ export function CCMDashboardLayout({ children }: CCMDashboardLayoutProps) {
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Top bar */}
         <header className="bg-card border-b border-muted px-6 py-4 flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-foreground">
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-50">
             {user.role.charAt(0).toUpperCase() + user.role.slice(1)} Dashboard
           </h1>
           <div className="flex items-center gap-4">

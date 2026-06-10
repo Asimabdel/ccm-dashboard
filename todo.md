@@ -21,7 +21,7 @@
 
 ## Monthly CCM Worklist
 - [ ] Auto-generate monthly CCM tasks for active patients
-- [ ] Implement worklist filtering by status, priority, staff, clinic, provider
+- [x] Implement worklist filtering by status, priority, staff, clinic, provider
 - [ ] Create status label system (Not Started, Called No Answer, In Progress, Completed, Ready for Billing, etc.)
 - [ ] Implement priority levels (High, Medium, Low)
 - [ ] Add bulk status update functionality
@@ -61,8 +61,8 @@
 - [ ] Build follow-up completion tracking
 
 ## Role-Based Dashboards
-- [ ] Admin Dashboard: Overall program status, staff performance, clinic performance, urgent flags
-- [ ] Staff Dashboard: Assigned patients, due patients, call status, timer, documentation form
+- [x] Admin Dashboard: Overall program status, staff performance, clinic performance, urgent flags
+- [x] Staff Dashboard: Assigned patients, due patients, call status, timer, documentation form
 - [ ] Provider Dashboard: Flagged patients, escalation reasons, CCM note summaries, action recommendations
 - [ ] Billing Dashboard: Completed CCMs, documentation status, billing readiness, claims tracking
 - [ ] Front Desk Dashboard: Patients needing appointments, labs, testing, scheduling follow-up
