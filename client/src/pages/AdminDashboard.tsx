@@ -68,7 +68,7 @@ export default function AdminDashboard() {
 
   if (authLoading || !user) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[hsl(240_10%_97%)]">
+      <div className="min-h-screen flex items-center justify-center bg-white">
         <Loader2 className="animate-spin text-slate-400" />
       </div>
     );

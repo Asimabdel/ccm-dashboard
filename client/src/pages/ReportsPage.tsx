@@ -40,7 +40,7 @@ export default function ReportsPage() {
   const report = trpc.reports.summary.useQuery(input, { enabled: !!user && tab === "monthly" });
 
   if (loading || !user) {
-    return <div className="min-h-screen flex items-center justify-center bg-[hsl(240_10%_97%)]"><Loader2 className="animate-spin text-slate-400" /></div>;
+    return <div className="min-h-screen flex items-center justify-center bg-white"><Loader2 className="animate-spin text-slate-400" /></div>;
   }
 
   const data = report.data;

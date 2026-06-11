@@ -90,11 +90,11 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
   };
 
   return (
-    <div className="flex h-screen bg-[hsl(240_10%_97%)] dark:bg-slate-900">
+    <div className="flex h-screen bg-white dark:bg-slate-900">
       {/* Sidebar */}
       <aside
         className={cn(
-          "transition-all duration-300 flex flex-col bg-white/95 dark:bg-slate-800 border-r border-slate-200/70 dark:border-slate-700 backdrop-blur-sm",
+          "transition-all duration-300 flex flex-col bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700",
           sidebarOpen ? "w-64" : "w-20"
         )}
       >
@@ -149,7 +149,7 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
 
       {/* Main */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="bg-white/80 dark:bg-slate-800 border-b border-slate-200/70 dark:border-slate-700 px-6 py-3 flex items-center justify-between backdrop-blur-md sticky top-0 z-20">
+        <header className="bg-white/90 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 px-6 py-3 flex items-center justify-between backdrop-blur-md sticky top-0 z-20">
           <div>
             <p className="text-[11px] uppercase tracking-widest font-light text-slate-400">Chronic Care Management</p>
             <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-slate-50">
@@ -232,7 +232,7 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
           </div>
         </header>
 
-        <main className="flex-1 overflow-auto p-6"><div className="animate-fade-in-up">{children}</div></main>
+        <main className="flex-1 overflow-auto p-6 bg-slate-50/60 dark:bg-slate-900"><div className="animate-fade-in-up">{children}</div></main>
       </div>
 
       {/* HIPAA idle session timeout warning */}

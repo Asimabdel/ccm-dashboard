@@ -24,7 +24,7 @@ export default function Home() {
   }, [loading, isAuthenticated, user, setLocation]);
 
   return (
-    <div className="min-h-screen bg-[hsl(240_10%_97%)] relative overflow-hidden">
+    <div className="min-h-screen bg-white relative overflow-hidden">
       {/* Subtle grid texture + abstract geometric accents */}
       <div className="pointer-events-none absolute inset-0 bg-grid opacity-[0.4] [mask-image:radial-gradient(ellipse_at_top,black,transparent_70%)]" />
       <div className="pointer-events-none absolute -top-24 -right-24 w-96 h-96 rounded-full bg-[hsl(200_85%_88%)] blur-3xl opacity-60" />

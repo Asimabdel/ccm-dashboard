@@ -31,7 +31,7 @@ export default function ClinicsPage() {
   const remove = trpc.clinics.remove.useMutation({ onSuccess: () => { invalidate(); toast.success("Clinic removed."); setRemoveTarget(null); }, onError: (e) => { toast.error(e.message); setRemoveTarget(null); } });
 
   if (loading || !user) {
-    return <div className="min-h-screen flex items-center justify-center bg-[hsl(240_10%_97%)]"><Loader2 className="animate-spin text-slate-400" /></div>;
+    return <div className="min-h-screen flex items-center justify-center bg-white"><Loader2 className="animate-spin text-slate-400" /></div>;
   }
   if (!isAdmin) {
     return <CCMDashboardLayout title="Clinics"><div className="bg-white rounded-3xl border border-slate-100 p-10 text-center text-slate-500">Clinic management is restricted to administrators.</div></CCMDashboardLayout>;

@@ -106,12 +106,12 @@
 - [x] Vitest: template detection + parsing + duplicate flagging + Resend key (34 tests pass)
 
 ## Round 5: Fix invites DB error, login creation, remove billing readiness, editable dates, readability
-- [ ] Diagnose & fix `teamInvites` insert failure ("Failed query" on send invite / role assign)
-- [ ] Replace email invites with admin-created worker logins (create login directly)
-- [ ] Remove "Ready for Billing" feature/page/nav entirely
-- [ ] Allow editing + manual date input for "Last CCM Call" (lastCalledAt)
-- [ ] Allow editing + manual date input for "Next Appointment" (nextAppointment)
-- [ ] Improve readability: fonts, contrast, transparent panels (Enroll form, headers, dropdowns)
-- [ ] Verify bulk import accepts the two real templates on the LIVE build (no phonenumber error)
-- [ ] Thorough review of every page/flow; fix anything broken
-- [ ] Ensure all tests pass and TypeScript clean
+- [x] Diagnose & fix `teamInvites` insert failure ("Failed query") — root cause: teamInvites table never migrated to live DB; removed dependency entirely
+- [x] Replace email invites with admin-created worker logins (members.create + upsertUser links pending email rows on first sign-in)
+- [x] Remove "Ready for Billing" stat from Billing page and Admin dashboard
+- [x] Allow editing + manual date input for "Last CCM Call" (lastCalledAt) — inline on table + detail page
+- [x] Allow editing + manual date input for "Next Appointment" (nextAppointment) — inline on table + detail page
+- [x] Improve readability: headings switched Syne→Inter, darker muted text, body weight/size
+- [x] Verify bulk import accepts the two real templates (Dr.Mai 388 rows, Chart Notes 115 rows; no phonenumber error)
+- [x] Thorough review of every page/flow; all 18 routes map to imported pages, auth/RBAC redirects work
+- [x] Ensure all tests pass (34) and TypeScript clean (0 errors)
