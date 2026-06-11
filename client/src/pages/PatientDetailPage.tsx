@@ -53,7 +53,7 @@ export default function PatientDetailPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <span className={`px-3 py-1.5 rounded-full text-xs font-semibold ${priorityBadgeClass(d.patient.riskLevel ?? "medium")}`}>{PRIORITY_LABELS[d.patient.riskLevel ?? "medium"]} Risk</span>
+                <span className={`px-3 py-1.5 rounded-full text-xs font-semibold ${priorityBadgeClass(d.patient.riskLevel ?? "medium")}`}>{PRIORITY_LABELS[d.patient.riskLevel ?? "medium"]} Priority</span>
                 <span className={`px-3 py-1.5 rounded-full text-xs font-semibold ${statusBadgeClass(d.patient.ccmEnrollmentStatus ?? "active")}`}>{d.patient.ccmEnrollmentStatus}</span>
               </div>
             </div>
@@ -61,6 +61,8 @@ export default function PatientDetailPage() {
               <div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400 flex items-center gap-1.5"><User size={12} /> Provider</p><p className="mt-1 font-semibold text-slate-800">{d.provider?.name || "—"}</p></div>
               <div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Clinic</p><p className="mt-1 font-semibold text-slate-800">{d.clinic?.name || "—"}</p></div>
               <div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Assigned Staff</p><p className="mt-1 font-semibold text-slate-800">{d.staff?.name || "Unassigned"}</p></div>
+              <div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Last Called</p><p className="mt-1 font-semibold text-slate-800">{fmtDate(d.patient.lastCalledAt)}</p></div>
+              <div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Next Appointment</p><p className="mt-1 font-semibold text-slate-800">{fmtDate(d.patient.nextAppointment)}</p></div>
             </div>
           </div>
 

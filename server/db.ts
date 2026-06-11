@@ -954,17 +954,19 @@ export async function getDuplicateNameGroups(): Promise<Record<string, { ids: nu
 export type BulkPatientRow = {
   name: string;
   dateOfBirth?: Date | null;
-  phoneNumber: string;
+  phoneNumber?: string;
   clinicId: number;
   providerId: number;
   preferredLanguage?: string;
   chronicConditions?: string[];
   insurance?: string;
-  riskLevel?: "high" | "medium" | "low";
   consentStatus?: "consented" | "pending" | "declined";
   rpmEnrolled?: boolean;
   rpmStatus?: "not_enrolled" | "eligible" | "enrolled" | "active" | "declined" | "inactive";
   rpmDeviceType?: string;
+  lastCalledAt?: Date | null;
+  nextAppointment?: Date | null;
+  lastCCMDate?: Date | null;
 };
 
 /** Insert many patients in one transaction-ish batch. Returns inserted count. */
@@ -974,19 +976,21 @@ export async function bulkInsertPatients(rows: BulkPatientRow[]): Promise<number
   const values = rows.map((r) => ({
     name: r.name,
     dateOfBirth: r.dateOfBirth ?? null,
-    phoneNumber: r.phoneNumber,
+    phoneNumber: r.phoneNumber || "",
     clinicId: r.clinicId,
     providerId: r.providerId,
     preferredLanguage: r.preferredLanguage || "English",
     chronicConditions: r.chronicConditions || [],
     insurance: r.insurance,
-    riskLevel: r.riskLevel || "medium",
-    priorityLevel: r.riskLevel || "medium",
+    priorityLevel: "medium" as const,
     ccmEnrollmentStatus: "active" as const,
     consentStatus: r.consentStatus || "pending",
     rpmEnrolled: r.rpmEnrolled ?? false,
     rpmStatus: r.rpmStatus || (r.rpmEnrolled ? "enrolled" : "not_enrolled"),
     rpmDeviceType: r.rpmDeviceType,
+    lastCalledAt: r.lastCalledAt ?? null,
+    nextAppointment: r.nextAppointment ?? null,
+    lastCCMDate: r.lastCCMDate ?? null,
   }));
   await db.insert(patients).values(values);
   return values.length;
@@ -1021,4 +1025,136 @@ export async function updatePatientRPM(
   if (!db) return undefined;
   await db.update(patients).set(data as any).where(eq(patients.id, patientId));
   return getPatientById(patientId);
+}
+
+// ---------------------------------------------------------------------------
+// Reporting: completed CCM aggregation by flexible dimensions
+// ---------------------------------------------------------------------------
+
+export type ReportDimension = "date" | "week" | "provider" | "employee" | "clinic";
+
+export interface CompletionReportRow {
+  // dimension keys (present depending on requested groupBy)
+  date?: string;
+  week?: string;
+  providerId?: number | null;
+  providerName?: string;
+  employeeId?: number | null;
+  employeeName?: string;
+  clinicId?: number | null;
+  clinicName?: string;
+  count: number;
+}
+
+/**
+ * Flexible completion report. Counts CCM tasks that have been completed
+ * (status completed/ready_for_billing/billed, completedAt set), grouped by
+ * any combination of: date, week (ISO year-week), provider, employee, clinic.
+ * Optional date range filters on completedAt.
+ */
+export async function getCompletionReport(opts: {
+  groupBy: ReportDimension[];
+  from?: number; // unix ms
+  to?: number; // unix ms
+}): Promise<CompletionReportRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  const groupBy: ReportDimension[] = opts.groupBy.length ? opts.groupBy : ["date"];
+
+  // Pull completed tasks joined with patient -> provider/clinic and completing employee.
+  const conds: any[] = [
+    sql`${ccmTasks.completedAt} IS NOT NULL`,
+    inArray(ccmTasks.status, ["completed", "ready_for_billing", "billed"]),
+  ];
+  if (opts.from) conds.push(gte(ccmTasks.completedAt, new Date(opts.from)));
+  if (opts.to) conds.push(lte(ccmTasks.completedAt, new Date(opts.to)));
+
+  const rows = await db
+    .select({
+      completedAt: ccmTasks.completedAt,
+      employeeId: ccmTasks.completedByStaffId,
+      assignedStaffId: ccmTasks.assignedStaffId,
+      employeeName: users.name,
+      providerId: patients.providerId,
+      providerName: providers.name,
+      clinicId: patients.clinicId,
+      clinicName: clinics.name,
+    })
+    .from(ccmTasks)
+    .innerJoin(patients, eq(ccmTasks.patientId, patients.id))
+    .leftJoin(providers, eq(patients.providerId, providers.id))
+    .leftJoin(clinics, eq(patients.clinicId, clinics.id))
+    .leftJoin(users, eq(ccmTasks.completedByStaffId, users.id))
+    .where(and(...conds));
+
+  // Aggregate in JS so we can support arbitrary dimension combinations cleanly.
+  const map = new Map<string, CompletionReportRow>();
+
+  for (const r of rows) {
+    if (!r.completedAt) continue;
+    const d = new Date(r.completedAt);
+    const dateStr = d.toISOString().slice(0, 10); // YYYY-MM-DD
+    const weekStr = isoYearWeek(d);
+
+    const keyParts: string[] = [];
+    const row: CompletionReportRow = { count: 0 };
+
+    for (const dim of groupBy) {
+      switch (dim) {
+        case "date":
+          row.date = dateStr; keyParts.push("d:" + dateStr); break;
+        case "week":
+          row.week = weekStr; keyParts.push("w:" + weekStr); break;
+        case "provider":
+          row.providerId = r.providerId ?? null;
+          row.providerName = r.providerName || "Unassigned";
+          keyParts.push("p:" + (r.providerId ?? "0")); break;
+        case "employee":
+          row.employeeId = r.employeeId ?? null;
+          row.employeeName = r.employeeName || "Unknown";
+          keyParts.push("e:" + (r.employeeId ?? "0")); break;
+        case "clinic":
+          row.clinicId = r.clinicId ?? null;
+          row.clinicName = r.clinicName || "Unassigned";
+          keyParts.push("c:" + (r.clinicId ?? "0")); break;
+      }
+    }
+
+    const key = keyParts.join("|");
+    const existing = map.get(key);
+    if (existing) existing.count += 1;
+    else { row.count = 1; map.set(key, row); }
+  }
+
+  const result = Array.from(map.values());
+  // Sort by first dimension for stable display
+  result.sort((a, b) => {
+    const ka = reportSortKey(a, groupBy);
+    const kb = reportSortKey(b, groupBy);
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  });
+  return result;
+}
+
+function reportSortKey(r: CompletionReportRow, groupBy: ReportDimension[]): string {
+  return groupBy.map((dim) => {
+    switch (dim) {
+      case "date": return r.date || "";
+      case "week": return r.week || "";
+      case "provider": return r.providerName || "";
+      case "employee": return r.employeeName || "";
+      case "clinic": return r.clinicName || "";
+    }
+  }).join("|");
+}
+
+/** ISO year-week, e.g. "2026-W24". */
+function isoYearWeek(d: Date): string {
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${date.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
 }

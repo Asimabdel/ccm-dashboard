@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { Search, Plus, Loader2, UserPlus, X, Upload, AlertTriangle, Activity } from "lucide-react";
-import { PRIORITY_LABELS, priorityBadgeClass, statusBadgeClass, RPM_STATUS_LABELS } from "@/lib/ccm";
+import { PRIORITY_LABELS, priorityBadgeClass, statusBadgeClass, RPM_STATUS_LABELS, fmtDate } from "@/lib/ccm";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from "@/components/ui/dialog";
@@ -26,7 +26,7 @@ function EnrollDialog({ onDone }: { onDone: () => void }) {
 
   const [form, setForm] = useState({
     name: "", phoneNumber: "", clinicId: 0, providerId: 0, insurance: "",
-    preferredLanguage: "English", riskLevel: "medium" as "high" | "medium" | "low",
+    preferredLanguage: "English", priorityLevel: "medium" as "high" | "medium" | "low",
     consentStatus: "pending" as "consented" | "pending" | "declined",
     assignedStaffId: 0, conditions: [] as string[], dob: "",
   });
@@ -53,8 +53,7 @@ function EnrollDialog({ onDone }: { onDone: () => void }) {
       providerId: form.providerId,
       insurance: form.insurance || undefined,
       preferredLanguage: form.preferredLanguage,
-      riskLevel: form.riskLevel,
-      priorityLevel: form.riskLevel,
+      priorityLevel: form.priorityLevel,
       consentStatus: form.consentStatus,
       assignedStaffId: form.assignedStaffId || undefined,
       chronicConditions: form.conditions,
@@ -102,8 +101,8 @@ function EnrollDialog({ onDone }: { onDone: () => void }) {
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-medium text-slate-500">Risk Level</label>
-              <select className={field} value={form.riskLevel} onChange={(e) => setForm({ ...form, riskLevel: e.target.value as any })}>
+              <label className="text-xs font-medium text-slate-500">Priority</label>
+              <select className={field} value={form.priorityLevel} onChange={(e) => setForm({ ...form, priorityLevel: e.target.value as any })}>
                 {RISK_OPTIONS.map((r) => <option key={r} value={r}>{PRIORITY_LABELS[r]}</option>)}
               </select>
             </div>
@@ -159,15 +158,13 @@ export default function PatientsPage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
   const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
-  const [riskFilter, setRiskFilter] = useState<string>("");
   const [clinicFilter, setClinicFilter] = useState<number>(0);
 
   const clinics = trpc.clinics.list.useQuery(undefined, { enabled: !!user });
   const filters = useMemo(() => ({
     search: search || undefined,
-    riskLevel: (riskFilter || undefined) as any,
     clinicId: clinicFilter || undefined,
-  }), [search, riskFilter, clinicFilter]);
+  }), [search, clinicFilter]);
   const patients = trpc.patients.list.useQuery(filters, { enabled: !!user });
   const duplicates = trpc.patients.duplicates.useQuery(undefined, { enabled: !!user });
   const utils = trpc.useUtils();
@@ -206,16 +203,12 @@ export default function PatientsPage() {
           />
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <select className={field} value={riskFilter} onChange={(e) => setRiskFilter(e.target.value)}>
-            <option value="">All Risk Levels</option>
-            <option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
-          </select>
           <select className={field} value={clinicFilter} onChange={(e) => setClinicFilter(Number(e.target.value))}>
             <option value={0}>All Clinics</option>
             {(clinics.data || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          {(search || riskFilter || clinicFilter) && (
-            <button onClick={() => { setSearch(""); setRiskFilter(""); setClinicFilter(0); }} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl text-sm text-slate-500 hover:bg-slate-100">
+          {(search || clinicFilter) && (
+            <button onClick={() => { setSearch(""); setClinicFilter(0); }} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl text-sm text-slate-500 hover:bg-slate-100">
               <X size={14} /> Clear
             </button>
           )}
@@ -237,17 +230,18 @@ export default function PatientsPage() {
                 <th className="px-5 py-3 font-medium">Conditions</th>
                 <th className="px-5 py-3 font-medium">Provider</th>
                 <th className="px-5 py-3 font-medium">Clinic</th>
-                <th className="px-5 py-3 font-medium">Risk</th>
+                <th className="px-5 py-3 font-medium">Last Called</th>
+                <th className="px-5 py-3 font-medium">Next Appt</th>
                 <th className="px-5 py-3 font-medium">Status</th>
                 <th className="px-5 py-3 font-medium">RPM</th>
               </tr>
             </thead>
             <tbody>
               {patients.isLoading && (
-                <tr><td colSpan={7} className="px-5 py-12 text-center"><Loader2 className="animate-spin text-slate-300 mx-auto" /></td></tr>
+                <tr><td colSpan={8} className="px-5 py-12 text-center"><Loader2 className="animate-spin text-slate-300 mx-auto" /></td></tr>
               )}
               {!patients.isLoading && (patients.data || []).length === 0 && (
-                <tr><td colSpan={7} className="px-5 py-12 text-center text-slate-400 font-light">No patients found.</td></tr>
+                <tr><td colSpan={8} className="px-5 py-12 text-center text-slate-400 font-light">No patients found.</td></tr>
               )}
               {(patients.data || []).map((r) => (
                 <tr key={r.patient.id} onClick={() => setLocation(`/patients/${r.patient.id}`)}
@@ -275,7 +269,8 @@ export default function PatientsPage() {
                   </td>
                   <td className="px-5 py-3 text-slate-600">{r.providerName || "—"}</td>
                   <td className="px-5 py-3 text-slate-600">{r.clinicName || "—"}</td>
-                  <td className="px-5 py-3"><span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${priorityBadgeClass(r.patient.riskLevel ?? "medium")}`}>{PRIORITY_LABELS[r.patient.riskLevel ?? "medium"] || r.patient.riskLevel}</span></td>
+                  <td className="px-5 py-3 text-slate-600 whitespace-nowrap">{fmtDate(r.patient.lastCalledAt)}</td>
+                  <td className="px-5 py-3 text-slate-600 whitespace-nowrap">{fmtDate(r.patient.nextAppointment)}</td>
                   <td className="px-5 py-3"><span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${statusBadgeClass(r.patient.ccmEnrollmentStatus ?? "active")}`}>{r.patient.ccmEnrollmentStatus}</span></td>
                   <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
                     {canEnroll ? (

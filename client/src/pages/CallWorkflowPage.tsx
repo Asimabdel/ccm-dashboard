@@ -48,6 +48,7 @@ export default function CallWorkflowPage() {
 
   const [responses, setResponses] = useState<Responses>(EMPTY);
   const [generatedNote, setGeneratedNote] = useState("");
+  const [aiGeneratedAt, setAiGeneratedAt] = useState<number | null>(null);
   const [escalate, setEscalate] = useState(false);
   const [escalationReason, setEscalationReason] = useState("");
   const [hydrated, setHydrated] = useState(false);
@@ -64,6 +65,7 @@ export default function CallWorkflowPage() {
         followUpNeeded: n.followUpNeeded || "", patientConcerns: n.patientConcerns || "",
       });
       if (n.generatedNote) setGeneratedNote(n.generatedNote);
+      if (n.aiGeneratedAt) setAiGeneratedAt(new Date(n.aiGeneratedAt).getTime());
       if (n.escalationFlag) { setEscalate(true); setEscalationReason(n.escalationReason || ""); }
       setHydrated(true);
     } else if (task.data && !existingNote.data && !hydrated && existingNote.isFetched) {
@@ -72,7 +74,7 @@ export default function CallWorkflowPage() {
   }, [existingNote.data, existingNote.isFetched, task.data, hydrated]);
 
   const genNote = trpc.ccmNotesAI.generateNote.useMutation({
-    onSuccess: (r) => { setGeneratedNote(typeof r.note === "string" ? r.note : String(r.note)); toast.success("Note drafted by AI. Review and edit as needed."); },
+    onSuccess: (r) => { setGeneratedNote(typeof r.note === "string" ? r.note : String(r.note)); setAiGeneratedAt(r.generatedAt ?? Date.now()); toast.success("Note drafted by AI. Review and edit as needed."); },
     onError: (e) => toast.error(e.message),
   });
   const saveNote = trpc.ccmNotes.save.useMutation({
@@ -167,11 +169,18 @@ export default function CallWorkflowPage() {
             </div>
             <textarea value={generatedNote} onChange={(e) => setGeneratedNote(e.target.value)} placeholder="Click 'Generate with AI' to draft a professional CCM note from the responses above, or write your own. You can edit the generated text before saving."
               rows={12} className="w-full px-4 py-3 rounded-2xl border border-slate-200 text-sm leading-relaxed font-mono focus:outline-none focus:ring-2 focus:ring-[hsl(280_60%_60%)]" />
+            {aiGeneratedAt && (
+              <p className="mt-2 text-xs text-slate-400 flex items-center gap-1.5">
+                <Sparkles size={12} className="text-[hsl(280_60%_55%)]" />
+                AI generated on {new Date(aiGeneratedAt).toLocaleString()}
+              </p>
+            )}
           </div>
 
           <div className="flex items-center justify-end gap-3">
             <button disabled={saveNote.isPending} onClick={() => saveNote.mutate({
               ccmTaskId: taskId, patientId: patientId!, ...responses, generatedNote,
+              aiGeneratedAt: aiGeneratedAt ?? undefined,
               escalationFlag: escalate, escalationReason: escalate ? escalationReason : undefined,
               markCompleted: false,
             })} className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-2xl border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50 active:scale-[0.97] disabled:opacity-50 transition">
@@ -179,6 +188,7 @@ export default function CallWorkflowPage() {
             </button>
             <button disabled={saveNote.isPending} onClick={() => saveNote.mutate({
               ccmTaskId: taskId, patientId: patientId!, ...responses, generatedNote,
+              aiGeneratedAt: aiGeneratedAt ?? undefined,
               escalationFlag: escalate, escalationReason: escalate ? escalationReason : undefined,
               markCompleted: true,
             })} className="inline-flex items-center gap-1.5 px-6 py-2.5 rounded-2xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 active:scale-[0.97] transition disabled:opacity-50">

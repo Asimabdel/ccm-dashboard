@@ -85,3 +85,22 @@
 - [x] Frontend: Clinics management page (add/edit/remove)
 - [x] UI modernization pass (soft shadows, gradient accents, motion, sticky header)
 - [x] Vitest: invites/team/clinic/provider access control + lockout guards (32 tests pass)
+
+## Round 4: Readability, real-template bulk import, email invites, reporting, AI timestamp, table columns
+- [x] Readability: fix transparent/low-contrast sections, boxes, dropdowns (global form CSS)
+- [x] Readability: inputs/textarea/select solid white + dark text; placeholders visible
+- [x] Bulk import: auto-detect Template A (Dr.Mai CCMs) and Template B (Chart Notes Report)
+- [x] Bulk import: parse "Last, First" names; M/D and MM/DD/YYYY dates; phone optional
+- [x] Bulk import: capture provider, last called, next appointment, completion status
+- [x] Schema: add lastCalledAt + nextAppointment + completedAt/completedByStaffId + aiGeneratedAt
+- [x] Email invites: deliver via Resend on invites.send (key validated live), copy-link fallback
+- [x] Generate with AI: store + display timestamp when worker clicks Generate
+- [x] Reporting: completions per day
+- [x] Reporting: completions per provider
+- [x] Reporting: completions per employee (staff)
+- [x] Reporting: combination reports (any mix of date/week/provider/employee/clinic)
+- [x] Reporting: per clinic completions per week + CSV export
+- [x] Patient table: remove Risk column (+ removed Risk filter, relabeled to Priority)
+- [x] Patient table: add Last Called column (auto-updates on contact)
+- [x] Patient table: add Next Appointment column
+- [x] Vitest: template detection + parsing + duplicate flagging + Resend key (34 tests pass)

@@ -61,7 +61,7 @@ describe("role-based access control", () => {
 
   it("blocks staff/provider from bulk import (admin & front_desk only)", async () => {
     const caller = appRouter.createCaller(ctxFor("provider"));
-    await expect(caller.patients.bulkImportPreview({ csv: "name,phoneNumber\nA,555" })).rejects.toThrow();
+    await expect(caller.patients.bulkImportPreview({ csv: "name,phoneNumber\nA Patient,555" })).rejects.toThrow();
   });
 
   it("blocks non-admin from sending team invites", async () => {

@@ -6,9 +6,16 @@ import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { Loader2, Upload, FileText, AlertTriangle, CheckCircle2, ArrowLeft, Download } from "lucide-react";
 
-const SAMPLE = `name,dateOfBirth,phoneNumber,clinic,provider,preferredLanguage,chronicConditions,insurance,riskLevel,consentStatus,rpmEnrolled,rpmDeviceType
-Jane Doe,1955-03-12,555-201-3344,,,English,Hypertension;Type 2 Diabetes,Medicare,high,consented,yes,BP cuff
-John Smith,1948-07-22,555-330-1188,,,Spanish,COPD,Medicare,medium,pending,no,`;
+const SAMPLE_DRMAI = `Name,Provider,Wellness Call,Date Completed,Next Appointment,Notes
+Doe, Jane,Dr. Mai,Completed,6/3,8/15,Doing well
+Smith, John,Dr. Mai,Not Completed,,7/1,Left voicemail`;
+
+const TEMPLATE_LABELS: Record<string, string> = {
+  drmai: "Dr.Mai CCMs export",
+  chartnotes: "Chart Notes Report export",
+  generic: "Generic patient sheet",
+  unknown: "Unknown",
+};
 
 export default function BulkImportPage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
@@ -53,55 +60,64 @@ export default function BulkImportPage() {
   if (!canImport) {
     return (
       <CCMDashboardLayout title="Bulk Import">
-        <div className="bg-white rounded-3xl border border-slate-100 p-10 text-center text-slate-500">
+        <div className="bg-white rounded-3xl border border-slate-200 p-10 text-center text-slate-600">
           You do not have permission to import patients. This action is limited to Admin and Front Desk roles.
         </div>
       </CCMDashboardLayout>
     );
   }
 
-  const field = "px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]";
+  const field = "px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_45%)]";
 
   return (
     <CCMDashboardLayout title="Bulk Import Patients">
-      <button onClick={() => setLocation("/patients")} className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 mb-4">
+      <button onClick={() => setLocation("/patients")} className="inline-flex items-center gap-1.5 text-sm text-slate-600 hover:text-slate-900 mb-4">
         <ArrowLeft size={15} /> Back to Patient Database
       </button>
 
       <div className="grid lg:grid-cols-5 gap-5">
         {/* Left: input */}
         <div className="lg:col-span-2 space-y-4">
-          <div className="bg-white rounded-3xl border border-slate-100 p-5">
-            <h3 className="font-semibold text-slate-800 mb-1 flex items-center gap-2"><FileText size={16} /> Paste or upload CSV</h3>
-            <p className="text-xs text-slate-400 mb-3">Required columns: <span className="font-medium">name</span>, <span className="font-medium">phoneNumber</span>. Optional: dateOfBirth, clinic, provider, preferredLanguage, chronicConditions (use ; between), insurance, riskLevel, consentStatus, rpmEnrolled (yes/no), rpmDeviceType.</p>
+          <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
+            <h3 className="font-semibold text-slate-900 mb-1 flex items-center gap-2"><FileText size={16} /> Paste or upload CSV</h3>
+            <p className="text-xs text-slate-600 mb-2">
+              Accepts your two export formats directly — the <span className="font-semibold">Dr.Mai CCMs</span> sheet and the
+              <span className="font-semibold"> Chart Notes Report</span> — as well as a generic sheet with a <span className="font-semibold">name</span> column.
+              Only the patient name is required; any other missing details can be filled in manually later.
+            </p>
             <textarea
               value={csv} onChange={(e) => setCsv(e.target.value)}
               placeholder="Paste CSV here…"
-              className="w-full h-52 px-3 py-2 rounded-xl border border-slate-200 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
+              className="w-full h-52 px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_45%)]"
             />
             <div className="flex items-center gap-2 mt-3 flex-wrap">
               <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
-              <button onClick={() => fileRef.current?.click()} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-sm text-slate-700 hover:bg-slate-50"><Upload size={14} /> Upload file</button>
-              <button onClick={() => setCsv(SAMPLE)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-sm text-slate-700 hover:bg-slate-50"><Download size={14} /> Load sample</button>
+              <button onClick={() => fileRef.current?.click()} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-300 text-sm text-slate-700 hover:bg-slate-50"><Upload size={14} /> Upload file</button>
+              <button onClick={() => setCsv(SAMPLE_DRMAI)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-300 text-sm text-slate-700 hover:bg-slate-50"><Download size={14} /> Load sample</button>
               <button disabled={!csv.trim() || preview.isPending} onClick={() => preview.mutate({ csv })}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 disabled:opacity-50">
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 disabled:opacity-50 active:scale-[0.97] transition-transform">
                 {preview.isPending ? <Loader2 size={14} className="animate-spin" /> : null} Preview
               </button>
             </div>
           </div>
 
           {data && !data.headerError && (
-            <div className="bg-white rounded-3xl border border-slate-100 p-5 space-y-3">
-              <h3 className="font-semibold text-slate-800 text-sm">Commit settings</h3>
+            <div className="bg-white rounded-3xl border border-slate-200 p-5 space-y-3 shadow-sm">
+              <h3 className="font-semibold text-slate-900 text-sm">Commit settings</h3>
+              {data.template && (
+                <p className="text-xs text-slate-600">
+                  Detected format: <span className="font-semibold text-slate-800">{TEMPLATE_LABELS[data.template] || data.template}</span>
+                </p>
+              )}
               <div>
-                <label className="text-xs text-slate-500">Default clinic (used when row has no clinic)</label>
+                <label className="text-xs text-slate-600">Default clinic (used when a row has no clinic)</label>
                 <select className={`${field} w-full`} value={defaultClinicId} onChange={(e) => setDefaultClinicId(Number(e.target.value))}>
                   <option value={0}>Select clinic…</option>
                   {(data.clinicOptions || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </div>
               <div>
-                <label className="text-xs text-slate-500">Default provider (used when row has no provider)</label>
+                <label className="text-xs text-slate-600">Default provider (used when a row's provider can't be matched)</label>
                 <select className={`${field} w-full`} value={defaultProviderId} onChange={(e) => setDefaultProviderId(Number(e.target.value))}>
                   <option value={0}>Select provider…</option>
                   {(data.providerOptions || []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -114,7 +130,7 @@ export default function BulkImportPage() {
               <button
                 disabled={commit.isPending || validCount === 0 || !defaultClinicId || !defaultProviderId}
                 onClick={() => commit.mutate({ csv, defaultClinicId, defaultProviderId, skipExistingDuplicates: skipExisting })}
-                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[hsl(200_100%_45%)] text-white text-sm font-semibold hover:brightness-95 disabled:opacity-50">
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[hsl(200_100%_45%)] text-white text-sm font-semibold hover:brightness-95 disabled:opacity-50 active:scale-[0.98] transition-transform">
                 {commit.isPending ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
                 Import {validCount} valid {validCount === 1 ? "patient" : "patients"}
               </button>
@@ -131,21 +147,23 @@ export default function BulkImportPage() {
             </div>
           )}
           {data && !data.headerError && (
-            <div className="bg-white rounded-3xl border border-slate-100 overflow-hidden">
-              <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between flex-wrap gap-2">
-                <p className="text-sm font-semibold text-slate-700">{data.rows.length} rows · {validCount} valid · {data.rows.length - validCount} with errors</p>
+            <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
+              <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
+                <p className="text-sm font-semibold text-slate-800">{data.rows.length} rows · {validCount} valid · {data.rows.length - validCount} with errors</p>
                 <div className="flex items-center gap-3 text-[11px]">
                   <span className="inline-flex items-center gap-1 text-amber-700"><AlertTriangle size={11} /> Duplicate name</span>
                 </div>
               </div>
               <div className="overflow-x-auto max-h-[60vh]">
                 <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-slate-50">
-                    <tr className="text-left text-xs uppercase tracking-wider text-slate-400">
+                  <thead className="sticky top-0 bg-slate-100">
+                    <tr className="text-left text-xs uppercase tracking-wider text-slate-500">
                       <th className="px-4 py-2 font-medium">Row</th>
                       <th className="px-4 py-2 font-medium">Name</th>
-                      <th className="px-4 py-2 font-medium">Phone</th>
-                      <th className="px-4 py-2 font-medium">RPM</th>
+                      <th className="px-4 py-2 font-medium">Provider</th>
+                      <th className="px-4 py-2 font-medium">Last Called</th>
+                      <th className="px-4 py-2 font-medium">Next Appt</th>
+                      <th className="px-4 py-2 font-medium">Status</th>
                       <th className="px-4 py-2 font-medium">Flags</th>
                     </tr>
                   </thead>
@@ -156,11 +174,15 @@ export default function BulkImportPage() {
                       const isInBatch = inBatch.has(r.rowNumber);
                       const hasError = r.errors.length > 0;
                       return (
-                        <tr key={r.rowNumber} className={`border-b border-slate-50 last:border-0 ${hasError ? "bg-rose-50/40" : ""}`}>
-                          <td className="px-4 py-2 text-slate-400">{r.rowNumber}</td>
-                          <td className="px-4 py-2 font-medium text-slate-800">{r.name || <span className="text-rose-500">(missing)</span>}</td>
-                          <td className="px-4 py-2 text-slate-600">{r.phoneNumber || <span className="text-rose-500">(missing)</span>}</td>
-                          <td className="px-4 py-2 text-slate-600">{r.rpmEnrolled ? "Yes" : "No"}{r.rpmDeviceType ? ` · ${r.rpmDeviceType}` : ""}</td>
+                        <tr key={r.rowNumber} className={`border-b border-slate-100 last:border-0 ${hasError ? "bg-rose-50/40" : ""}`}>
+                          <td className="px-4 py-2 text-slate-500">{r.rowNumber}</td>
+                          <td className="px-4 py-2 font-medium text-slate-900">{r.name || <span className="text-rose-500">(missing)</span>}</td>
+                          <td className="px-4 py-2 text-slate-700">{r.provider || <span className="text-slate-400">—</span>}</td>
+                          <td className="px-4 py-2 text-slate-700">{r.lastCalled || <span className="text-slate-400">—</span>}</td>
+                          <td className="px-4 py-2 text-slate-700">{r.nextAppointment || <span className="text-slate-400">—</span>}</td>
+                          <td className="px-4 py-2 text-slate-700">
+                            {r.completed ? <span className="text-emerald-700 font-medium">Completed</span> : (r.wellnessCallStatus || <span className="text-slate-400">—</span>)}
+                          </td>
                           <td className="px-4 py-2">
                             <div className="flex flex-wrap gap-1">
                               {hasError && r.errors.map((e, i) => (
@@ -180,7 +202,7 @@ export default function BulkImportPage() {
             </div>
           )}
           {!data && (
-            <div className="bg-white rounded-3xl border border-dashed border-slate-200 p-12 text-center text-slate-400">
+            <div className="bg-white rounded-3xl border border-dashed border-slate-300 p-12 text-center text-slate-500">
               <Upload size={28} className="mx-auto mb-3 text-slate-300" />
               Paste or upload a CSV, then click Preview to validate and check for duplicates before importing.
             </div>

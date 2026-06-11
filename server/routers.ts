@@ -17,6 +17,7 @@ import {
   getEnrichedPatients,
   getPatientDetail,
   getAdminStats,
+  getCompletionReport,
   getStaffPerformance,
   getClinicPerformance,
   getDailyCompletionTrend,
@@ -58,6 +59,7 @@ import { ccmNotesRouter } from "./routers/ccmNotes";
 import { seedDatabase, isSeeded, currentMonth } from "./seed";
 import { parsePatientCsv, findInBatchDuplicates } from "../shared/csvImport";
 import { clinics, providers } from "../drizzle/schema";
+import { sendEmail, buildInviteEmail } from "./_core/email";
 
 // ---- Role guards ----
 function requireRole(ctx: any, roles: string[]) {
@@ -176,14 +178,26 @@ export const appRouter = router({
       return db.select().from(teamInvites);
     }),
     send: protectedProcedure
-      .input(z.object({ email: z.string().email(), role: roleEnum, clinicLocation: z.string().optional() }))
+      .input(z.object({ email: z.string().email(), role: roleEnum, clinicLocation: z.string().optional(), origin: z.string().url() }))
       .mutation(async ({ input, ctx }) => {
         requireRole(ctx, ["admin"]);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        await db.insert(teamInvites).values({ ...input, invitedByUserId: ctx.user.id, status: "pending" });
+        const { origin, ...invite } = input;
+        await db.insert(teamInvites).values({ ...invite, invitedByUserId: ctx.user.id, status: "pending" });
         void logAudit(ctx, "update_patient", { entityType: "invite", description: `Created invite for ${input.email}` });
-        return { success: true };
+
+        // The invited person accepts simply by signing in with this email; the
+        // pending invite is auto-claimed on first login. The link routes them to login.
+        const inviteUrl = `${origin.replace(/\/$/, "")}/?invited=1`;
+        const { subject, html, text } = buildInviteEmail({
+          inviteUrl,
+          role: input.role,
+          inviterName: ctx.user.name ?? undefined,
+          clinicLocation: input.clinicLocation,
+        });
+        const emailResult = await sendEmail({ to: input.email, subject, html, text });
+        return { success: true, emailDelivered: emailResult.delivered, emailReason: emailResult.reason, inviteUrl };
       }),
     revoke: protectedProcedure.input(z.number()).mutation(async ({ input, ctx }) => {
       requireRole(ctx, ["admin"]);
@@ -331,13 +345,14 @@ export const appRouter = router({
       .input(z.object({ csv: z.string() }))
       .mutation(async ({ input, ctx }) => {
         requireRole(ctx, ["admin", "front_desk"]);
-        const { rows, headerError } = parsePatientCsv(input.csv);
-        if (headerError) return { headerError, rows: [], inBatchDuplicates: [], existingDuplicates: {}, clinicOptions: [], providerOptions: [] };
+        const { rows, headerError, template } = parsePatientCsv(input.csv);
+        if (headerError) return { headerError, template, rows: [], inBatchDuplicates: [], existingDuplicates: {}, clinicOptions: [], providerOptions: [] };
         const inBatch = findInBatchDuplicates(rows);
         const existing = await findExistingByNames(rows.map((r) => r.name));
         const allClinics = await getAllClinics();
         const allProviders = await getAllProviders();
         return {
+          template,
           rows,
           inBatchDuplicates: Array.from(inBatch),
           existingDuplicates: existing,
@@ -385,11 +400,13 @@ export const appRouter = router({
           preferredLanguage: r.preferredLanguage,
           chronicConditions: r.chronicConditions,
           insurance: r.insurance,
-          riskLevel: (r.riskLevel as any) || "medium",
           consentStatus: (r.consentStatus as any) || "pending",
           rpmEnrolled: r.rpmEnrolled ?? false,
           rpmStatus: (r.rpmEnrolled ? "enrolled" : "not_enrolled") as any,
           rpmDeviceType: r.rpmDeviceType,
+          lastCalledAt: r.lastCalled ? new Date(r.lastCalled) : null,
+          nextAppointment: r.nextAppointment ? new Date(r.nextAppointment) : null,
+          lastCCMDate: r.completed && r.lastCalled ? new Date(r.lastCalled) : null,
         }));
 
         const inserted = await bulkInsertPatients(mapped);
@@ -573,6 +590,7 @@ export const appRouter = router({
           followUpNeeded: z.string().optional(),
           patientConcerns: z.string().optional(),
           generatedNote: z.string().optional(),
+          aiGeneratedAt: z.number().optional(),
           escalationFlag: z.boolean().optional(),
           escalationReason: z.string().optional(),
           followUpActions: z.array(z.string()).optional(),
@@ -601,6 +619,7 @@ export const appRouter = router({
           followUpNeeded: input.followUpNeeded,
           patientConcerns: input.patientConcerns,
           generatedNote: input.generatedNote,
+          aiGeneratedAt: input.aiGeneratedAt ? new Date(input.aiGeneratedAt) : undefined,
           escalationFlag: input.escalationFlag || false,
           escalationReason: input.escalationReason,
           followUpActions: input.followUpActions || [],
@@ -621,8 +640,13 @@ export const appRouter = router({
           taskUpdate.ccmNoteCompleted = true;
           taskUpdate.status = input.escalationFlag ? "needs_provider_review" : "completed";
           if (input.escalationFlag) taskUpdate.providerReviewNeeded = true;
+          taskUpdate.completedAt = new Date();
+          taskUpdate.completedByStaffId = ctx.user.id;
         }
         await db.update(ccmTasks).set(taskUpdate).where(eq(ccmTasks.id, input.ccmTaskId));
+
+        // Record that this patient was contacted now (powers the "Last Called" column)
+        await db.update(patients).set({ lastCalledAt: new Date() }).where(eq(patients.id, input.patientId));
 
         // Escalation -> create provider escalation + notify provider
         if (input.escalationFlag && noteId) {
@@ -883,6 +907,21 @@ export const appRouter = router({
           getDailyCompletionTrend(month),
         ]);
         return { month, stats, staffPerformance: staffPerf, clinicPerformance: clinicPerf, dailyTrend: trend };
+      }),
+
+    // Flexible completion report: group by any combination of date/week/provider/employee/clinic
+    completions: protectedProcedure
+      .input(
+        z.object({
+          groupBy: z.array(z.enum(["date", "week", "provider", "employee", "clinic"])).min(1).max(3),
+          from: z.number().optional(),
+          to: z.number().optional(),
+        })
+      )
+      .query(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "billing"]);
+        const rows = await getCompletionReport({ groupBy: input.groupBy, from: input.from, to: input.to });
+        return { groupBy: input.groupBy, rows, total: rows.reduce((s, r) => s + r.count, 0) };
       }),
   }),
 });

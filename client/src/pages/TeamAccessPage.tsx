@@ -42,15 +42,22 @@ export default function TeamAccessPage() {
   const [inviteRole, setInviteRole] = useState<string>("staff");
   const [clinicLocation, setClinicLocation] = useState("");
   const [removeTarget, setRemoveTarget] = useState<{ id: number; name: string } | null>(null);
+  const [lastInviteLink, setLastInviteLink] = useState<string | null>(null);
 
   const setRole = trpc.users.setRole.useMutation({
     onSuccess: () => { utils.users.list.invalidate(); toast.success("Role updated."); },
     onError: (e) => toast.error(e.message),
   });
   const sendInvite = trpc.invites.send.useMutation({
-    onSuccess: () => {
+    onSuccess: (r) => {
       utils.invites.list.invalidate();
-      toast.success("Invite created. The teammate gets this role automatically when they first sign in with that email.");
+      if (r.emailDelivered) {
+        toast.success("Invite emailed. They get this role automatically when they sign in with that email.");
+        setLastInviteLink(null);
+      } else {
+        toast.warning("Invite created, but email could not be sent. Share the invite link below manually.");
+        setLastInviteLink(r.inviteUrl);
+      }
       setEmail(""); setClinicLocation("");
     },
     onError: (e) => toast.error(e.message),
@@ -93,7 +100,7 @@ export default function TeamAccessPage() {
         <div className="flex items-center gap-2 mb-4"><UserPlus size={17} className="text-[hsl(200_100%_45%)]" /><h3 className="font-bold text-slate-900">Invite a team member</h3></div>
         <form
           className="grid sm:grid-cols-[1fr_auto_1fr_auto] gap-3 items-end"
-          onSubmit={(e) => { e.preventDefault(); if (!email) return; sendInvite.mutate({ email, role: inviteRole as any, clinicLocation: clinicLocation || undefined }); }}
+          onSubmit={(e) => { e.preventDefault(); if (!email) return; sendInvite.mutate({ email, role: inviteRole as any, clinicLocation: clinicLocation || undefined, origin: window.location.origin }); }}
         >
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1.5">Work email</label>
@@ -117,6 +124,16 @@ export default function TeamAccessPage() {
             {sendInvite.isPending ? <Loader2 size={15} className="animate-spin" /> : <UserPlus size={15} />} Send invite
           </button>
         </form>
+        {lastInviteLink && (
+          <div className="mt-4 p-3 rounded-2xl bg-amber-50 border border-amber-200">
+            <p className="text-xs font-semibold text-amber-800 mb-1">Email delivery is not configured — share this link with the invitee:</p>
+            <div className="flex items-center gap-2">
+              <input readOnly value={lastInviteLink} className="flex-1 px-2 py-1.5 rounded-lg border border-amber-200 bg-white text-xs text-slate-700" onFocus={(e) => e.currentTarget.select()} />
+              <button onClick={() => { navigator.clipboard.writeText(lastInviteLink); toast.success("Link copied."); }}
+                className="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700">Copy</button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Pending invites */}

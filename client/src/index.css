@@ -9,6 +9,8 @@
   --color-foreground: hsl(220 13% 15%);
   --color-card: hsl(0 0% 100%);
   --color-card-foreground: hsl(220 13% 15%);
+  --color-popover: hsl(0 0% 100%);
+  --color-popover-foreground: hsl(220 13% 15%);
   --color-primary: hsl(200 100% 50%);
   --color-primary-foreground: hsl(0 0% 100%);
   --color-secondary: hsl(340 100% 71%);
@@ -84,6 +86,27 @@
     transition-property: color, background-color, border-color, box-shadow, transform, opacity;
     transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
     transition-duration: 180ms;
+  }
+
+  /* Readability: ensure all typed text in form controls is solid & high-contrast.
+     Some shadcn controls default to transparent backgrounds which made typed
+     text hard to read on light/overlay surfaces. Force solid white fields with
+     near-black text and clearly visible placeholders. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select {
+    background-color: hsl(0 0% 100%);
+    color: hsl(220 13% 15%);
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: hsl(220 13% 50%);
+    opacity: 1;
+  }
+  /* Native select dropdown options should be solid and readable */
+  select option {
+    background-color: hsl(0 0% 100%);
+    color: hsl(220 13% 15%);
   }
 
   ::-webkit-scrollbar { width: 0.5rem; height: 0.5rem; }

@@ -100,6 +100,7 @@ export const patients = mysqlTable("patients", {
   lastOfficeVisit: datetime("lastOfficeVisit"),
   nextAppointment: datetime("nextAppointment"),
   lastCCMDate: datetime("lastCCMDate"),
+  lastCalledAt: datetime("lastCalledAt"),
   notes: text("notes"),
   // Remote Patient Monitoring (RPM) enrollment
   rpmEnrolled: boolean("rpmEnrolled").default(false),
@@ -143,6 +144,8 @@ export const ccmTasks = mysqlTable("ccmTasks", {
   dateContacted: datetime("dateContacted"),
   timeSpentMinutes: int("timeSpentMinutes").default(0),
   ccmNoteCompleted: boolean("ccmNoteCompleted").default(false),
+  completedAt: datetime("completedAt"),
+  completedByStaffId: int("completedByStaffId").references(() => users.id),
   providerReviewNeeded: boolean("providerReviewNeeded").default(false),
   followUpAppointmentNeeded: boolean("followUpAppointmentNeeded").default(false),
   appointmentScheduled: boolean("appointmentScheduled").default(false),
@@ -180,6 +183,7 @@ export const ccmNotes = mysqlTable("ccmNotes", {
   
   // Generated note
   generatedNote: text("generatedNote"),
+  aiGeneratedAt: datetime("aiGeneratedAt"),
   
   // Escalation
   escalationReason: text("escalationReason"),

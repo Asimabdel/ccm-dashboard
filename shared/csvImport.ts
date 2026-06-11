@@ -1,27 +1,42 @@
 /**
- * Lightweight CSV parser + validator for bulk patient import.
+ * Flexible CSV parser + validator for bulk patient import.
  * Shared between server (import procedure) and tests.
- * Supports quoted fields, embedded commas, and CRLF/LF line endings.
+ *
+ * Supports two real-world templates (auto-detected by header) plus a generic
+ * fallback. Names may be "Last, First" or "First Last". Dates may be M/D,
+ * M/D/YY, or MM/DD/YYYY. Phone is optional (missing info is fine — staff fill
+ * it in manually later).
+ *
+ * Template A — "Dr.Mai CCMs":
+ *   Name, Provider, Wellness Call, Date Completed, Next Appointment, Notes
+ * Template B — "Chart Notes Report":
+ *   PATIENT NAME, CHART NOTE TYPE, SERVICE DATE, PROVIDER, SIGNED, SIGNED BY, SIGNED ON
+ * Generic — name + any of phoneNumber/dob/clinic/provider/etc.
  */
+
+export type ImportTemplate = "drmai" | "chartnotes" | "generic" | "unknown";
 
 export type ParsedPatientRow = {
   rowNumber: number;
-  name: string;
-  dateOfBirth?: string; // raw string from CSV (YYYY-MM-DD preferred)
-  phoneNumber: string;
-  clinic?: string; // clinic name (resolved to id server-side)
-  provider?: string; // provider name (resolved to id server-side)
+  name: string; // normalized to "First Last"
+  dateOfBirth?: string;
+  phoneNumber?: string;
+  clinic?: string;
+  provider?: string;
   preferredLanguage?: string;
   chronicConditions?: string[];
   insurance?: string;
-  riskLevel?: string;
   consentStatus?: string;
   rpmEnrolled?: boolean;
   rpmDeviceType?: string;
+  // CCM operational fields captured from the two real templates
+  lastCalled?: string; // raw date string (Date Completed / Service Date)
+  nextAppointment?: string; // raw date string
+  wellnessCallStatus?: string; // raw status text from Template A
+  completed?: boolean; // whether this row represents a completed CCM
+  notes?: string;
   errors: string[];
 };
-
-const REQUIRED_HEADERS = ["name", "phonenumber"];
 
 /** Split a single CSV line into fields, honoring double-quote quoting. */
 export function splitCsvLine(line: string): string[] {
@@ -66,33 +81,104 @@ function parseBool(v?: string): boolean | undefined {
   return undefined;
 }
 
+/** Convert "Last, First" → "First Last"; leave "First Last" untouched. */
+export function normalizePersonName(raw: string): string {
+  const name = raw.replace(/\s+/g, " ").trim();
+  if (!name) return "";
+  if (name.includes(",")) {
+    const [last, first] = name.split(",").map((s) => s.trim());
+    if (first) return `${first} ${last}`;
+    return last;
+  }
+  return name;
+}
+
 /**
- * Parse CSV text into rows with per-row validation errors.
- * Header row is required.
+ * Parse a flexible date string into ISO YYYY-MM-DD.
+ * Supports M/D, M/D/YY, M/D/YYYY, YYYY-MM-DD. Assumes a default year for M/D.
+ * Returns undefined if unparseable.
  */
-export function parsePatientCsv(text: string): {
-  rows: ParsedPatientRow[];
-  headerError?: string;
-} {
+export function parseFlexibleDate(raw: string | undefined, defaultYear?: number): string | undefined {
+  if (!raw) return undefined;
+  const s = raw.trim();
+  if (!s) return undefined;
+  // already ISO
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) {
+    const [, y, m, d] = iso;
+    return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  }
+  const mdy = s.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/);
+  if (mdy) {
+    let [, m, d, y] = mdy;
+    let year: number;
+    if (y == null) {
+      year = defaultYear ?? new Date().getFullYear();
+    } else if (y.length === 2) {
+      year = 2000 + parseInt(y, 10);
+    } else {
+      year = parseInt(y, 10);
+    }
+    const mm = parseInt(m, 10);
+    const dd = parseInt(d, 10);
+    if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return undefined;
+    return `${year}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+  }
+  // fallback to Date parsing
+  const t = new Date(s);
+  if (!isNaN(t.getTime())) {
+    return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+  }
+  return undefined;
+}
+
+/** Detect which template a header row represents. */
+export function detectTemplate(headers: string[]): ImportTemplate {
+  const h = headers.map(normalizeHeader);
+  const has = (k: string) => h.includes(k);
+  if (has("patientname") && (has("chartnotetype") || has("servicedate") || has("signed"))) {
+    return "chartnotes";
+  }
+  if (has("name") && has("wellnesscall")) {
+    return "drmai";
+  }
+  if (has("name") || has("patientname")) {
+    return "generic";
+  }
+  return "unknown";
+}
+
+/** Map a Template-A wellness-call status to a completion flag. */
+function isCompletedStatus(status: string): boolean {
+  return status.toLowerCase().includes("complet");
+}
+
+export function parsePatientCsv(
+  text: string,
+  opts?: { defaultYear?: number },
+): { rows: ParsedPatientRow[]; template: ImportTemplate; headerError?: string } {
   const lines = text
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
     .split("\n")
     .filter((l) => l.trim().length > 0);
 
-  if (lines.length === 0) return { rows: [], headerError: "File is empty." };
+  if (lines.length === 0) return { rows: [], template: "unknown", headerError: "File is empty." };
 
-  const headers = splitCsvLine(lines[0]).map(normalizeHeader);
-  for (const req of REQUIRED_HEADERS) {
-    if (!headers.includes(req)) {
-      return {
-        rows: [],
-        headerError: `Missing required column "${req}". Required columns: name, phoneNumber. Optional: dateOfBirth, clinic, provider, preferredLanguage, chronicConditions, insurance, riskLevel, consentStatus, rpmEnrolled, rpmDeviceType.`,
-      };
-    }
+  const rawHeaders = splitCsvLine(lines[0]);
+  const headers = rawHeaders.map(normalizeHeader);
+  const template = detectTemplate(rawHeaders);
+
+  if (template === "unknown") {
+    return {
+      rows: [],
+      template,
+      headerError:
+        'Could not recognize this file. Expected one of: the "Dr.Mai CCMs" export (Name, Provider, Wellness Call, ...), the "Chart Notes Report" export (PATIENT NAME, SERVICE DATE, PROVIDER, ...), or a generic sheet with a "name" column.',
+    };
   }
 
-  const idx = (key: string) => headers.indexOf(key);
+  const idx = (key: string) => headers.indexOf(normalizeHeader(key));
   const get = (cols: string[], key: string) => {
     const i = idx(key);
     return i >= 0 ? (cols[i] ?? "").trim() : "";
@@ -102,47 +188,52 @@ export function parsePatientCsv(text: string): {
   for (let i = 1; i < lines.length; i++) {
     const cols = splitCsvLine(lines[i]);
     const errors: string[] = [];
+    const row: ParsedPatientRow = { rowNumber: i + 1, name: "", errors };
 
-    const name = get(cols, "name");
-    const phoneNumber = get(cols, "phonenumber");
-    if (!name) errors.push("Name is required");
-    if (!phoneNumber) errors.push("Phone number is required");
+    if (template === "chartnotes") {
+      row.name = normalizePersonName(get(cols, "patientname"));
+      row.provider = get(cols, "provider") || undefined;
+      row.lastCalled = parseFlexibleDate(get(cols, "servicedate"), opts?.defaultYear);
+      // A signed CCM chart note represents a completed CCM for that service date.
+      row.completed = true;
+      row.wellnessCallStatus = "Completed";
+    } else if (template === "drmai") {
+      row.name = normalizePersonName(get(cols, "name"));
+      row.provider = get(cols, "provider") || undefined;
+      const status = get(cols, "wellnesscall");
+      row.wellnessCallStatus = status || undefined;
+      row.completed = isCompletedStatus(status);
+      row.lastCalled = parseFlexibleDate(get(cols, "datecompleted"), opts?.defaultYear);
+      row.nextAppointment = parseFlexibleDate(get(cols, "nextappointment"), opts?.defaultYear);
+      row.notes = get(cols, "notes") || undefined;
+    } else {
+      // generic
+      row.name = normalizePersonName(get(cols, "name") || get(cols, "patientname"));
+      row.phoneNumber = get(cols, "phonenumber") || undefined;
+      row.dateOfBirth = parseFlexibleDate(get(cols, "dateofbirth"), opts?.defaultYear);
+      row.clinic = get(cols, "clinic") || undefined;
+      row.provider = get(cols, "provider") || undefined;
+      row.preferredLanguage = get(cols, "preferredlanguage") || undefined;
+      const conditionsRaw = get(cols, "chronicconditions");
+      row.chronicConditions = conditionsRaw
+        ? conditionsRaw.split(/[;|]/).map((c) => c.trim()).filter(Boolean)
+        : undefined;
+      row.insurance = get(cols, "insurance") || undefined;
+      const consentRaw = get(cols, "consentstatus").toLowerCase();
+      row.consentStatus = ["consented", "pending", "declined"].includes(consentRaw) ? consentRaw : undefined;
+      row.rpmEnrolled = parseBool(get(cols, "rpmenrolled"));
+      row.rpmDeviceType = get(cols, "rpmdevicetype") || undefined;
+      row.nextAppointment = parseFlexibleDate(get(cols, "nextappointment"), opts?.defaultYear);
+    }
 
-    const riskRaw = get(cols, "risklevel").toLowerCase();
-    const riskLevel = ["high", "medium", "low"].includes(riskRaw) ? riskRaw : undefined;
-    if (riskRaw && !riskLevel) errors.push(`Invalid riskLevel "${riskRaw}"`);
+    // Only the patient name is required — all other info is optional and can be
+    // completed manually after import.
+    if (!row.name) errors.push("Patient name is required");
 
-    const consentRaw = get(cols, "consentstatus").toLowerCase();
-    const consentStatus = ["consented", "pending", "declined"].includes(consentRaw) ? consentRaw : undefined;
-    if (consentRaw && !consentStatus) errors.push(`Invalid consentStatus "${consentRaw}"`);
-
-    const dob = get(cols, "dateofbirth");
-    if (dob && isNaN(new Date(dob).getTime())) errors.push(`Invalid dateOfBirth "${dob}"`);
-
-    const conditionsRaw = get(cols, "chronicconditions");
-    const chronicConditions = conditionsRaw
-      ? conditionsRaw.split(/[;|]/).map((c) => c.trim()).filter(Boolean)
-      : undefined;
-
-    rows.push({
-      rowNumber: i + 1,
-      name,
-      dateOfBirth: dob || undefined,
-      phoneNumber,
-      clinic: get(cols, "clinic") || undefined,
-      provider: get(cols, "provider") || undefined,
-      preferredLanguage: get(cols, "preferredlanguage") || undefined,
-      chronicConditions,
-      insurance: get(cols, "insurance") || undefined,
-      riskLevel,
-      consentStatus,
-      rpmEnrolled: parseBool(get(cols, "rpmenrolled")),
-      rpmDeviceType: get(cols, "rpmdevicetype") || undefined,
-      errors,
-    });
+    rows.push(row);
   }
 
-  return { rows };
+  return { rows, template };
 }
 
 /** Find duplicate names *within* the parsed batch (case-insensitive). */

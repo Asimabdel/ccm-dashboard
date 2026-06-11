@@ -74,12 +74,14 @@ The note should be professional, concise (300-500 words), and ready for inclusio
         return {
           success: true,
           note: generatedNote,
+          generatedAt: Date.now(),
         };
       } catch (error) {
         console.error("Error generating CCM note:", error);
         return {
           success: false,
           note: "Error generating note. Please try again or contact support.",
+          generatedAt: Date.now(),
         };
       }
     }),
