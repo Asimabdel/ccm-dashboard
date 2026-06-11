@@ -130,3 +130,9 @@
 - [x] Global enforcement: dashboard layout redirects mustChangePassword users to /change-password
 - [x] Live endpoint check: auth.passwordLogin returns 401 for bad credentials (DB-backed)
 - [x] All tests pass (44) + TypeScript clean (0 errors)
+
+## Round 7: Password UX
+- [x] Inline password requirement hint + validity check on create-login form (disable submit until valid)
+- [x] Inline password requirement hint on reset-password dialog (disable save until valid)
+- [x] Shared client-side password validation helper (validatePassword in lib/ccm) matching server policy
+- [x] Same inline validation + match check applied to Change Password page

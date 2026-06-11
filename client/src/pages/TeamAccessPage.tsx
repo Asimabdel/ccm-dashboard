@@ -1,6 +1,7 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { trpc } from "@/lib/trpc";
+import { validatePassword } from "@/lib/ccm";
 import { toast } from "sonner";
 import { useState } from "react";
 import { Loader2, UserCog, ShieldCheck, Mail, UserPlus, Trash2, CheckCircle2, Clock, KeyRound, Lock } from "lucide-react";
@@ -115,6 +116,7 @@ export default function TeamAccessPage() {
           onSubmit={(e) => {
             e.preventDefault();
             if (!email) return;
+            if (password && validatePassword(password)) { toast.error(validatePassword(password)!); return; }
             createMember.mutate({
               email,
               name: name || undefined,
@@ -151,8 +153,13 @@ export default function TeamAccessPage() {
               <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Min 8 chars, letter + number" className={`${field} w-full pl-9`} autoComplete="new-password" />
             </div>
+            {password.length > 0 && validatePassword(password) ? (
+              <p className="mt-1 text-[11px] text-rose-600">{validatePassword(password)}</p>
+            ) : (
+              <p className="mt-1 text-[11px] text-slate-400">Leave blank for Manus-only sign-in, or use 8+ chars with a letter and a number.</p>
+            )}
           </div>
-          <button type="submit" disabled={createMember.isPending || !email}
+          <button type="submit" disabled={createMember.isPending || !email || (password.length > 0 && !!validatePassword(password))}
             className="inline-flex items-center justify-center gap-1.5 px-5 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 active:scale-[0.97] transition disabled:opacity-50 h-[42px]">
             {createMember.isPending ? <Loader2 size={15} className="animate-spin" /> : <UserPlus size={15} />} Create login
           </button>
@@ -267,7 +274,7 @@ export default function TeamAccessPage() {
             </DialogDescription>
           </DialogHeader>
           <form
-            onSubmit={(e) => { e.preventDefault(); if (resetTarget) resetPasswordMut.mutate({ userId: resetTarget.id, password: resetPassword }); }}
+            onSubmit={(e) => { e.preventDefault(); const err = validatePassword(resetPassword); if (err) { toast.error(err); return; } if (resetTarget) resetPasswordMut.mutate({ userId: resetTarget.id, password: resetPassword }); }}
           >
             <label className="block text-sm font-semibold text-slate-700 mb-1.5">Temporary password</label>
             <div className="relative">
@@ -281,9 +288,14 @@ export default function TeamAccessPage() {
                 autoComplete="new-password"
               />
             </div>
+            {resetPassword.length > 0 && validatePassword(resetPassword) ? (
+              <p className="mt-1.5 text-[12px] text-rose-600">{validatePassword(resetPassword)}</p>
+            ) : (
+              <p className="mt-1.5 text-[12px] text-slate-400">Use 8+ characters with at least one letter and one number.</p>
+            )}
             <DialogFooter className="mt-5">
               <button type="button" onClick={() => setResetTarget(null)} className="px-4 py-2 rounded-xl border border-slate-300 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition">Cancel</button>
-              <button type="submit" disabled={resetPasswordMut.isPending}
+              <button type="submit" disabled={resetPasswordMut.isPending || !!validatePassword(resetPassword)}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 active:scale-[0.97] transition disabled:opacity-50">
                 {resetPasswordMut.isPending ? <Loader2 size={15} className="animate-spin" /> : <KeyRound size={15} />} Save password
               </button>

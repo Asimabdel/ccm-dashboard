@@ -197,3 +197,21 @@ export function followupBadgeClass(status: string): string {
       return "bg-slate-100 text-slate-700";
   }
 }
+
+/**
+ * Client-side password strength check. Mirrors the server policy in server/password.ts
+ * (>= 8 chars, <= 128, at least one letter and one number).
+ * Returns an error message if invalid, or null if OK.
+ */
+export function validatePassword(plain: string): string | null {
+  if (typeof plain !== "string" || plain.length < 8) {
+    return "Password must be at least 8 characters long.";
+  }
+  if (plain.length > 128) {
+    return "Password must be at most 128 characters long.";
+  }
+  if (!/[A-Za-z]/.test(plain) || !/[0-9]/.test(plain)) {
+    return "Password must include at least one letter and one number.";
+  }
+  return null;
+}

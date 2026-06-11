@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { Lock, ArrowRight, ShieldCheck, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { validatePassword } from "@/lib/ccm";
 
 const ROLE_HOME: Record<string, string> = {
   admin: "/admin",
@@ -48,8 +49,9 @@ export default function ChangePasswordPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (newPassword.length < 8) {
-      toast.error("Password must be at least 8 characters long.");
+    const pwErr = validatePassword(newPassword);
+    if (pwErr) {
+      toast.error(pwErr);
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -124,6 +126,9 @@ export default function ChangePasswordPage() {
                   placeholder="At least 8 chars, with a letter and number"
                 />
               </div>
+              {newPassword.length > 0 && validatePassword(newPassword) && (
+                <p className="mt-1.5 text-[12px] text-rose-600">{validatePassword(newPassword)}</p>
+              )}
             </div>
 
             <div>
@@ -139,11 +144,14 @@ export default function ChangePasswordPage() {
                   placeholder="Re-enter new password"
                 />
               </div>
+              {confirmPassword.length > 0 && confirmPassword !== newPassword && (
+                <p className="mt-1.5 text-[12px] text-rose-600">Passwords do not match.</p>
+              )}
             </div>
 
             <button
               type="submit"
-              disabled={changePassword.isPending}
+              disabled={changePassword.isPending || !!validatePassword(newPassword) || newPassword !== confirmPassword}
               className="group w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-slate-900 text-white font-semibold hover:bg-slate-800 active:scale-[0.98] transition-all duration-200 disabled:opacity-60"
             >
               {changePassword.isPending ? <Loader2 size={18} className="animate-spin" /> : "Update password"}
