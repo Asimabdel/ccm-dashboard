@@ -36,6 +36,7 @@ import {
   getFirstUserByRole,
   setUserRole,
   getAllUsers,
+  createMember,
   getDb,
   writeAuditLog,
   getAuditLogs,
@@ -53,13 +54,11 @@ import {
   followUpItems,
   billingRecords,
   users,
-  teamInvites,
 } from "../drizzle/schema";
 import { ccmNotesRouter } from "./routers/ccmNotes";
 import { seedDatabase, isSeeded, currentMonth } from "./seed";
 import { parsePatientCsv, findInBatchDuplicates } from "../shared/csvImport";
 import { clinics, providers } from "../drizzle/schema";
-import { sendEmail, buildInviteEmail } from "./_core/email";
 
 // ---- Role guards ----
 function requireRole(ctx: any, roles: string[]) {
@@ -170,43 +169,28 @@ export const appRouter = router({
       }),
   }),
 
-  invites: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx, ["admin"]);
-      const db = await getDb();
-      if (!db) return [];
-      return db.select().from(teamInvites);
-    }),
-    send: protectedProcedure
-      .input(z.object({ email: z.string().email(), role: roleEnum, clinicLocation: z.string().optional(), origin: z.string().url() }))
+  // ---- Admin: create worker logins directly (no email invites) ----
+  members: router({
+    // Create a login for a worker by email + role. They sign in with Manus OAuth
+    // using that email and inherit the assigned role automatically.
+    create: protectedProcedure
+      .input(z.object({
+        email: z.string().email(),
+        name: z.string().optional(),
+        role: roleEnum,
+        clinicLocation: z.string().optional(),
+      }))
       .mutation(async ({ input, ctx }) => {
         requireRole(ctx, ["admin"]);
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        const { origin, ...invite } = input;
-        await db.insert(teamInvites).values({ ...invite, invitedByUserId: ctx.user.id, status: "pending" });
-        void logAudit(ctx, "update_patient", { entityType: "invite", description: `Created invite for ${input.email}` });
-
-        // The invited person accepts simply by signing in with this email; the
-        // pending invite is auto-claimed on first login. The link routes them to login.
-        const inviteUrl = `${origin.replace(/\/$/, "")}/?invited=1`;
-        const { subject, html, text } = buildInviteEmail({
-          inviteUrl,
+        const result = await createMember({
+          email: input.email,
+          name: input.name ?? null,
           role: input.role,
-          inviterName: ctx.user.name ?? undefined,
-          clinicLocation: input.clinicLocation,
+          clinicLocation: input.clinicLocation ?? null,
         });
-        const emailResult = await sendEmail({ to: input.email, subject, html, text });
-        return { success: true, emailDelivered: emailResult.delivered, emailReason: emailResult.reason, inviteUrl };
+        void logAudit(ctx, "update_patient", { entityType: "user", description: `Created login for ${input.email} (${input.role})` });
+        return { success: true, created: result.created, pending: result.pending };
       }),
-    revoke: protectedProcedure.input(z.number()).mutation(async ({ input, ctx }) => {
-      requireRole(ctx, ["admin"]);
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db.update(teamInvites).set({ status: "revoked", updatedAt: new Date() }).where(eq(teamInvites.id, input));
-      void logAudit(ctx, "update_patient", { entityType: "invite", entityId: input, description: `Revoked invite #${input}` });
-      return { success: true };
-    }),
   }),
 
   // ---- Admin: seed + system ----
@@ -335,6 +319,27 @@ export const appRouter = router({
         const result = await updatePatientRPM(id, data);
         void logAudit(ctx, "update_rpm", { entityType: "patient", entityId: id, description: `Updated RPM for patient #${id}` });
         return result;
+      }),
+
+    /** Update Last Called and/or Next Appointment dates for a single patient. */
+    updateDates: protectedProcedure
+      .input(
+        z.object({
+          id: z.number(),
+          lastCalledAt: z.date().nullable().optional(),
+          nextAppointment: z.date().nullable().optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "staff", "front_desk"]);
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const data: Record<string, unknown> = { updatedAt: new Date() };
+        if (input.lastCalledAt !== undefined) data.lastCalledAt = input.lastCalledAt;
+        if (input.nextAppointment !== undefined) data.nextAppointment = input.nextAppointment;
+        await db.update(patients).set(data).where(eq(patients.id, input.id));
+        void logAudit(ctx, "update_patient", { entityType: "patient", entityId: input.id, description: `Updated dates for patient #${input.id}` });
+        return { success: true };
       }),
 
     /**

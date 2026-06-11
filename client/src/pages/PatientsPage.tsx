@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { Search, Plus, Loader2, UserPlus, X, Upload, AlertTriangle, Activity } from "lucide-react";
-import { PRIORITY_LABELS, priorityBadgeClass, statusBadgeClass, RPM_STATUS_LABELS, fmtDate } from "@/lib/ccm";
+import { PRIORITY_LABELS, priorityBadgeClass, statusBadgeClass, RPM_STATUS_LABELS, fmtDate, toDateInput } from "@/lib/ccm";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from "@/components/ui/dialog";
@@ -176,6 +176,10 @@ export default function PatientsPage() {
     onSuccess: () => { utils.patients.list.invalidate(); toast.success("RPM updated."); },
     onError: (e) => toast.error(e.message),
   });
+  const updateDates = trpc.patients.updateDates.useMutation({
+    onSuccess: () => { utils.patients.list.invalidate(); toast.success("Dates updated."); },
+    onError: (e) => toast.error(e.message),
+  });
 
   // Set of patient ids that share a name with another patient
   const dupIds = useMemo(() => {
@@ -269,8 +273,20 @@ export default function PatientsPage() {
                   </td>
                   <td className="px-5 py-3 text-slate-600">{r.providerName || "—"}</td>
                   <td className="px-5 py-3 text-slate-600">{r.clinicName || "—"}</td>
-                  <td className="px-5 py-3 text-slate-600 whitespace-nowrap">{fmtDate(r.patient.lastCalledAt)}</td>
-                  <td className="px-5 py-3 text-slate-600 whitespace-nowrap">{fmtDate(r.patient.nextAppointment)}</td>
+                  <td className="px-5 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                    {canEnroll ? (
+                      <input type="date" defaultValue={toDateInput(r.patient.lastCalledAt)}
+                        className="px-2 py-1 rounded-lg border border-slate-200 text-xs bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
+                        onChange={(e) => updateDates.mutate({ id: r.patient.id, lastCalledAt: e.target.value ? new Date(e.target.value + "T00:00:00") : null })} />
+                    ) : <span className="text-slate-600 text-sm">{fmtDate(r.patient.lastCalledAt)}</span>}
+                  </td>
+                  <td className="px-5 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                    {canEnroll ? (
+                      <input type="date" defaultValue={toDateInput(r.patient.nextAppointment)}
+                        className="px-2 py-1 rounded-lg border border-slate-200 text-xs bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
+                        onChange={(e) => updateDates.mutate({ id: r.patient.id, nextAppointment: e.target.value ? new Date(e.target.value + "T00:00:00") : null })} />
+                    ) : <span className="text-slate-600 text-sm">{fmtDate(r.patient.nextAppointment)}</span>}
+                  </td>
                   <td className="px-5 py-3"><span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${statusBadgeClass(r.patient.ccmEnrollmentStatus ?? "active")}`}>{r.patient.ccmEnrollmentStatus}</span></td>
                   <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
                     {canEnroll ? (

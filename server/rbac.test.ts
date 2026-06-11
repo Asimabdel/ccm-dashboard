@@ -64,19 +64,21 @@ describe("role-based access control", () => {
     await expect(caller.patients.bulkImportPreview({ csv: "name,phoneNumber\nA Patient,555" })).rejects.toThrow();
   });
 
-  it("blocks non-admin from sending team invites", async () => {
+  it("blocks non-admin from creating worker logins", async () => {
     const caller = appRouter.createCaller(ctxFor("staff"));
-    await expect(caller.invites.send({ email: "x@y.com", role: "staff" })).rejects.toThrow();
-  });
-
-  it("blocks non-admin from revoking invites", async () => {
-    const caller = appRouter.createCaller(ctxFor("front_desk"));
-    await expect(caller.invites.revoke(1)).rejects.toThrow();
+    await expect(caller.members.create({ email: "x@y.com", role: "staff" })).rejects.toThrow();
   });
 
   it("blocks non-admin from removing a team member", async () => {
     const caller = appRouter.createCaller(ctxFor("staff"));
     await expect(caller.users.remove(1)).rejects.toThrow();
+  });
+
+  it("blocks provider/billing from editing patient Last Called / Next Appointment dates", async () => {
+    const provider = appRouter.createCaller(ctxFor("provider"));
+    await expect(provider.patients.updateDates({ id: 1, lastCalledAt: new Date() })).rejects.toThrow();
+    const billing = appRouter.createCaller(ctxFor("billing"));
+    await expect(billing.patients.updateDates({ id: 1, nextAppointment: new Date() })).rejects.toThrow();
   });
 
   it("prevents an admin from removing their own account (lockout guard)", async () => {

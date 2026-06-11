@@ -38,20 +38,15 @@ export default function BillingPage() {
   }
 
   const rows = list.data || [];
-  const readyCount = rows.filter((r) => r.billing.billingStatus === "ready_for_billing").length;
   const billedCount = rows.filter((r) => r.billing.billingStatus === "billed").length;
   const field = "px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]";
 
   return (
     <CCMDashboardLayout title="Billing Readiness">
-      <div className="grid sm:grid-cols-3 gap-4 mb-6">
+      <div className="grid sm:grid-cols-2 gap-4 mb-6">
         <div className="bg-white rounded-3xl border border-slate-100 p-5">
           <p className="text-xs uppercase tracking-wider text-slate-400">Total Records</p>
           <p className="text-3xl font-bold text-slate-900 mt-1">{rows.length}</p>
-        </div>
-        <div className="bg-white rounded-3xl border border-slate-100 p-5">
-          <p className="text-xs uppercase tracking-wider text-slate-400">Ready for Billing</p>
-          <p className="text-3xl font-bold text-emerald-600 mt-1">{readyCount}</p>
         </div>
         <div className="bg-white rounded-3xl border border-slate-100 p-5">
           <p className="text-xs uppercase tracking-wider text-slate-400">Billed</p>

@@ -104,3 +104,14 @@
 - [x] Patient table: add Last Called column (auto-updates on contact)
 - [x] Patient table: add Next Appointment column
 - [x] Vitest: template detection + parsing + duplicate flagging + Resend key (34 tests pass)
+
+## Round 5: Fix invites DB error, login creation, remove billing readiness, editable dates, readability
+- [ ] Diagnose & fix `teamInvites` insert failure ("Failed query" on send invite / role assign)
+- [ ] Replace email invites with admin-created worker logins (create login directly)
+- [ ] Remove "Ready for Billing" feature/page/nav entirely
+- [ ] Allow editing + manual date input for "Last CCM Call" (lastCalledAt)
+- [ ] Allow editing + manual date input for "Next Appointment" (nextAppointment)
+- [ ] Improve readability: fonts, contrast, transparent panels (Enroll form, headers, dropdowns)
+- [ ] Verify bulk import accepts the two real templates on the LIVE build (no phonenumber error)
+- [ ] Thorough review of every page/flow; fix anything broken
+- [ ] Ensure all tests pass and TypeScript clean

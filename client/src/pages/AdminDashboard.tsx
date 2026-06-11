@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import {
-  Users, ClipboardCheck, PhoneOff, AlertTriangle, Receipt, TrendingUp, Database, Loader2,
+  Users, ClipboardCheck, PhoneOff, AlertTriangle, TrendingUp, Database, Loader2,
 } from "lucide-react";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
@@ -113,9 +113,8 @@ export default function AdminDashboard() {
         <StatCard index={2} icon={PhoneOff} label="Not Reached" value={s?.notReached ?? "—"} sub="Called No Answer / Voicemail" tone="warn" />
         <StatCard index={3} icon={AlertTriangle} label="Pending Escalations" value={s?.pendingEscalations ?? "—"} sub="Awaiting provider review" tone="bad" />
         <StatCard index={4} icon={ClipboardCheck} label="Not Started" value={s?.notStarted ?? "—"} sub="Awaiting first contact" />
-        <StatCard index={5} icon={Receipt} label="Ready for Billing" value={s?.readyForBilling ?? "—"} sub="Documentation complete" tone="good" />
-        <StatCard index={6} icon={TrendingUp} label="In Progress" value={s?.inProgress ?? "—"} sub="Currently being worked" />
-        <StatCard index={7} icon={AlertTriangle} label="Needs Review" value={s?.needsReview ?? "—"} sub="Flagged for provider" tone="warn" />
+        <StatCard index={5} icon={TrendingUp} label="In Progress" value={s?.inProgress ?? "—"} sub="Currently being worked" />
+        <StatCard index={6} icon={AlertTriangle} label="Needs Review" value={s?.needsReview ?? "—"} sub="Flagged for provider" tone="warn" />
       </div>
 
       <div className="mt-6 bg-white rounded-3xl p-6 border border-slate-100">

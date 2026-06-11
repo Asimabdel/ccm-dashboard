@@ -3,8 +3,9 @@ import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { trpc } from "@/lib/trpc";
 import { useParams, useLocation } from "wouter";
 import { ArrowLeft, Loader2, Phone, Calendar, Shield, Globe, User, Activity, FileText, ClipboardList } from "lucide-react";
+import { toast } from "sonner";
 import {
-  PRIORITY_LABELS, STATUS_LABELS, priorityBadgeClass, statusBadgeClass, fmtDate, FOLLOWUP_TYPE_LABELS, FOLLOWUP_STATUS_LABELS,
+  PRIORITY_LABELS, STATUS_LABELS, priorityBadgeClass, statusBadgeClass, fmtDate, toDateInput, FOLLOWUP_TYPE_LABELS, FOLLOWUP_STATUS_LABELS,
 } from "@/lib/ccm";
 
 function Section({ title, icon: Icon, children }: { title: string; icon: React.ElementType; children: React.ReactNode }) {
@@ -22,6 +23,12 @@ export default function PatientDetailPage() {
   const [, setLocation] = useLocation();
   const id = Number(params.id);
   const detail = trpc.patients.detail.useQuery(id, { enabled: !!user && !!id });
+  const utils = trpc.useUtils();
+  const canEdit = !!user && ["admin", "staff", "front_desk"].includes(user.role);
+  const updateDates = trpc.patients.updateDates.useMutation({
+    onSuccess: () => { utils.patients.detail.invalidate(id); toast.success("Dates updated."); },
+    onError: (e) => toast.error(e.message),
+  });
 
   if (loading || !user) {
     return <div className="min-h-screen flex items-center justify-center bg-[hsl(240_10%_97%)]"><Loader2 className="animate-spin text-slate-400" /></div>;
@@ -61,8 +68,22 @@ export default function PatientDetailPage() {
               <div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400 flex items-center gap-1.5"><User size={12} /> Provider</p><p className="mt-1 font-semibold text-slate-800">{d.provider?.name || "—"}</p></div>
               <div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Clinic</p><p className="mt-1 font-semibold text-slate-800">{d.clinic?.name || "—"}</p></div>
               <div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Assigned Staff</p><p className="mt-1 font-semibold text-slate-800">{d.staff?.name || "Unassigned"}</p></div>
-              <div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Last Called</p><p className="mt-1 font-semibold text-slate-800">{fmtDate(d.patient.lastCalledAt)}</p></div>
-              <div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Next Appointment</p><p className="mt-1 font-semibold text-slate-800">{fmtDate(d.patient.nextAppointment)}</p></div>
+              <div className="rounded-2xl bg-slate-50 p-3">
+                <p className="text-xs text-slate-400">Last Called</p>
+                {canEdit ? (
+                  <input type="date" defaultValue={toDateInput(d.patient.lastCalledAt)}
+                    className="mt-1 px-2 py-1 rounded-lg border border-slate-200 text-sm bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
+                    onChange={(e) => updateDates.mutate({ id, lastCalledAt: e.target.value ? new Date(e.target.value + "T00:00:00") : null })} />
+                ) : <p className="mt-1 font-semibold text-slate-800">{fmtDate(d.patient.lastCalledAt)}</p>}
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-3">
+                <p className="text-xs text-slate-400">Next Appointment</p>
+                {canEdit ? (
+                  <input type="date" defaultValue={toDateInput(d.patient.nextAppointment)}
+                    className="mt-1 px-2 py-1 rounded-lg border border-slate-200 text-sm bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
+                    onChange={(e) => updateDates.mutate({ id, nextAppointment: e.target.value ? new Date(e.target.value + "T00:00:00") : null })} />
+                ) : <p className="mt-1 font-semibold text-slate-800">{fmtDate(d.patient.nextAppointment)}</p>}
+              </div>
             </div>
           </div>
 

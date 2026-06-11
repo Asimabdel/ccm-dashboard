@@ -1,4 +1,4 @@
-import { eq, and, gte, lte, desc, sql } from "drizzle-orm";
+import { eq, and, gte, lte, desc, sql, like } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -75,26 +75,30 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       updateSet.role = "admin";
     }
 
-    // Claim a pending team invite matching this email (assign role + clinic on first sign-in).
-    let claimedInvite: { id: number; role: typeof teamInvites.$inferSelect["role"]; clinicLocation: string | null } | null = null;
+    // Link an admin-pre-created "pending" login: if no row matches this openId yet but a
+    // pending row matches the email, upgrade that row's openId and keep its assigned role.
     if (user.email && user.openId !== ENV.ownerOpenId) {
-      const existing = await db.select().from(users).where(eq(users.openId, user.openId)).limit(1);
-      const isNewOrUnassigned = !existing.length || existing[0].role === "user";
-      if (isNewOrUnassigned) {
-        const invites = await db
+      const byOpenId = await db.select().from(users).where(eq(users.openId, user.openId)).limit(1);
+      if (!byOpenId.length) {
+        const email = user.email.trim().toLowerCase();
+        const pending = await db
           .select()
-          .from(teamInvites)
-          .where(and(eq(teamInvites.email, user.email), eq(teamInvites.status, "pending")))
+          .from(users)
+          .where(and(eq(users.email, email), like(users.openId, "pending:%")))
           .limit(1);
-        if (invites.length) {
-          const inv = invites[0];
-          claimedInvite = { id: inv.id, role: inv.role, clinicLocation: inv.clinicLocation };
-          values.role = inv.role;
-          updateSet.role = inv.role;
-          if (inv.clinicLocation) {
-            values.clinicLocation = inv.clinicLocation;
-            updateSet.clinicLocation = inv.clinicLocation;
-          }
+        if (pending.length) {
+          const row = pending[0];
+          await db
+            .update(users)
+            .set({
+              openId: user.openId,
+              name: user.name ?? row.name,
+              loginMethod: user.loginMethod ?? row.loginMethod,
+              lastSignedIn: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(users.id, row.id));
+          return; // role preserved from the pre-created row
         }
       }
     }
@@ -110,10 +114,6 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     await db.insert(users).values(values).onDuplicateKeyUpdate({
       set: updateSet,
     });
-
-    if (claimedInvite) {
-      await db.update(teamInvites).set({ status: "accepted", updatedAt: new Date() }).where(eq(teamInvites.id, claimedInvite.id));
-    }
   } catch (error) {
     console.error("[Database] Failed to upsert user:", error);
     throw error;
@@ -855,17 +855,64 @@ export async function setUserRole(userId: number, role: "admin" | "staff" | "pro
 export async function getAllUsers() {
   const db = await getDb();
   if (!db) return [];
-  return db
+  const rows = await db
     .select({
       id: users.id,
       openId: users.openId,
       name: users.name,
       email: users.email,
       role: users.role,
+      clinicLocation: users.clinicLocation,
+      lastSignedIn: users.lastSignedIn,
       createdAt: users.createdAt,
     })
     .from(users)
     .orderBy(desc(users.createdAt));
+  // A member whose openId is still a placeholder has not signed in yet.
+  return rows.map((r) => ({ ...r, pending: r.openId.startsWith("pending:") }));
+}
+
+const PENDING_PREFIX = "pending:";
+
+/**
+ * Admin-created worker login. Pre-creates (or updates) a users row keyed by email
+ * with the assigned role. The worker then signs in with Manus OAuth using that email,
+ * at which point upsertUser links their real openId and preserves the assigned role.
+ */
+export async function createMember(input: {
+  email: string;
+  name?: string | null;
+  role: "admin" | "staff" | "provider" | "billing" | "front_desk" | "user";
+  clinicLocation?: string | null;
+}): Promise<{ created: boolean; pending: boolean }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const email = input.email.trim().toLowerCase();
+
+  const existing = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  if (existing.length) {
+    const row = existing[0];
+    await db
+      .update(users)
+      .set({
+        role: input.role,
+        name: input.name ?? row.name,
+        clinicLocation: input.clinicLocation ?? row.clinicLocation,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, row.id));
+    return { created: false, pending: row.openId.startsWith(PENDING_PREFIX) };
+  }
+
+  await db.insert(users).values({
+    openId: `${PENDING_PREFIX}${email}`,
+    email,
+    name: input.name ?? null,
+    role: input.role,
+    clinicLocation: input.clinicLocation ?? null,
+    loginMethod: "manus",
+  });
+  return { created: true, pending: true };
 }
 
 // ---------------------------------------------------------------------------

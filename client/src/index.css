@@ -31,7 +31,7 @@
   --radius: 0.5rem;
 
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-display: "Syne", "Inter", -apple-system, sans-serif;
+  --font-display: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
@@ -50,7 +50,7 @@
   --secondary: 340 100% 71%;
   --secondary-foreground: 220 13% 15%;
   --muted: 220 13% 90%;
-  --muted-foreground: 220 13% 45%;
+  --muted-foreground: 220 13% 38%;
   --accent: 200 100% 50%;
   --accent-foreground: 0 0% 100%;
   --destructive: 0 84% 60%;
@@ -73,13 +73,18 @@
 
   body {
     background-color: hsl(240 10% 97%);
-    color: hsl(220 13% 15%);
+    color: hsl(220 14% 13%);
     font-family: var(--font-sans);
+    font-weight: 400;
+    font-size: 15px;
+    line-height: 1.55;
+    text-rendering: optimizeLegibility;
   }
 
   h1, h2, h3, h4, h5, h6 {
     font-family: var(--font-display);
-    letter-spacing: -0.02em;
+    letter-spacing: -0.015em;
+    font-weight: 700;
   }
 
   button, a, input, textarea, select {
