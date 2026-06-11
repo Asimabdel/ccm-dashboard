@@ -16,6 +16,7 @@ import {
   auditLogs,
   teamInvites,
   type InsertAuditLog,
+  type User,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
@@ -863,13 +864,24 @@ export async function getAllUsers() {
       email: users.email,
       role: users.role,
       clinicLocation: users.clinicLocation,
+      loginMethod: users.loginMethod,
+      mustChangePassword: users.mustChangePassword,
+      passwordSetAt: users.passwordSetAt,
       lastSignedIn: users.lastSignedIn,
       createdAt: users.createdAt,
     })
     .from(users)
     .orderBy(desc(users.createdAt));
   // A member whose openId is still a placeholder has not signed in yet.
-  return rows.map((r) => ({ ...r, pending: r.openId.startsWith("pending:") }));
+  // `hasPassword` lets the admin see at a glance who can sign in with a password.
+  return rows.map((r) => {
+    const { passwordSetAt, ...rest } = r;
+    return {
+      ...rest,
+      pending: r.openId.startsWith("pending:"),
+      hasPassword: !!passwordSetAt,
+    };
+  });
 }
 
 const PENDING_PREFIX = "pending:";
@@ -955,6 +967,59 @@ export async function setUserPassword(userId: number, passwordHash: string, must
       updatedAt: new Date(),
     })
     .where(eq(users.id, userId));
+}
+
+/** A user object with all credential material removed, safe to send to the client. */
+export type SafeUser = Omit<User, "passwordHash" | "passwordSetAt">;
+
+/**
+ * Strip sensitive auth fields (password hash, etc.) from a user row before it is
+ * ever returned to the client. HIPAA: never expose credential material to the browser.
+ */
+export function sanitizeUser(user: User): SafeUser;
+export function sanitizeUser(user: User | null | undefined): SafeUser | null;
+export function sanitizeUser(user: User | null | undefined): SafeUser | null {
+  if (!user) return null;
+  const { passwordHash: _ph, passwordSetAt: _ps, ...safe } = user;
+  return safe;
+}
+
+// ---------------------------------------------------------------------------
+// Brute-force protection for password login
+// ---------------------------------------------------------------------------
+
+type Attempt = { count: number; firstAt: number; lockedUntil: number | null };
+const loginAttempts = new Map<string, Attempt>();
+const MAX_ATTEMPTS = 5;
+const ATTEMPT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
+
+/** Returns remaining lockout ms if the identifier is currently locked, else 0. */
+export function getLockoutRemaining(identifier: string): number {
+  const a = loginAttempts.get(identifier.toLowerCase());
+  if (!a || !a.lockedUntil) return 0;
+  const remaining = a.lockedUntil - Date.now();
+  return remaining > 0 ? remaining : 0;
+}
+
+/** Record a failed login attempt; locks the identifier after MAX_ATTEMPTS within the window. */
+export function recordFailedLogin(identifier: string): void {
+  const key = identifier.toLowerCase();
+  const now = Date.now();
+  const a = loginAttempts.get(key);
+  if (!a || now - a.firstAt > ATTEMPT_WINDOW_MS) {
+    loginAttempts.set(key, { count: 1, firstAt: now, lockedUntil: null });
+    return;
+  }
+  a.count += 1;
+  if (a.count >= MAX_ATTEMPTS) {
+    a.lockedUntil = now + LOCKOUT_MS;
+  }
+}
+
+/** Clear attempt state after a successful login. */
+export function clearLoginAttempts(identifier: string): void {
+  loginAttempts.delete(identifier.toLowerCase());
 }
 
 // ---------------------------------------------------------------------------

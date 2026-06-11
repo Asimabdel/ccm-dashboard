@@ -136,3 +136,18 @@
 - [x] Inline password requirement hint on reset-password dialog (disable save until valid)
 - [x] Shared client-side password validation helper (validatePassword in lib/ccm) matching server policy
 - [x] Same inline validation + match check applied to Change Password page
+
+## Round 8: Fix login + HIPAA hardening
+- [x] Root-cause worker login failure: session cookie was SameSite=None (dropped by privacy-restricted browsers/webviews on a same-origin app)
+- [x] Change session cookie to SameSite=Lax (Secure on HTTPS); OAuth top-level redirect still works
+- [x] Add session round-trip test for password users (authenticateRequest) — passes
+- [x] Verify live: passwordLogin 200 + cookie SameSite=Lax + auth.me round-trip returns the worker
+- [x] Fix clearCookie deprecation warning (logout)
+- [x] HIPAA: session inactivity auto-logout (15-min idle, 60s warning) already wired in dashboard layout
+- [x] HIPAA: audit logging covers PHI access (view_patient, list_patients) + all mutations + login/login_failed/change/reset/manage_access
+- [x] HIPAA: account lockout on password login (5 attempts / 15 min) + generic error to prevent user enumeration
+- [x] HIPAA: strip passwordHash/passwordSetAt from all API responses (sanitizeUser) — verified live
+- [x] HIPAA: PHI confidentiality notice on login screen
+- [x] HIPAA: least-privilege RBAC enforced per role (adminProcedure/requireRole) + tests
+- [x] HIPAA: tests for sanitizeUser + lockout (60 tests pass)
+- [x] HIPAA: compliance summary doc (HIPAA_COMPLIANCE.md) covering technical safeguards + org responsibilities/BAA

@@ -42,6 +42,10 @@ import {
   getUserByEmail,
   getUserByOpenId,
   setUserPassword,
+  sanitizeUser,
+  getLockoutRemaining,
+  recordFailedLogin,
+  clearLoginAttempts,
   getDb,
   writeAuditLog,
   getAuditLogs,
@@ -103,10 +107,10 @@ export const appRouter = router({
   ccmNotesAI: ccmNotesRouter,
 
   auth: router({
-    me: publicProcedure.query((opts) => opts.ctx.user),
+    me: publicProcedure.query((opts) => sanitizeUser(opts.ctx.user)),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
+      ctx.res.clearCookie(COOKIE_NAME, cookieOptions);
       return { success: true } as const;
     }),
     // Admin-only role switcher so the owner/admin can preview every role-based
@@ -117,7 +121,7 @@ export const appRouter = router({
       .mutation(async ({ input, ctx }) => {
         requireRole(ctx, ["admin"]);
         await setUserRole(ctx.user.id, input.role);
-        void logAudit(ctx, "update_patient", { description: `Admin previewed role: ${input.role}` });
+        void logAudit(ctx, "manage_access", { description: `Admin previewed role: ${input.role}` });
         return { success: true, role: input.role };
       }),
 
@@ -127,14 +131,27 @@ export const appRouter = router({
       .input(z.object({ email: z.string().email(), password: z.string().min(1) }))
       .mutation(async ({ input, ctx }) => {
         const genericError = new TRPCError({ code: "UNAUTHORIZED", message: "Incorrect email or password." });
+        const idKey = input.email.trim().toLowerCase();
+        // Brute-force protection: lock the account+IP identifier after repeated failures.
+        const lockMs = getLockoutRemaining(idKey);
+        if (lockMs > 0) {
+          throw new TRPCError({
+            code: "TOO_MANY_REQUESTS",
+            message: `Too many failed attempts. Try again in ${Math.ceil(lockMs / 60000)} minute(s).`,
+          });
+        }
         const user = await getUserByEmail(input.email);
         if (!user || !user.passwordHash) {
+          recordFailedLogin(idKey);
           throw genericError;
         }
         const ok = await verifyPassword(input.password, user.passwordHash);
         if (!ok) {
+          recordFailedLogin(idKey);
+          void logAudit({ user }, "login_failed", { entityType: "user", entityId: user.id, description: `Failed password login: ${user.email}` });
           throw genericError;
         }
+        clearLoginAttempts(idKey);
         const sessionToken = await sdk.createSessionToken(user.openId, {
           name: user.name || user.email || "",
           expiresInMs: ONE_YEAR_MS,
@@ -168,7 +185,7 @@ export const appRouter = router({
         }
         const newHash = await hashPassword(input.newPassword);
         await setUserPassword(fresh.id, newHash, false);
-        void logAudit(ctx, "update_patient", { entityType: "user", entityId: fresh.id, description: `Changed own password` });
+        void logAudit(ctx, "change_password", { entityType: "user", entityId: fresh.id, description: `Changed own password` });
         return { success: true };
       }),
   }),
@@ -177,6 +194,7 @@ export const appRouter = router({
   users: router({
     list: protectedProcedure.query(async ({ ctx }) => {
       requireRole(ctx, ["admin"]);
+      // getAllUsers() already projects out credential fields (no passwordHash).
       return getAllUsers();
     }),
     setRole: protectedProcedure
@@ -188,7 +206,7 @@ export const appRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: "You cannot change your own admin role. Ask another admin to do this." });
         }
         await setUserRole(input.userId, input.role);
-        void logAudit(ctx, "update_patient", { entityType: "user", entityId: input.userId, description: `Set user #${input.userId} role to ${input.role}` });
+        void logAudit(ctx, "manage_access", { entityType: "user", entityId: input.userId, description: `Set user #${input.userId} role to ${input.role}` });
         return { success: true };
       }),
     update: protectedProcedure
@@ -207,7 +225,7 @@ export const appRouter = router({
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { id, ...updateData } = input;
         await db.update(users).set({ ...updateData, updatedAt: new Date() }).where(eq(users.id, id));
-        void logAudit(ctx, "update_patient", { entityType: "user", entityId: id, description: `Updated user #${id}` });
+        void logAudit(ctx, "manage_access", { entityType: "user", entityId: id, description: `Updated user #${id}` });
         return { success: true };
       }),
     remove: protectedProcedure
@@ -220,7 +238,7 @@ export const appRouter = router({
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         await db.update(users).set({ role: "user", clinicLocation: null, updatedAt: new Date() }).where(eq(users.id, input));
-        void logAudit(ctx, "update_patient", { entityType: "user", entityId: input, description: `Removed access for user #${input}` });
+        void logAudit(ctx, "manage_access", { entityType: "user", entityId: input, description: `Removed access for user #${input}` });
         return { success: true };
       }),
     // Admin sets/resets a worker's password. Worker must change it on next login.
@@ -234,7 +252,7 @@ export const appRouter = router({
         }
         const newHash = await hashPassword(input.password);
         await setUserPassword(input.userId, newHash, true);
-        void logAudit(ctx, "update_patient", { entityType: "user", entityId: input.userId, description: `Admin reset password for user #${input.userId}` });
+        void logAudit(ctx, "reset_password", { entityType: "user", entityId: input.userId, description: `Admin reset password for user #${input.userId}` });
         return { success: true };
       }),
   }),
@@ -268,7 +286,7 @@ export const appRouter = router({
           clinicLocation: input.clinicLocation ?? null,
           passwordHash,
         });
-        void logAudit(ctx, "update_patient", { entityType: "user", description: `Created login for ${input.email} (${input.role})${passwordHash ? " with password" : ""}` });
+        void logAudit(ctx, "manage_access", { entityType: "user", description: `Created login for ${input.email} (${input.role})${passwordHash ? " with password" : ""}` });
         return { success: true, created: result.created, pending: result.pending };
       }),
   }),

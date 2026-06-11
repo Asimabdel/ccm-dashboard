@@ -188,6 +188,7 @@ export default function TeamAccessPage() {
                 const isSelf = u.id === user.id;
                 const hasAccess = u.role !== "user";
                 const pending = (u as { pending?: boolean }).pending;
+                const hasPassword = (u as { hasPassword?: boolean }).hasPassword;
                 return (
                   <tr key={u.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
                     <td className="px-5 py-3">
@@ -203,6 +204,13 @@ export default function TeamAccessPage() {
                       ) : (
                         <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 text-[11px] font-semibold"><CheckCircle2 size={11} /> Active</span>
                       )}
+                      <div className="mt-1">
+                        {hasPassword ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-slate-500"><KeyRound size={10} /> Password set</span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-slate-400"><Mail size={10} /> Manus sign-in only</span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-5 py-3"><span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${roleBadge(u.role)}`}>{u.role.replace("_", " ")}</span></td>
                     <td className="px-5 py-3">

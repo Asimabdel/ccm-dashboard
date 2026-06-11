@@ -159,6 +159,16 @@ export default function Home() {
               {loading ? "Checking your session..." : "Password login is for accounts created by your administrator."}
             </p>
           </div>
+
+          <div className="mt-4 flex items-start gap-2 rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3">
+            <ShieldCheck size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+            <p className="text-[11px] leading-relaxed text-slate-500">
+              This is a secure system containing protected health information (PHI).
+              Access is restricted to authorized users and all activity is logged.
+              Unauthorized access or disclosure is prohibited and may be subject to
+              penalties under HIPAA and applicable law.
+            </p>
+          </div>
         </div>
       </div>
     </div>

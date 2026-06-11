@@ -39,10 +39,16 @@ export function getSessionCookieOptions(
   //       ? hostname
   //       : undefined;
 
+  // The frontend and API are served from the SAME origin (the tRPC client uses a
+  // relative `/api/trpc` URL), so `SameSite=Lax` is correct and far more reliable than
+  // `None`: it survives top-level navigations and same-site requests, and is not dropped
+  // by browsers/embedded webviews that block third-party (`SameSite=None`) cookies.
+  // `Secure` is kept on HTTPS so the session cookie is only sent over TLS.
+  const secure = isSecureRequest(req);
   return {
     httpOnly: true,
     path: "/",
-    sameSite: "none",
-    secure: isSecureRequest(req),
+    sameSite: "lax",
+    secure,
   };
 }
