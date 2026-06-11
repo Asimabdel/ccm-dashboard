@@ -20,11 +20,13 @@ import AuditLogPage from "./pages/AuditLogPage";
 import TeamAccessPage from "./pages/TeamAccessPage";
 import ClinicsPage from "./pages/ClinicsPage";
 import ProvidersPage from "./pages/ProvidersPage";
+import ChangePasswordPage from "./pages/ChangePasswordPage";
 
 function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
+      <Route path="/change-password" component={ChangePasswordPage} />
       <Route path="/admin" component={AdminDashboard} />
       <Route path="/patients" component={PatientsPage} />
       <Route path="/patients/import" component={BulkImportPage} />

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
@@ -77,6 +77,14 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
       setLocation(NAV[currentRole]?.[0]?.path ?? "/");
     },
   });
+
+  // Global enforcement: a worker flagged to change their password cannot use the
+  // app until they do. Redirect them to the forced change-password screen.
+  useEffect(() => {
+    if (user && (user as { mustChangePassword?: boolean }).mustChangePassword && location !== "/change-password") {
+      setLocation("/change-password?forced=1");
+    }
+  }, [user, location, setLocation]);
 
   if (!user) return null;
 

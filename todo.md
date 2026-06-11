@@ -115,3 +115,18 @@
 - [x] Verify bulk import accepts the two real templates (Dr.Mai 388 rows, Chart Notes 115 rows; no phonenumber error)
 - [x] Thorough review of every page/flow; all 18 routes map to imported pages, auth/RBAC redirects work
 - [x] Ensure all tests pass (34) and TypeScript clean (0 errors)
+
+## Round 6: Email + password login (alongside Manus OAuth)
+- [x] Schema: add passwordHash, passwordSetAt, mustChangePassword to users (applied to live DB)
+- [x] Backend: bcryptjs installed; password helpers (getUserByEmail, setUserPassword) added; createMember accepts passwordHash
+- [x] Backend: createMember sets hash + mustChangePassword + local: openId for immediate sign-in
+- [x] Backend: auth.passwordLogin (email+password) issues same JWT session cookie via sdk.createSessionToken
+- [x] Backend: auth.changePassword (self; requires current pw unless mustChangePassword) clears flag
+- [x] Backend: users.resetPassword (admin sets new temp password, forces change)
+- [x] Frontend: password login form on Home (email + password) alongside Manus sign-in
+- [x] Frontend: first-login forced change-password screen (/change-password?forced=1)
+- [x] Frontend: Team & Access — temporary password on create + Set/reset password action per member
+- [x] Vitest: password helpers (hash/verify/strength) + RBAC for reset/change/login (44 tests pass)
+- [x] Global enforcement: dashboard layout redirects mustChangePassword users to /change-password
+- [x] Live endpoint check: auth.passwordLogin returns 401 for bad credentials (DB-backed)
+- [x] All tests pass (44) + TypeScript clean (0 errors)

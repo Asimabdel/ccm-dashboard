@@ -3,11 +3,14 @@ import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { useState } from "react";
-import { Loader2, UserCog, ShieldCheck, Mail, UserPlus, Trash2, CheckCircle2, Clock } from "lucide-react";
+import { Loader2, UserCog, ShieldCheck, Mail, UserPlus, Trash2, CheckCircle2, Clock, KeyRound, Lock } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 
 const ROLE_OPTIONS = [
   { value: "admin", label: "Admin / Practice Manager" },
@@ -41,23 +44,39 @@ export default function TeamAccessPage() {
   const [name, setName] = useState("");
   const [newRole, setNewRole] = useState<string>("staff");
   const [clinicLocation, setClinicLocation] = useState("");
+  const [password, setPassword] = useState("");
   const [removeTarget, setRemoveTarget] = useState<{ id: number; name: string } | null>(null);
+
+  // Reset-password dialog state
+  const [resetTarget, setResetTarget] = useState<{ id: number; name: string } | null>(null);
+  const [resetPassword, setResetPassword] = useState("");
 
   const setRole = trpc.users.setRole.useMutation({
     onSuccess: () => { utils.users.list.invalidate(); toast.success("Role updated."); },
     onError: (e: { message: string }) => toast.error(e.message),
   });
   const createMember = trpc.members.create.useMutation({
-    onSuccess: () => {
+    onSuccess: (res) => {
       utils.users.list.invalidate();
-      toast.success("Login created. They get this role automatically when they sign in with that email.");
-      setEmail(""); setName(""); setClinicLocation("");
+      if (res.pending) {
+        toast.success("Login created. They get this role automatically when they first sign in with that email.");
+      } else {
+        toast.success("Login created with a password. Share the email + password so they can sign in now.");
+      }
+      setEmail(""); setName(""); setClinicLocation(""); setPassword("");
     },
     onError: (e: { message: string }) => toast.error(e.message),
   });
   const removeMember = trpc.users.remove.useMutation({
     onSuccess: () => { utils.users.list.invalidate(); toast.success("Access revoked."); setRemoveTarget(null); },
     onError: (e: { message: string }) => { toast.error(e.message); setRemoveTarget(null); },
+  });
+  const resetPasswordMut = trpc.users.resetPassword.useMutation({
+    onSuccess: () => {
+      toast.success("Password set. The worker must change it on next sign-in.");
+      setResetTarget(null); setResetPassword("");
+    },
+    onError: (e: { message: string }) => toast.error(e.message),
   });
 
   if (loading || !user) {
@@ -67,72 +86,92 @@ export default function TeamAccessPage() {
   if (!isAdmin) {
     return (
       <CCMDashboardLayout title="Team & Access">
-        <div className="bg-white rounded-3xl border border-slate-100 p-10 text-center text-slate-500">
+        <div className="bg-white rounded-3xl border border-slate-200 p-10 text-center text-slate-500">
           Team management is restricted to administrators.
         </div>
       </CCMDashboardLayout>
     );
   }
 
-  const field = "px-3 py-2.5 rounded-xl border border-slate-200 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)] transition";
+  const field = "px-3 py-2.5 rounded-xl border border-slate-300 text-sm bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)] transition";
   const allUsers = usersQuery.data || [];
   const pendingCount = allUsers.filter((u) => (u as { pending?: boolean }).pending).length;
 
   return (
     <CCMDashboardLayout title="Team & Access">
-      <div className="flex items-center gap-2 mb-5 text-slate-500 text-sm">
-        <ShieldCheck size={16} className="text-emerald-600" />
-        Workers sign in with their own Manus account. Create a login by email to pre-assign a role; they get that role automatically the first time they sign in with that email (HIPAA minimum-necessary principle).
+      <div className="flex items-start gap-2 mb-5 text-slate-600 text-sm">
+        <ShieldCheck size={16} className="text-emerald-600 mt-0.5 shrink-0" />
+        <span>
+          Create a worker login by email and assign a role. Set a temporary password so they can sign in immediately with email + password
+          (they'll be asked to change it on first login). Leave the password blank to instead let them sign in with their own Manus account.
+        </span>
       </div>
 
       {/* Create login form */}
-      <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_28px_-18px_rgba(15,23,42,0.18)] p-6 mb-6">
+      <div className="bg-white rounded-3xl border border-slate-200 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_28px_-18px_rgba(15,23,42,0.18)] p-6 mb-6">
         <div className="flex items-center gap-2 mb-4"><UserPlus size={17} className="text-[hsl(200_100%_45%)]" /><h3 className="font-bold text-slate-900">Create a worker login</h3></div>
         <form
-          className="grid sm:grid-cols-2 lg:grid-cols-[1fr_1fr_auto_1fr_auto] gap-3 items-end"
-          onSubmit={(e) => { e.preventDefault(); if (!email) return; createMember.mutate({ email, name: name || undefined, role: newRole as "admin" | "staff" | "provider" | "billing" | "front_desk", clinicLocation: clinicLocation || undefined }); }}
+          className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 items-end"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!email) return;
+            createMember.mutate({
+              email,
+              name: name || undefined,
+              role: newRole as "admin" | "staff" | "provider" | "billing" | "front_desk",
+              clinicLocation: clinicLocation || undefined,
+              password: password || undefined,
+            });
+          }}
         >
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1.5">Work email</label>
+            <label className="block text-xs font-semibold text-slate-600 mb-1.5">Work email</label>
             <div className="relative">
-              <Mail size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" />
+              <Mail size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nurse@clinic.com" className={`${field} w-full pl-9`} />
             </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1.5">Name <span className="text-slate-300">(optional)</span></label>
+            <label className="block text-xs font-semibold text-slate-600 mb-1.5">Name <span className="text-slate-400 font-normal">(optional)</span></label>
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Jane Doe" className={`${field} w-full`} />
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1.5">Role</label>
-            <select value={newRole} onChange={(e) => setNewRole(e.target.value)} className={field}>
+            <label className="block text-xs font-semibold text-slate-600 mb-1.5">Role</label>
+            <select value={newRole} onChange={(e) => setNewRole(e.target.value)} className={`${field} w-full`}>
               {ASSIGNABLE.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1.5">Clinic location <span className="text-slate-300">(optional)</span></label>
+            <label className="block text-xs font-semibold text-slate-600 mb-1.5">Clinic location <span className="text-slate-400 font-normal">(optional)</span></label>
             <input value={clinicLocation} onChange={(e) => setClinicLocation(e.target.value)} placeholder="e.g. Downtown" className={`${field} w-full`} />
           </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1.5">Temporary password <span className="text-slate-400 font-normal">(optional)</span></label>
+            <div className="relative">
+              <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Min 8 chars, letter + number" className={`${field} w-full pl-9`} autoComplete="new-password" />
+            </div>
+          </div>
           <button type="submit" disabled={createMember.isPending || !email}
-            className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 active:scale-[0.97] transition disabled:opacity-50">
+            className="inline-flex items-center justify-center gap-1.5 px-5 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 active:scale-[0.97] transition disabled:opacity-50 h-[42px]">
             {createMember.isPending ? <Loader2 size={15} className="animate-spin" /> : <UserPlus size={15} />} Create login
           </button>
         </form>
       </div>
 
       {/* Members */}
-      <div className="bg-white rounded-3xl border border-slate-100 overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2"><UserCog size={16} className="text-slate-400" /><h3 className="font-bold text-slate-900">Team members</h3></div>
+      <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-200 flex items-center gap-2"><UserCog size={16} className="text-slate-400" /><h3 className="font-bold text-slate-900">Team members</h3></div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-xs uppercase tracking-wider text-slate-400 border-b border-slate-100 bg-slate-50/50">
-                <th className="px-5 py-3 font-medium">Worker</th>
-                <th className="px-5 py-3 font-medium">Email</th>
-                <th className="px-5 py-3 font-medium">Status</th>
-                <th className="px-5 py-3 font-medium">Current Role</th>
-                <th className="px-5 py-3 font-medium">Assign Role</th>
-                <th className="px-5 py-3 font-medium text-right">Access</th>
+              <tr className="text-left text-xs uppercase tracking-wider text-slate-500 border-b border-slate-200 bg-slate-50">
+                <th className="px-5 py-3 font-semibold">Worker</th>
+                <th className="px-5 py-3 font-semibold">Email</th>
+                <th className="px-5 py-3 font-semibold">Status</th>
+                <th className="px-5 py-3 font-semibold">Current Role</th>
+                <th className="px-5 py-3 font-semibold">Assign Role</th>
+                <th className="px-5 py-3 font-semibold text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -143,14 +182,14 @@ export default function TeamAccessPage() {
                 const hasAccess = u.role !== "user";
                 const pending = (u as { pending?: boolean }).pending;
                 return (
-                  <tr key={u.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60">
+                  <tr key={u.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
                     <td className="px-5 py-3">
                       <p className="font-semibold text-slate-800 flex items-center gap-1.5">
                         {u.name || "Unnamed"}
                         {isSelf && <span className="px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[10px]">You</span>}
                       </p>
                     </td>
-                    <td className="px-5 py-3 text-slate-500">{u.email || "—"}</td>
+                    <td className="px-5 py-3 text-slate-600">{u.email || "—"}</td>
                     <td className="px-5 py-3">
                       {pending ? (
                         <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-amber-100 text-amber-800 text-[11px] font-semibold"><Clock size={11} /> Pending sign-in</span>
@@ -161,7 +200,7 @@ export default function TeamAccessPage() {
                     <td className="px-5 py-3"><span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${roleBadge(u.role)}`}>{u.role.replace("_", " ")}</span></td>
                     <td className="px-5 py-3">
                       <select
-                        className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)] disabled:opacity-50"
+                        className="px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)] disabled:opacity-50"
                         value={u.role}
                         disabled={isSelf || setRole.isPending}
                         title={isSelf ? "You cannot change your own role" : undefined}
@@ -170,17 +209,23 @@ export default function TeamAccessPage() {
                         {ROLE_OPTIONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
                       </select>
                     </td>
-                    <td className="px-5 py-3 text-right">
-                      {isSelf ? (
-                        <span className="inline-flex items-center gap-1 text-xs text-slate-300"><CheckCircle2 size={13} /> Owner</span>
-                      ) : hasAccess || pending ? (
-                        <button onClick={() => setRemoveTarget({ id: u.id, name: u.name || u.email || "this member" })}
-                          className="inline-flex items-center gap-1 text-xs font-semibold text-rose-500 hover:text-rose-700 px-2.5 py-1.5 rounded-lg hover:bg-rose-50 transition">
-                          <Trash2 size={13} /> Remove
+                    <td className="px-5 py-3">
+                      <div className="flex items-center justify-end gap-1">
+                        <button onClick={() => { setResetTarget({ id: u.id, name: u.name || u.email || "this member" }); setResetPassword(""); }}
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-slate-900 px-2.5 py-1.5 rounded-lg hover:bg-slate-100 transition">
+                          <KeyRound size={13} /> {isSelf ? "Set password" : "Set / reset"}
                         </button>
-                      ) : (
-                        <span className="text-xs text-slate-300">No access</span>
-                      )}
+                        {isSelf ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-slate-300 px-2"><CheckCircle2 size={13} /> Owner</span>
+                        ) : (hasAccess || pending) ? (
+                          <button onClick={() => setRemoveTarget({ id: u.id, name: u.name || u.email || "this member" })}
+                            className="inline-flex items-center gap-1 text-xs font-semibold text-rose-500 hover:text-rose-700 px-2.5 py-1.5 rounded-lg hover:bg-rose-50 transition">
+                            <Trash2 size={13} /> Remove
+                          </button>
+                        ) : (
+                          <span className="text-xs text-slate-300 px-2">No access</span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -189,8 +234,9 @@ export default function TeamAccessPage() {
           </table>
         </div>
       </div>
-      <p className="mt-3 text-sm font-light text-slate-400 flex items-center gap-1.5"><UserCog size={14} /> {allUsers.length} workers · {pendingCount} pending sign-in</p>
+      <p className="mt-3 text-sm font-light text-slate-500 flex items-center gap-1.5"><UserCog size={14} /> {allUsers.length} workers · {pendingCount} pending sign-in</p>
 
+      {/* Remove dialog */}
       <AlertDialog open={!!removeTarget} onOpenChange={(o) => !o && setRemoveTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -210,6 +256,41 @@ export default function TeamAccessPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Reset password dialog */}
+      <Dialog open={!!resetTarget} onOpenChange={(o) => !o && setResetTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Set password for {resetTarget?.name}</DialogTitle>
+            <DialogDescription>
+              Enter a temporary password. The worker can sign in with their email + this password, and will be required to change it on their next sign-in.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(e) => { e.preventDefault(); if (resetTarget) resetPasswordMut.mutate({ userId: resetTarget.id, password: resetPassword }); }}
+          >
+            <label className="block text-sm font-semibold text-slate-700 mb-1.5">Temporary password</label>
+            <div className="relative">
+              <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                value={resetPassword}
+                onChange={(e) => setResetPassword(e.target.value)}
+                placeholder="At least 8 chars, with a letter and number"
+                className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[hsl(205_100%_47%)] focus:border-transparent"
+                autoComplete="new-password"
+              />
+            </div>
+            <DialogFooter className="mt-5">
+              <button type="button" onClick={() => setResetTarget(null)} className="px-4 py-2 rounded-xl border border-slate-300 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition">Cancel</button>
+              <button type="submit" disabled={resetPasswordMut.isPending}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 active:scale-[0.97] transition disabled:opacity-50">
+                {resetPasswordMut.isPending ? <Loader2 size={15} className="animate-spin" /> : <KeyRound size={15} />} Save password
+              </button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </CCMDashboardLayout>
   );
 }

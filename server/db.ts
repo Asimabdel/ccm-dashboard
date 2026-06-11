@@ -873,6 +873,7 @@ export async function getAllUsers() {
 }
 
 const PENDING_PREFIX = "pending:";
+const LOCAL_PREFIX = "local:";
 
 /**
  * Admin-created worker login. Pre-creates (or updates) a users row keyed by email
@@ -884,35 +885,76 @@ export async function createMember(input: {
   name?: string | null;
   role: "admin" | "staff" | "provider" | "billing" | "front_desk" | "user";
   clinicLocation?: string | null;
+  passwordHash?: string | null;
 }): Promise<{ created: boolean; pending: boolean }> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const email = input.email.trim().toLowerCase();
+  const hasPassword = !!input.passwordHash;
 
   const existing = await db.select().from(users).where(eq(users.email, email)).limit(1);
   if (existing.length) {
     const row = existing[0];
-    await db
-      .update(users)
-      .set({
-        role: input.role,
-        name: input.name ?? row.name,
-        clinicLocation: input.clinicLocation ?? row.clinicLocation,
-        updatedAt: new Date(),
-      })
-      .where(eq(users.id, row.id));
-    return { created: false, pending: row.openId.startsWith(PENDING_PREFIX) };
+    const set: Record<string, unknown> = {
+      role: input.role,
+      name: input.name ?? row.name,
+      clinicLocation: input.clinicLocation ?? row.clinicLocation,
+      updatedAt: new Date(),
+    };
+    if (hasPassword) {
+      set.passwordHash = input.passwordHash;
+      set.passwordSetAt = new Date();
+      set.mustChangePassword = true;
+      set.loginMethod = "password";
+      // If this was a not-yet-signed-in pending row, convert it to a local account
+      // so the worker can sign in immediately with email + password.
+      if (row.openId.startsWith(PENDING_PREFIX)) {
+        set.openId = `${LOCAL_PREFIX}${email}`;
+      }
+    }
+    await db.update(users).set(set).where(eq(users.id, row.id));
+    return { created: false, pending: row.openId.startsWith(PENDING_PREFIX) && !hasPassword };
   }
 
+  // With a password the worker can sign in immediately, so give them a real local openId.
+  // Without one, fall back to the legacy pending-row + Manus OAuth linking flow.
   await db.insert(users).values({
-    openId: `${PENDING_PREFIX}${email}`,
+    openId: hasPassword ? `${LOCAL_PREFIX}${email}` : `${PENDING_PREFIX}${email}`,
     email,
     name: input.name ?? null,
     role: input.role,
     clinicLocation: input.clinicLocation ?? null,
-    loginMethod: "manus",
+    loginMethod: hasPassword ? "password" : "manus",
+    passwordHash: input.passwordHash ?? null,
+    passwordSetAt: hasPassword ? new Date() : null,
+    mustChangePassword: hasPassword ? true : false,
   });
-  return { created: true, pending: true };
+  return { created: true, pending: !hasPassword };
+}
+
+/** Look up a worker by email (case-insensitive). Used for password login. */
+export async function getUserByEmail(email: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const normalized = email.trim().toLowerCase();
+  const rows = await db.select().from(users).where(eq(users.email, normalized)).limit(1);
+  return rows.length ? rows[0] : undefined;
+}
+
+/** Set (or reset) a user's password hash. `mustChange` forces a change on next login. */
+export async function setUserPassword(userId: number, passwordHash: string, mustChange: boolean) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(users)
+    .set({
+      passwordHash,
+      passwordSetAt: new Date(),
+      mustChangePassword: mustChange,
+      loginMethod: "password",
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, userId));
 }
 
 // ---------------------------------------------------------------------------

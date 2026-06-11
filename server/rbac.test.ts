@@ -106,4 +106,32 @@ describe("role-based access control", () => {
     const caller = appRouter.createCaller(ctxFor("staff"));
     await expect(caller.providers.remove(1)).rejects.toThrow();
   });
+
+  it("blocks non-admin from resetting another worker's password", async () => {
+    const caller = appRouter.createCaller(ctxFor("staff"));
+    await expect(caller.users.resetPassword({ userId: 1, password: "abc12345" })).rejects.toThrow();
+  });
+
+  it("rejects weak passwords on admin reset (too short / no number)", async () => {
+    const caller = appRouter.createCaller(ctxFor("admin"));
+    await expect(caller.users.resetPassword({ userId: 1, password: "short" })).rejects.toThrow();
+    await expect(caller.users.resetPassword({ userId: 1, password: "onlyletters" })).rejects.toThrow();
+  });
+
+  it("rejects weak passwords on member create", async () => {
+    const caller = appRouter.createCaller(ctxFor("admin"));
+    await expect(
+      caller.members.create({ email: "weak@y.com", role: "staff", password: "123" })
+    ).rejects.toThrow();
+  });
+
+  it("rejects a self change-password with a weak new password before any DB work", async () => {
+    const caller = appRouter.createCaller(ctxFor("staff"));
+    await expect(caller.auth.changePassword({ newPassword: "weak" })).rejects.toThrow();
+  });
+
+  it("rejects password login with an invalid email format", async () => {
+    const caller = appRouter.createCaller(ctxFor("user"));
+    await expect(caller.auth.passwordLogin({ email: "not-an-email", password: "whatever1" })).rejects.toThrow();
+  });
 });

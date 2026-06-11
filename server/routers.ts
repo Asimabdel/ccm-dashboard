@@ -1,5 +1,7 @@
-import { COOKIE_NAME } from "@shared/const";
+import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
+import { sdk } from "./_core/sdk";
+import { hashPassword, verifyPassword, validatePasswordStrength } from "./password";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
@@ -37,6 +39,9 @@ import {
   setUserRole,
   getAllUsers,
   createMember,
+  getUserByEmail,
+  getUserByOpenId,
+  setUserPassword,
   getDb,
   writeAuditLog,
   getAuditLogs,
@@ -115,6 +120,57 @@ export const appRouter = router({
         void logAudit(ctx, "update_patient", { description: `Admin previewed role: ${input.role}` });
         return { success: true, role: input.role };
       }),
+
+    // Email + password sign-in for admin-created worker logins. Issues the same
+    // JWT session cookie as the Manus OAuth flow so the rest of the app is unchanged.
+    passwordLogin: publicProcedure
+      .input(z.object({ email: z.string().email(), password: z.string().min(1) }))
+      .mutation(async ({ input, ctx }) => {
+        const genericError = new TRPCError({ code: "UNAUTHORIZED", message: "Incorrect email or password." });
+        const user = await getUserByEmail(input.email);
+        if (!user || !user.passwordHash) {
+          throw genericError;
+        }
+        const ok = await verifyPassword(input.password, user.passwordHash);
+        if (!ok) {
+          throw genericError;
+        }
+        const sessionToken = await sdk.createSessionToken(user.openId, {
+          name: user.name || user.email || "",
+          expiresInMs: ONE_YEAR_MS,
+        });
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        ctx.res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+        void logAudit({ user }, "login", { entityType: "user", entityId: user.id, description: `Password login: ${user.email}` });
+        return { success: true, mustChangePassword: !!user.mustChangePassword };
+      }),
+
+    // Self-service password change. Workers with mustChangePassword set are forced here on first login.
+    changePassword: protectedProcedure
+      .input(z.object({ currentPassword: z.string().optional(), newPassword: z.string() }))
+      .mutation(async ({ input, ctx }) => {
+        const strengthError = validatePasswordStrength(input.newPassword);
+        if (strengthError) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: strengthError });
+        }
+        // Re-fetch the full user row (ctx.user may be a trimmed projection in some flows).
+        const fresh = await getUserByOpenId(ctx.user.openId);
+        if (!fresh) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "User not found." });
+        }
+        // If the user already has a password and is NOT being forced to change it,
+        // require the current password to confirm identity.
+        if (fresh.passwordHash && !fresh.mustChangePassword) {
+          const ok = await verifyPassword(input.currentPassword ?? "", fresh.passwordHash);
+          if (!ok) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Your current password is incorrect." });
+          }
+        }
+        const newHash = await hashPassword(input.newPassword);
+        await setUserPassword(fresh.id, newHash, false);
+        void logAudit(ctx, "update_patient", { entityType: "user", entityId: fresh.id, description: `Changed own password` });
+        return { success: true };
+      }),
   }),
 
   // ---- Admin: worker access management (RBAC) ----
@@ -167,6 +223,20 @@ export const appRouter = router({
         void logAudit(ctx, "update_patient", { entityType: "user", entityId: input, description: `Removed access for user #${input}` });
         return { success: true };
       }),
+    // Admin sets/resets a worker's password. Worker must change it on next login.
+    resetPassword: protectedProcedure
+      .input(z.object({ userId: z.number(), password: z.string() }))
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin"]);
+        const strengthError = validatePasswordStrength(input.password);
+        if (strengthError) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: strengthError });
+        }
+        const newHash = await hashPassword(input.password);
+        await setUserPassword(input.userId, newHash, true);
+        void logAudit(ctx, "update_patient", { entityType: "user", entityId: input.userId, description: `Admin reset password for user #${input.userId}` });
+        return { success: true };
+      }),
   }),
 
   // ---- Admin: create worker logins directly (no email invites) ----
@@ -179,16 +249,26 @@ export const appRouter = router({
         name: z.string().optional(),
         role: roleEnum,
         clinicLocation: z.string().optional(),
+        password: z.string().optional(),
       }))
       .mutation(async ({ input, ctx }) => {
         requireRole(ctx, ["admin"]);
+        let passwordHash: string | null = null;
+        if (input.password && input.password.length > 0) {
+          const strengthError = validatePasswordStrength(input.password);
+          if (strengthError) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: strengthError });
+          }
+          passwordHash = await hashPassword(input.password);
+        }
         const result = await createMember({
           email: input.email,
           name: input.name ?? null,
           role: input.role,
           clinicLocation: input.clinicLocation ?? null,
+          passwordHash,
         });
-        void logAudit(ctx, "update_patient", { entityType: "user", description: `Created login for ${input.email} (${input.role})` });
+        void logAudit(ctx, "update_patient", { entityType: "user", description: `Created login for ${input.email} (${input.role})${passwordHash ? " with password" : ""}` });
         return { success: true, created: result.created, pending: result.pending };
       }),
   }),
