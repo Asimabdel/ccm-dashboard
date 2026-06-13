@@ -3,10 +3,10 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import {
-  LogOut, Menu, X, Bell, LayoutDashboard, Users, ClipboardList,
-  UserCog, AlertTriangle, Receipt, BarChart3, PhoneCall, CalendarClock,
-  ChevronDown, Check, ShieldCheck, Clock, Building2, Stethoscope,
+  LogOut, Menu, X, Bell, ChevronDown, Check, Clock, Search,
 } from "lucide-react";
+import { NAV, ROLES } from "@/lib/nav";
+import { CommandPalette } from "@/components/CommandPalette";
 import { useIdleLogout } from "@/hooks/useIdleLogout";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
@@ -15,49 +15,11 @@ import {
 import { cn } from "@/lib/utils";
 import { fmtDate } from "@/lib/ccm";
 
-interface NavItem { label: string; path: string; icon: React.ElementType; }
-
-const NAV: Record<string, NavItem[]> = {
-  admin: [
-    { label: "Dashboard", path: "/admin", icon: LayoutDashboard },
-    { label: "Patients", path: "/patients", icon: Users },
-    { label: "Monthly Worklist", path: "/worklist", icon: ClipboardList },
-    { label: "Staff Assignment", path: "/assignment", icon: UserCog },
-    { label: "Escalations", path: "/escalations", icon: AlertTriangle },
-    { label: "Billing", path: "/billing", icon: Receipt },
-    { label: "Follow-ups", path: "/follow-ups", icon: CalendarClock },
-    { label: "Reports", path: "/reports", icon: BarChart3 },
-    { label: "Providers", path: "/providers", icon: Stethoscope },
-    { label: "Clinics", path: "/clinics", icon: Building2 },
-    { label: "Team & Access", path: "/team", icon: UserCog },
-    { label: "Audit Log", path: "/audit", icon: ShieldCheck },
-  ],
-  staff: [
-    { label: "My Worklist", path: "/worklist", icon: ClipboardList },
-    { label: "Patients", path: "/patients", icon: Users },
-    { label: "Call Workflow", path: "/workflow", icon: PhoneCall },
-  ],
-  provider: [
-    { label: "Escalations", path: "/escalations", icon: AlertTriangle },
-    { label: "Patients", path: "/patients", icon: Users },
-  ],
-  billing: [
-    { label: "Billing Records", path: "/billing", icon: Receipt },
-    { label: "Reports", path: "/reports", icon: BarChart3 },
-  ],
-  front_desk: [
-    { label: "Follow-ups", path: "/follow-ups", icon: CalendarClock },
-    { label: "Patients", path: "/patients", icon: Users },
-  ],
-};
-
-const ROLES = [
-  { value: "admin", label: "Admin / Practice Manager" },
-  { value: "staff", label: "CCM Staff / Care Coordinator" },
-  { value: "provider", label: "Provider" },
-  { value: "billing", label: "Billing" },
-  { value: "front_desk", label: "Front Desk" },
-] as const;
+// Keyboard hint for the ⌘K command palette (Mac shows ⌘, others Ctrl).
+const KBD_HINT =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
+    ? "⌘K"
+    : "Ctrl K";
 
 export function CCMDashboardLayout({ children, title }: { children: React.ReactNode; title?: string }) {
   const { user, logout, refresh } = useAuth();
@@ -166,6 +128,19 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
           </div>
 
           <div className="flex items-center gap-2">
+            {/* ⌘K command palette trigger */}
+            <button
+              onClick={() => window.dispatchEvent(new Event("open-command-palette"))}
+              className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+              title={`Search (${KBD_HINT})`}
+            >
+              <Search size={16} className="text-slate-400" />
+              <span className="hidden md:inline text-slate-400">Search…</span>
+              <kbd className="hidden md:inline-flex items-center text-[10px] font-medium text-slate-400 border border-slate-200 dark:border-slate-600 rounded px-1.5 py-0.5">
+                {KBD_HINT}
+              </kbd>
+            </button>
+
             {/* Role switcher (admin-only preview) */}
             {user.role === "admin" && (
             <DropdownMenu>
@@ -242,6 +217,8 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
 
         <main className="flex-1 overflow-auto p-6 bg-slate-50/60 dark:bg-slate-900"><div className="animate-fade-in-up">{children}</div></main>
       </div>
+
+      <CommandPalette />
 
       {/* HIPAA idle session timeout warning */}
       {warning && (
