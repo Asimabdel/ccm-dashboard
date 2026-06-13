@@ -70,7 +70,8 @@ export default function DashboardLayout({
           </div>
           <Button
             onClick={() => {
-              window.location.href = getLoginUrl();
+              // Fall back to the password login page when OAuth is unavailable.
+              window.location.href = getLoginUrl() || "/";
             }}
             size="lg"
             className="w-full shadow-lg hover:shadow-xl transition-all"

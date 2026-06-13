@@ -23,6 +23,10 @@ export default function Home() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
+  // Empty when the Manus OAuth portal isn't configured (e.g. off-platform);
+  // we then hide the "Continue with Manus sign-in" option.
+  const manusLoginUrl = getLoginUrl();
+
   useEffect(() => {
     if (!loading && isAuthenticated && user) {
       setLocation(ROLE_HOME[user.role] ?? "/admin");
@@ -143,18 +147,22 @@ export default function Home() {
               </button>
             </form>
 
-            <div className="flex items-center gap-3 my-5">
-              <div className="h-px flex-1 bg-slate-200" />
-              <span className="text-xs uppercase tracking-widest text-slate-400">or</span>
-              <div className="h-px flex-1 bg-slate-200" />
-            </div>
+            {manusLoginUrl && (
+              <>
+                <div className="flex items-center gap-3 my-5">
+                  <div className="h-px flex-1 bg-slate-200" />
+                  <span className="text-xs uppercase tracking-widest text-slate-400">or</span>
+                  <div className="h-px flex-1 bg-slate-200" />
+                </div>
 
-            <a
-              href={getLoginUrl()}
-              className="group w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl border border-slate-300 bg-white text-slate-700 font-semibold hover:bg-slate-50 active:scale-[0.98] transition-all duration-200"
-            >
-              Continue with Manus sign-in
-            </a>
+                <a
+                  href={manusLoginUrl}
+                  className="group w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl border border-slate-300 bg-white text-slate-700 font-semibold hover:bg-slate-50 active:scale-[0.98] transition-all duration-200"
+                >
+                  Continue with Manus sign-in
+                </a>
+              </>
+            )}
             <p className="mt-3 text-center text-xs font-light text-slate-400">
               {loading ? "Checking your session..." : "Password login is for accounts created by your administrator."}
             </p>

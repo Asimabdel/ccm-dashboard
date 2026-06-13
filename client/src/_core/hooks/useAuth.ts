@@ -65,6 +65,7 @@ export function useAuth(options?: UseAuthOptions) {
     if (meQuery.isLoading || logoutMutation.isPending) return;
     if (state.user) return;
     if (typeof window === "undefined") return;
+    if (!redirectPath) return; // OAuth unavailable (off-platform) — don't redirect
     if (window.location.pathname === redirectPath) return;
 
     window.location.href = redirectPath
