@@ -8,10 +8,17 @@ serverless function.
 
 | Piece | File | Notes |
 | ----- | ---- | ----- |
-| Serverless API | [`api/index.ts`](api/index.ts) | Exports the Express app (no `listen()`). |
+| Serverless source | [`server/_core/serverless.ts`](server/_core/serverless.ts) | Exports the Express app (no `listen()`). |
+| Function bundle | `api/index.js` | **Generated** — a single self-contained esbuild bundle of the source, produced by `pnpm run build:vercel`. Committed + regenerated on every deploy. |
 | Shared app builder | [`server/_core/app.ts`](server/_core/app.ts) | Used by both the local server and the function. |
-| Routing / build config | [`vercel.json`](vercel.json) | `vite build` → `dist/public`; rewrites `/api/*` and `/manus-storage/*` to the function; everything else falls back to `index.html` (SPA). |
+| Routing / build config | [`vercel.json`](vercel.json) | `build:vercel` → `dist/public` + `api/index.js`; rewrites `/api/*` and `/manus-storage/*` to the function; everything else falls back to `index.html` (SPA). |
 | Env var reference | [`.env.example`](.env.example) | Every variable the app reads. |
+
+> **Why a pre-bundled `api/index.js`?** With the project in ESM mode, letting Vercel
+> compile `api/*.ts` directly leaves extensionless relative imports unresolved and
+> its dependency tracer misses the dynamically-required internals of `mysql2`/`drizzle`,
+> both causing `ERR_MODULE_NOT_FOUND` at runtime. Bundling everything into one file
+> eliminates all runtime module resolution.
 
 ## Step 1 — Get a MySQL database
 
