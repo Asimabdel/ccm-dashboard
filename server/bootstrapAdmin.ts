@@ -21,6 +21,9 @@ async function main() {
   const email = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
   const password = process.env.ADMIN_PASSWORD || "";
   const name = process.env.ADMIN_NAME || "Administrator";
+  // When true, the admin must set a new password on first login (use this when
+  // the password was generated for them rather than chosen by them).
+  const mustChange = /^(1|true|yes)$/i.test(process.env.ADMIN_MUST_CHANGE || "");
 
   if (!email || !password) {
     console.error("✗ Set ADMIN_EMAIL and ADMIN_PASSWORD environment variables.");
@@ -56,7 +59,7 @@ async function main() {
         loginMethod: "password",
         passwordHash,
         passwordSetAt: now,
-        mustChangePassword: false,
+        mustChangePassword: mustChange,
         updatedAt: now,
         lastSignedIn: now,
       })
@@ -72,7 +75,7 @@ async function main() {
         loginMethod: "password",
         passwordHash,
         passwordSetAt: now,
-        mustChangePassword: false,
+        mustChangePassword: mustChange,
         lastSignedIn: now,
       })
       .onDuplicateKeyUpdate({
@@ -82,7 +85,7 @@ async function main() {
           loginMethod: "password",
           passwordHash,
           passwordSetAt: now,
-          mustChangePassword: false,
+          mustChangePassword: mustChange,
           updatedAt: now,
         },
       });

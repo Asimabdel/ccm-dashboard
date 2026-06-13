@@ -1,5 +1,6 @@
 import { eq, and, gte, lte, desc, sql, like } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
+import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
+import mysql from "mysql2/promise";
 import {
   InsertUser,
   users,
@@ -20,12 +21,41 @@ import {
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
-let _db: ReturnType<typeof drizzle> | null = null;
+let _db: MySql2Database<Record<string, never>> | null = null;
+
+/**
+ * Build a mysql2 pool from DATABASE_URL with TLS handling.
+ *
+ * Managed MySQL (Aiven, PlanetScale, RDS, TiDB, ...) require TLS, but mysql2's URL
+ * parser does NOT map `?ssl-mode=REQUIRED`, so passing the URL string alone would
+ * connect without TLS and be rejected. We therefore parse the URL and enable TLS
+ * for any non-local host. Set DATABASE_SSL_CA (PEM contents) to pin the provider's
+ * CA in production; without it we still encrypt but skip CA verification, which is
+ * acceptable for a demo/staging deploy.
+ */
+function createPool(databaseUrl: string) {
+  const u = new URL(databaseUrl);
+  const isLocal = u.hostname === "localhost" || u.hostname === "127.0.0.1";
+  const ca = process.env.DATABASE_SSL_CA;
+  const ssl = isLocal
+    ? undefined
+    : ca
+      ? { ca, rejectUnauthorized: true }
+      : { rejectUnauthorized: false };
+  return mysql.createPool({
+    host: u.hostname,
+    port: u.port ? Number(u.port) : 3306,
+    user: decodeURIComponent(u.username),
+    password: decodeURIComponent(u.password),
+    database: u.pathname.replace(/^\//, "") || undefined,
+    ssl,
+  });
+}
 
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      _db = drizzle(createPool(process.env.DATABASE_URL));
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
