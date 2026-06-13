@@ -42097,10 +42097,10 @@ var require_create_pool = __commonJS({
     "use strict";
     var Pool = require_pool3();
     var PoolConfig = require_pool_config();
-    function createPool2(config2) {
+    function createPool3(config2) {
       return new Pool({ config: new PoolConfig(config2) });
     }
-    module.exports = createPool2;
+    module.exports = createPool3;
   }
 });
 
@@ -42227,7 +42227,7 @@ var require_promise = __commonJS({
     var parserCache = require_parser_cache();
     var PoolCluster = require_pool_cluster();
     var createConnection = require_create_connection();
-    var createPool2 = require_create_pool();
+    var createPool3 = require_create_pool();
     var createPoolCluster = require_create_pool_cluster();
     var PromiseConnection = require_connection2();
     var PromisePool = require_pool2();
@@ -42258,7 +42258,7 @@ var require_promise = __commonJS({
       });
     }
     function createPromisePool(opts) {
-      const corePool = createPool2(opts);
+      const corePool = createPool3(opts);
       const thePromise = opts.Promise || Promise;
       if (!thePromise) {
         throw new Error(
@@ -42408,9 +42408,9 @@ var require_mysql2 = __commonJS({
     exports.ConnectionConfig = ConnectionConfig;
     var Pool = require_pool3();
     var PoolCluster = require_pool_cluster();
-    var createPool2 = require_create_pool();
+    var createPool3 = require_create_pool();
     var createPoolCluster = require_create_pool_cluster();
-    exports.createPool = createPool2;
+    exports.createPool = createPool3;
     exports.createPoolCluster = createPoolCluster;
     exports.createQuery = Connection.createQuery;
     exports.Pool = Pool;
@@ -54359,6 +54359,9 @@ function drizzle(...params) {
   drizzle2.mock = mock;
 })(drizzle || (drizzle = {}));
 
+// server/db.ts
+var import_promise = __toESM(require_promise(), 1);
+
 // node_modules/.pnpm/drizzle-orm@0.44.6_mysql2@3.15.1/node_modules/drizzle-orm/mysql-core/alias.js
 function alias(table, alias2) {
   return new Proxy(table, new TableAliasProxyHandler(alias2, false));
@@ -54641,10 +54644,24 @@ var ENV = {
 
 // server/db.ts
 var _db = null;
+function createPool2(databaseUrl) {
+  const u = new URL(databaseUrl);
+  const isLocal = u.hostname === "localhost" || u.hostname === "127.0.0.1";
+  const ca = process.env.DATABASE_SSL_CA;
+  const ssl = isLocal ? void 0 : ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: false };
+  return import_promise.default.createPool({
+    host: u.hostname,
+    port: u.port ? Number(u.port) : 3306,
+    user: decodeURIComponent(u.username),
+    password: decodeURIComponent(u.password),
+    database: u.pathname.replace(/^\//, "") || void 0,
+    ssl
+  });
+}
 async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      _db = drizzle(createPool2(process.env.DATABASE_URL));
     } catch (error46) {
       console.warn("[Database] Failed to connect:", error46);
       _db = null;
@@ -60352,14 +60369,14 @@ var SDKServer = class {
         algorithms: ["HS256"]
       });
       const { openId, appId, name } = payload;
-      if (!isNonEmptyString(openId) || !isNonEmptyString(appId) || !isNonEmptyString(name)) {
-        console.warn("[Auth] Session payload missing required fields");
+      if (!isNonEmptyString(openId)) {
+        console.warn("[Auth] Session payload missing openId");
         return null;
       }
       return {
         openId,
-        appId,
-        name
+        appId: isNonEmptyString(appId) ? appId : "",
+        name: isNonEmptyString(name) ? name : ""
       };
     } catch (error46) {
       console.warn("[Auth] Session verification failed", String(error46));
