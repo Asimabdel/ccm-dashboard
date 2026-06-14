@@ -2,11 +2,16 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { trpc } from "@/lib/trpc";
 import { useParams, useLocation } from "wouter";
-import { ArrowLeft, Loader2, Phone, Calendar, Shield, Globe, User, Activity, FileText, ClipboardList } from "lucide-react";
+import { useState } from "react";
+import { ArrowLeft, Loader2, Phone, Calendar, Shield, Globe, User, Activity, FileText, ClipboardList, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
   PRIORITY_LABELS, STATUS_LABELS, priorityBadgeClass, statusBadgeClass, fmtDate, toDateInput, FOLLOWUP_TYPE_LABELS, FOLLOWUP_STATUS_LABELS,
 } from "@/lib/ccm";
+import { PatientFormDialog, type PatientLike } from "@/components/PatientFormDialog";
+import {
+  AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction,
+} from "@/components/ui/alert-dialog";
 
 function Section({ title, icon: Icon, children }: { title: string; icon: React.ElementType; children: React.ReactNode }) {
   return (
@@ -25,8 +30,15 @@ export default function PatientDetailPage() {
   const detail = trpc.patients.detail.useQuery(id, { enabled: !!user && !!id });
   const utils = trpc.useUtils();
   const canEdit = !!user && ["admin", "staff", "front_desk"].includes(user.role);
+  const canDelete = !!user && user.role === "admin";
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const updateDates = trpc.patients.updateDates.useMutation({
     onSuccess: () => { utils.patients.detail.invalidate(id); toast.success("Dates updated."); },
+    onError: (e) => toast.error(e.message),
+  });
+  const removePatient = trpc.patients.remove.useMutation({
+    onSuccess: () => { toast.success("Patient deleted."); setLocation("/patients"); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -59,9 +71,19 @@ export default function PatientDetailPage() {
                   <span className="flex items-center gap-1.5"><Shield size={14} /> {d.patient.insurance || "—"}</span>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className={`px-3 py-1.5 rounded-full text-xs font-semibold ${priorityBadgeClass(d.patient.riskLevel ?? "medium")}`}>{PRIORITY_LABELS[d.patient.riskLevel ?? "medium"]} Priority</span>
                 <span className={`px-3 py-1.5 rounded-full text-xs font-semibold ${statusBadgeClass(d.patient.ccmEnrollmentStatus ?? "active")}`}>{d.patient.ccmEnrollmentStatus}</span>
+                {canEdit && (
+                  <button onClick={() => setEditOpen(true)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-50">
+                    <Pencil size={13} /> Edit
+                  </button>
+                )}
+                {canDelete && (
+                  <button onClick={() => setDeleteOpen(true)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-rose-200 text-rose-600 text-xs font-semibold hover:bg-rose-50">
+                    <Trash2 size={13} /> Delete
+                  </button>
+                )}
               </div>
             </div>
             <div className="mt-5 grid sm:grid-cols-3 gap-4 text-sm">
@@ -143,6 +165,34 @@ export default function PatientDetailPage() {
               ))}
             </div>
           </Section>
+
+          <PatientFormDialog
+            mode="edit"
+            patient={d.patient as PatientLike}
+            open={editOpen}
+            onOpenChange={setEditOpen}
+            onDone={() => utils.patients.detail.invalidate(id)}
+          />
+
+          <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete patient?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This permanently deletes <span className="font-semibold text-slate-700">{d.patient.name}</span> and all of their CCM tasks, notes, follow-ups, and billing records. This cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={(e) => { e.preventDefault(); removePatient.mutate(d.patient.id); }}
+                  className="bg-rose-600 hover:bg-rose-700 focus:ring-rose-600"
+                >
+                  {removePatient.isPending ? "Deleting…" : "Delete patient"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       )}
     </CCMDashboardLayout>

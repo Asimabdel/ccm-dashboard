@@ -788,6 +788,61 @@ export async function generateMonthlyWorklist(month: string) {
   return { created: toCreate.length };
 }
 
+/**
+ * Ensure an active patient has a CCM task for `month`, creating it if missing and
+ * keeping its staff assignment in sync with the patient's assignedStaffId.
+ *
+ * This is what makes a newly enrolled (or reassigned) patient show up on the
+ * worklist — and on the assigned employee's worklist — immediately, instead of
+ * only after the monthly batch (generateMonthlyWorklist) is run.
+ */
+export async function ensureMonthlyTask(patientId: number, month: string) {
+  const db = await getDb();
+  if (!db) return;
+  const patient = await getPatientById(patientId);
+  if (!patient) return;
+
+  const existing = await getCCMTaskByPatientAndMonth(patientId, month);
+  if (existing) {
+    const desiredStaff = patient.assignedStaffId ?? null;
+    if ((existing.assignedStaffId ?? null) !== desiredStaff) {
+      // If a task was unstarted and now has an owner, mark it assigned.
+      const status = desiredStaff && existing.status === "not_started" ? "assigned" : existing.status;
+      await db
+        .update(ccmTasks)
+        .set({ assignedStaffId: desiredStaff, status, updatedAt: new Date() })
+        .where(eq(ccmTasks.id, existing.id));
+    }
+    return;
+  }
+
+  // Only auto-create tasks for actively enrolled patients.
+  if (patient.ccmEnrollmentStatus !== "active") return;
+  await db.insert(ccmTasks).values({
+    patientId,
+    month,
+    assignedStaffId: patient.assignedStaffId ?? null,
+    priorityLevel: (patient.priorityLevel || patient.riskLevel || "medium") as "high" | "medium" | "low",
+    status: patient.assignedStaffId ? "assigned" : "not_started",
+  });
+}
+
+/** Permanently delete a patient and all of their dependent CCM records (FK-safe order). */
+export async function deletePatient(patientId: number) {
+  const db = await getDb();
+  if (!db) return;
+  const taskRows = await db.select({ id: ccmTasks.id }).from(ccmTasks).where(eq(ccmTasks.patientId, patientId));
+  const taskIds = taskRows.map((t) => t.id);
+  if (taskIds.length) await db.delete(notifications).where(inArray(notifications.relatedCCMTaskId, taskIds));
+  await db.delete(notifications).where(eq(notifications.relatedPatientId, patientId));
+  await db.delete(billingRecords).where(eq(billingRecords.patientId, patientId));
+  await db.delete(followUpItems).where(eq(followUpItems.patientId, patientId));
+  await db.delete(providerEscalations).where(eq(providerEscalations.patientId, patientId));
+  await db.delete(ccmNotes).where(eq(ccmNotes.patientId, patientId));
+  await db.delete(ccmTasks).where(eq(ccmTasks.patientId, patientId));
+  await db.delete(patients).where(eq(patients.id, patientId));
+}
+
 /** Recompute billing readiness for a task and upsert billing record */
 export async function recomputeBilling(taskId: number, month: string) {
   const db = await getDb();

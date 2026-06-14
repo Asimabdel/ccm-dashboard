@@ -66,6 +66,7 @@ import {
 } from "../drizzle/schema";
 import { ccmNotesRouter } from "./routers/ccmNotes";
 import { seedDatabase, isSeeded, currentMonth } from "./seed";
+import { ensureMonthlyTask, deletePatient } from "./db";
 import { parsePatientCsv, findInBatchDuplicates } from "../shared/csvImport";
 import { clinics, providers } from "../drizzle/schema";
 
@@ -382,7 +383,7 @@ export const appRouter = router({
         requireRole(ctx, ["admin", "staff", "front_desk"]);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        await db.insert(patients).values({
+        const res: any = await db.insert(patients).values({
           name: input.name,
           dateOfBirth: input.dateOfBirth,
           phoneNumber: input.phoneNumber,
@@ -397,8 +398,12 @@ export const appRouter = router({
           consentStatus: input.consentStatus || "pending",
           assignedStaffId: input.assignedStaffId,
         });
-        void logAudit(ctx, "create_patient", { entityType: "patient", description: `Created patient "${input.name}"` });
-        return { success: true };
+        const newId = res?.[0]?.insertId as number | undefined;
+        // Create this month's CCM task so the patient appears on the worklist now
+        // (assigned to the chosen staff member, if any).
+        if (newId) await ensureMonthlyTask(Number(newId), currentMonth());
+        void logAudit(ctx, "create_patient", { entityType: "patient", entityId: newId, description: `Created patient "${input.name}"` });
+        return { success: true, id: newId };
       }),
 
     /** Update RPM enrollment fields for a single patient. */
@@ -531,6 +536,7 @@ export const appRouter = router({
           id: z.number(),
           name: z.string().optional(),
           phoneNumber: z.string().optional(),
+          dateOfBirth: z.date().nullable().optional(),
           riskLevel: z.enum(["high", "medium", "low"]).optional(),
           priorityLevel: z.enum(["high", "medium", "low"]).optional(),
           chronicConditions: z.array(z.string()).optional(),
@@ -549,9 +555,23 @@ export const appRouter = router({
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { id, ...updateData } = input;
-        await db.update(patients).set(updateData).where(eq(patients.id, id));
+        await db.update(patients).set({ ...updateData, updatedAt: new Date() }).where(eq(patients.id, id));
+        // Keep this month's worklist task in sync (creates one if missing, updates the
+        // assigned employee if it changed) so reassignments reflect on the worklist.
+        await ensureMonthlyTask(id, currentMonth());
         void logAudit(ctx, "update_patient", { entityType: "patient", entityId: id, description: `Updated patient #${id}` });
         return getPatientById(id);
+      }),
+
+    /** Permanently delete a patient and all of their CCM records. Admin only. */
+    remove: protectedProcedure
+      .input(z.number())
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin"]);
+        const patient = await getPatientById(input);
+        await deletePatient(input);
+        void logAudit(ctx, "update_patient", { entityType: "patient", entityId: input, description: `Deleted patient #${input}${patient ? ` (${patient.name})` : ""}` });
+        return { success: true };
       }),
   }),
 

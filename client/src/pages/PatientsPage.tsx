@@ -4,13 +4,18 @@ import { trpc } from "@/lib/trpc";
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
-import { Search, Plus, Loader2, UserPlus, X, Upload, AlertTriangle, Activity, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
+import { Search, Plus, Loader2, UserPlus, X, Upload, AlertTriangle, Activity, ChevronUp, ChevronDown, ChevronsUpDown, MoreVertical, Pencil, Trash2 } from "lucide-react";
 import { PRIORITY_LABELS, priorityBadgeClass, statusBadgeClass, RPM_STATUS_LABELS, fmtDate, toDateInput } from "@/lib/ccm";
 import { cn } from "@/lib/utils";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction,
+} from "@/components/ui/alert-dialog";
+import { PatientFormDialog, type PatientLike } from "@/components/PatientFormDialog";
 
 type SortKey = "name" | "risk" | "provider" | "clinic" | "lastCalled" | "nextAppt" | "status";
 type SortState = { key: SortKey; dir: "asc" | "desc" };
@@ -235,6 +240,14 @@ export default function PatientsPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  const [editing, setEditing] = useState<PatientLike | null>(null);
+  const [deleting, setDeleting] = useState<{ id: number; name: string } | null>(null);
+  const canDelete = !!user && user.role === "admin";
+  const removePatient = trpc.patients.remove.useMutation({
+    onSuccess: () => { utils.patients.list.invalidate(); toast.success("Patient deleted."); setDeleting(null); },
+    onError: (e) => toast.error(e.message),
+  });
+
   // Set of patient ids that share a name with another patient
   const dupIds = useMemo(() => {
     const s = new Set<number>();
@@ -305,16 +318,17 @@ export default function PatientsPage() {
                 <SortTh label="Next Appt" k="nextAppt" sort={sort} onSort={onSort} />
                 <SortTh label="Status" k="status" sort={sort} onSort={onSort} />
                 <th className="px-5 py-3 font-medium bg-slate-50">RPM</th>
+                <th className="px-5 py-3 font-medium bg-slate-50 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {patients.isLoading && Array.from({ length: 6 }).map((_, i) => (
                 <tr key={`sk-${i}`} className="border-b border-slate-50 last:border-0">
-                  <td colSpan={9} className="px-5 py-3.5"><div className="h-8 rounded-lg bg-slate-100 animate-pulse" /></td>
+                  <td colSpan={10} className="px-5 py-3.5"><div className="h-8 rounded-lg bg-slate-100 animate-pulse" /></td>
                 </tr>
               ))}
               {!patients.isLoading && sortedPatients.length === 0 && (
-                <tr><td colSpan={9} className="px-5 py-16 text-center">
+                <tr><td colSpan={10} className="px-5 py-16 text-center">
                   <Search className="mx-auto text-slate-300 mb-2" size={28} />
                   <p className="text-slate-500 font-medium">No patients found</p>
                   <p className="text-sm font-light text-slate-400 mt-0.5">{hasFilters ? "Try adjusting your filters." : "Enroll a patient to get started."}</p>
@@ -400,6 +414,19 @@ export default function PatientsPage() {
                       <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${r.patient.rpmEnrolled ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-500"}`}>{r.patient.rpmEnrolled ? (RPM_STATUS_LABELS[r.patient.rpmStatus ?? "enrolled"] || "Enrolled") : "Not Enrolled"}</span>
                     )}
                   </td>
+                  <td className="px-5 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700" aria-label="Patient actions"><MoreVertical size={16} /></button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-40">
+                        <DropdownMenuItem onClick={() => setEditing(r.patient as PatientLike)} className="cursor-pointer"><Pencil size={14} className="mr-2" /> Edit</DropdownMenuItem>
+                        {canDelete && (
+                          <DropdownMenuItem onClick={() => setDeleting({ id: r.patient.id, name: r.patient.name })} className="cursor-pointer text-destructive focus:text-destructive"><Trash2 size={14} className="mr-2" /> Delete</DropdownMenuItem>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -407,6 +434,34 @@ export default function PatientsPage() {
         </div>
       </div>
       <p className="mt-3 text-sm font-light text-slate-400">{(patients.data || []).length} patients</p>
+
+      <PatientFormDialog
+        mode="edit"
+        patient={editing}
+        open={!!editing}
+        onOpenChange={(o) => { if (!o) setEditing(null); }}
+        onDone={() => utils.patients.list.invalidate()}
+      />
+
+      <AlertDialog open={!!deleting} onOpenChange={(o) => { if (!o) setDeleting(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete patient?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes <span className="font-semibold text-slate-700">{deleting?.name}</span> and all of their CCM tasks, notes, follow-ups, and billing records. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); if (deleting) removePatient.mutate(deleting.id); }}
+              className="bg-rose-600 hover:bg-rose-700 focus:ring-rose-600"
+            >
+              {removePatient.isPending ? "Deleting…" : "Delete patient"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </CCMDashboardLayout>
   );
 }

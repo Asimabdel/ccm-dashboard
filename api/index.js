@@ -54756,6 +54756,12 @@ async function getCCMTaskById(taskId) {
   const result = await db.select().from(ccmTasks).where(eq(ccmTasks.id, taskId)).limit(1);
   return result.length > 0 ? result[0] : void 0;
 }
+async function getCCMTaskByPatientAndMonth(patientId, month) {
+  const db = await getDb();
+  if (!db) return void 0;
+  const result = await db.select().from(ccmTasks).where(and(eq(ccmTasks.patientId, patientId), eq(ccmTasks.month, month))).limit(1);
+  return result.length > 0 ? result[0] : void 0;
+}
 async function getCCMNoteByTaskId(taskId) {
   const db = await getDb();
   if (!db) return void 0;
@@ -55022,6 +55028,43 @@ async function generateMonthlyWorklist(month) {
     }))
   );
   return { created: toCreate.length };
+}
+async function ensureMonthlyTask(patientId, month) {
+  const db = await getDb();
+  if (!db) return;
+  const patient = await getPatientById(patientId);
+  if (!patient) return;
+  const existing = await getCCMTaskByPatientAndMonth(patientId, month);
+  if (existing) {
+    const desiredStaff = patient.assignedStaffId ?? null;
+    if ((existing.assignedStaffId ?? null) !== desiredStaff) {
+      const status = desiredStaff && existing.status === "not_started" ? "assigned" : existing.status;
+      await db.update(ccmTasks).set({ assignedStaffId: desiredStaff, status, updatedAt: /* @__PURE__ */ new Date() }).where(eq(ccmTasks.id, existing.id));
+    }
+    return;
+  }
+  if (patient.ccmEnrollmentStatus !== "active") return;
+  await db.insert(ccmTasks).values({
+    patientId,
+    month,
+    assignedStaffId: patient.assignedStaffId ?? null,
+    priorityLevel: patient.priorityLevel || patient.riskLevel || "medium",
+    status: patient.assignedStaffId ? "assigned" : "not_started"
+  });
+}
+async function deletePatient(patientId) {
+  const db = await getDb();
+  if (!db) return;
+  const taskRows = await db.select({ id: ccmTasks.id }).from(ccmTasks).where(eq(ccmTasks.patientId, patientId));
+  const taskIds = taskRows.map((t2) => t2.id);
+  if (taskIds.length) await db.delete(notifications).where(inArray(notifications.relatedCCMTaskId, taskIds));
+  await db.delete(notifications).where(eq(notifications.relatedPatientId, patientId));
+  await db.delete(billingRecords).where(eq(billingRecords.patientId, patientId));
+  await db.delete(followUpItems).where(eq(followUpItems.patientId, patientId));
+  await db.delete(providerEscalations).where(eq(providerEscalations.patientId, patientId));
+  await db.delete(ccmNotes).where(eq(ccmNotes.patientId, patientId));
+  await db.delete(ccmTasks).where(eq(ccmTasks.patientId, patientId));
+  await db.delete(patients).where(eq(patients.id, patientId));
 }
 async function recomputeBilling(taskId, month) {
   const db = await getDb();
@@ -76140,7 +76183,7 @@ var appRouter = router({
       requireRole(ctx, ["admin", "staff", "front_desk"]);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db.insert(patients).values({
+      const res = await db.insert(patients).values({
         name: input.name,
         dateOfBirth: input.dateOfBirth,
         phoneNumber: input.phoneNumber,
@@ -76155,8 +76198,10 @@ var appRouter = router({
         consentStatus: input.consentStatus || "pending",
         assignedStaffId: input.assignedStaffId
       });
-      void logAudit(ctx, "create_patient", { entityType: "patient", description: `Created patient "${input.name}"` });
-      return { success: true };
+      const newId = res?.[0]?.insertId;
+      if (newId) await ensureMonthlyTask(Number(newId), currentMonth());
+      void logAudit(ctx, "create_patient", { entityType: "patient", entityId: newId, description: `Created patient "${input.name}"` });
+      return { success: true, id: newId };
     }),
     /** Update RPM enrollment fields for a single patient. */
     updateRPM: protectedProcedure.input(
@@ -76271,6 +76316,7 @@ var appRouter = router({
         id: external_exports.number(),
         name: external_exports.string().optional(),
         phoneNumber: external_exports.string().optional(),
+        dateOfBirth: external_exports.date().nullable().optional(),
         riskLevel: external_exports.enum(["high", "medium", "low"]).optional(),
         priorityLevel: external_exports.enum(["high", "medium", "low"]).optional(),
         chronicConditions: external_exports.array(external_exports.string()).optional(),
@@ -76288,9 +76334,18 @@ var appRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const { id, ...updateData } = input;
-      await db.update(patients).set(updateData).where(eq(patients.id, id));
+      await db.update(patients).set({ ...updateData, updatedAt: /* @__PURE__ */ new Date() }).where(eq(patients.id, id));
+      await ensureMonthlyTask(id, currentMonth());
       void logAudit(ctx, "update_patient", { entityType: "patient", entityId: id, description: `Updated patient #${id}` });
       return getPatientById(id);
+    }),
+    /** Permanently delete a patient and all of their CCM records. Admin only. */
+    remove: protectedProcedure.input(external_exports.number()).mutation(async ({ input, ctx }) => {
+      requireRole(ctx, ["admin"]);
+      const patient = await getPatientById(input);
+      await deletePatient(input);
+      void logAudit(ctx, "update_patient", { entityType: "patient", entityId: input, description: `Deleted patient #${input}${patient ? ` (${patient.name})` : ""}` });
+      return { success: true };
     })
   }),
   // ---- HIPAA audit log ----
