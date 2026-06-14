@@ -6,7 +6,7 @@ import { useLocation } from "wouter";
 import { toast } from "sonner";
 import {
   Users, ClipboardCheck, PhoneOff, AlertTriangle, TrendingUp, Database, Loader2,
-  ArrowUpRight, ArrowDownRight, Receipt, ArrowRight, CheckCircle2, ClipboardList,
+  ArrowUpRight, ArrowDownRight, Receipt, ArrowRight, CheckCircle2, ClipboardList, CalendarClock,
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
@@ -33,6 +33,25 @@ function makeDelta(curr?: number, prev?: number, goodWhenUp = true): Delta | und
 
 const ACCENT = "hsl(200 100% 50%)";
 const PIE_COLORS = ["#34d399", "#60a5fa", "#fbbf24", "#fb7185", "#a78bfa", "#94a3b8", "#f472b6", "#22d3ee"];
+
+function apptParts(d: unknown) {
+  const dt = new Date(d as string);
+  return {
+    mon: dt.toLocaleString("en-US", { month: "short" }),
+    day: dt.getDate(),
+    full: dt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+  };
+}
+function relDays(d: unknown) {
+  const target = new Date(d as string); target.setHours(0, 0, 0, 0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const diff = Math.round((target.getTime() - today.getTime()) / 86400000);
+  if (diff <= 0) return "Today";
+  if (diff === 1) return "Tomorrow";
+  if (diff < 7) return `In ${diff} days`;
+  if (diff < 30) return `In ${Math.round(diff / 7)} wk`;
+  return `In ${Math.round(diff / 30)} mo`;
+}
 
 function StatCard({ icon: Icon, label, value, sub, tone = "default", index = 0, delta }: {
   icon: React.ElementType; label: string; value: string | number; sub?: string;
@@ -90,6 +109,7 @@ export default function AdminDashboard() {
   const staffPerf = trpc.admin.staffPerformance.useQuery({ month }, { enabled: isAdmin });
   const clinicPerf = trpc.admin.clinicPerformance.useQuery({ month }, { enabled: isAdmin });
   const trend = trpc.admin.dailyTrend.useQuery({ month }, { enabled: isAdmin });
+  const upcoming = trpc.admin.upcomingAppointments.useQuery(undefined, { enabled: !!user });
 
   const seed = trpc.admin.seed.useMutation({
     onSuccess: async (s: any) => {
@@ -224,6 +244,41 @@ export default function AdminDashboard() {
           />
         </div>
         <p className="mt-2 text-sm font-light text-slate-500">{s?.completionPct ?? 0}% of this month's CCM outreach is complete.</p>
+      </div>
+
+      <div className="mt-6 bg-white rounded-3xl p-6 border border-slate-100 shadow-soft">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold text-slate-900 tracking-tight flex items-center gap-2"><CalendarClock size={18} className="text-slate-400" /> Upcoming Appointments</h3>
+          <span className="text-xs text-slate-400">{(upcoming.data || []).length} scheduled</span>
+        </div>
+        {(upcoming.data || []).length === 0 ? (
+          <p className="text-sm font-light text-slate-400 py-6 text-center">No upcoming appointments. Set a patient's Next Appointment from their chart and it will appear here.</p>
+        ) : (
+          <div className="grid sm:grid-cols-2 gap-2">
+            {(upcoming.data || []).map((a) => {
+              const p = apptParts(a.nextAppointment);
+              return (
+                <button key={a.id} onClick={() => setLocation(`/patients/${a.id}`)}
+                  className="group flex items-center justify-between gap-3 p-3 rounded-2xl border border-slate-100 hover:bg-slate-50 hover:border-slate-200 text-left transition-all">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-11 h-11 rounded-xl bg-blue-50 text-blue-600 flex flex-col items-center justify-center shrink-0 leading-none">
+                      <span className="text-[10px] font-semibold uppercase">{p.mon}</span>
+                      <span className="text-base font-extrabold">{p.day}</span>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-slate-800 truncate">{a.name}</p>
+                      <p className="text-xs text-slate-400 truncate">{a.clinicName || "—"}{a.staffName ? ` · ${a.staffName}` : ""}</p>
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-sm font-medium text-slate-700">{p.full}</p>
+                    <p className="text-[11px] text-slate-400">{relDays(a.nextAppointment)}</p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="mt-6 grid lg:grid-cols-2 gap-6">

@@ -664,6 +664,27 @@ export async function getDailyCompletionTrend(month: string) {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
+/** Active patients with an upcoming appointment (soonest first) — for the dashboard widget. */
+export async function getUpcomingAppointments(limit = 8) {
+  const db = await getDb();
+  if (!db) return [];
+  const now = new Date();
+  return db
+    .select({
+      id: patients.id,
+      name: patients.name,
+      nextAppointment: patients.nextAppointment,
+      clinicName: clinics.name,
+      staffName: users.name,
+    })
+    .from(patients)
+    .leftJoin(clinics, eq(patients.clinicId, clinics.id))
+    .leftJoin(users, eq(patients.assignedStaffId, users.id))
+    .where(and(gte(patients.nextAppointment, now), eq(patients.ccmEnrollmentStatus, "active")))
+    .orderBy(patients.nextAppointment)
+    .limit(limit);
+}
+
 /** Enriched escalations with patient + note info */
 export async function getEnrichedEscalations(filters?: { providerId?: number; status?: string }) {
   const db = await getDb();

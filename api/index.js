@@ -54948,6 +54948,18 @@ async function getDailyCompletionTrend(month) {
   });
   return Object.entries(byDay).map(([date6, count]) => ({ date: date6, count })).sort((a, b) => a.date.localeCompare(b.date));
 }
+async function getUpcomingAppointments(limit = 8) {
+  const db = await getDb();
+  if (!db) return [];
+  const now = /* @__PURE__ */ new Date();
+  return db.select({
+    id: patients.id,
+    name: patients.name,
+    nextAppointment: patients.nextAppointment,
+    clinicName: clinics.name,
+    staffName: users.name
+  }).from(patients).leftJoin(clinics, eq(patients.clinicId, clinics.id)).leftJoin(users, eq(patients.assignedStaffId, users.id)).where(and(gte(patients.nextAppointment, now), eq(patients.ccmEnrollmentStatus, "active"))).orderBy(patients.nextAppointment).limit(limit);
+}
 async function getEnrichedEscalations(filters) {
   const db = await getDb();
   if (!db) return [];
@@ -75955,6 +75967,17 @@ var statusEnum = external_exports.enum([
   "inactive"
 ]);
 var roleEnum = external_exports.enum(["admin", "staff", "provider", "billing", "front_desk", "user"]);
+var CONTACTED_STATUSES = [
+  "in_progress",
+  "completed",
+  "called_no_answer",
+  "voicemail_left",
+  "needs_provider_review",
+  "needs_appointment",
+  "documentation_incomplete",
+  "ready_for_billing",
+  "billed"
+];
 var appRouter = router({
   system: systemRouter,
   ccmNotesAI: ccmNotesRouter,
@@ -76141,6 +76164,10 @@ var appRouter = router({
     dailyTrend: protectedProcedure.input(external_exports.object({ month: external_exports.string() }).optional()).query(async ({ input, ctx }) => {
       requireRole(ctx, ["admin"]);
       return getDailyCompletionTrend(input?.month || currentMonth());
+    }),
+    upcomingAppointments: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx, ["admin", "staff", "front_desk", "provider", "billing"]);
+      return getUpcomingAppointments(8);
     })
   }),
   // ---- Patients ----
@@ -76393,7 +76420,13 @@ var appRouter = router({
       requireRole(ctx, ["admin", "staff"]);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db.update(ccmTasks).set({ status: input.status, updatedAt: /* @__PURE__ */ new Date() }).where(eq(ccmTasks.id, input.id));
+      const now = /* @__PURE__ */ new Date();
+      const contacted = CONTACTED_STATUSES.includes(input.status);
+      await db.update(ccmTasks).set({ status: input.status, updatedAt: now, ...contacted ? { dateContacted: now } : {} }).where(eq(ccmTasks.id, input.id));
+      if (contacted) {
+        const task = await getCCMTaskById(input.id);
+        if (task?.patientId) await db.update(patients).set({ lastCalledAt: now, updatedAt: now }).where(eq(patients.id, task.patientId));
+      }
       await recomputeBilling(input.id, currentMonth());
       return getCCMTaskById(input.id);
     }),
@@ -76401,8 +76434,14 @@ var appRouter = router({
       requireRole(ctx, ["admin", "staff"]);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const now = /* @__PURE__ */ new Date();
+      const contacted = CONTACTED_STATUSES.includes(input.status);
       for (const id of input.ids) {
-        await db.update(ccmTasks).set({ status: input.status, updatedAt: /* @__PURE__ */ new Date() }).where(eq(ccmTasks.id, id));
+        await db.update(ccmTasks).set({ status: input.status, updatedAt: now, ...contacted ? { dateContacted: now } : {} }).where(eq(ccmTasks.id, id));
+        if (contacted) {
+          const task = await getCCMTaskById(id);
+          if (task?.patientId) await db.update(patients).set({ lastCalledAt: now, updatedAt: now }).where(eq(patients.id, task.patientId));
+        }
         await recomputeBilling(id, currentMonth());
       }
       return { success: true, count: input.ids.length };

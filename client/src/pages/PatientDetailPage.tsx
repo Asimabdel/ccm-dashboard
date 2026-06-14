@@ -99,24 +99,32 @@ export default function PatientDetailPage() {
               <div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400 flex items-center gap-1.5"><User size={12} /> Provider</p><p className="mt-1 font-semibold text-slate-800">{d.provider?.name || "—"}</p></div>
               <div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Clinic</p><p className="mt-1 font-semibold text-slate-800">{d.clinic?.name || "—"}</p></div>
               <div className="rounded-2xl bg-slate-50 p-3"><p className="text-xs text-slate-400">Assigned Staff</p><p className="mt-1 font-semibold text-slate-800">{d.staff?.name || "Unassigned"}</p></div>
-              <div className="rounded-2xl bg-slate-50 p-3">
-                <p className="text-xs text-slate-400">Last Called</p>
-                {canEdit ? (
-                  <input type="date" defaultValue={toDateInput(d.patient.lastCalledAt)}
-                    className="mt-1 px-2 py-1 rounded-lg border border-slate-200 text-sm bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
-                    onChange={(e) => updateDates.mutate({ id, lastCalledAt: e.target.value ? new Date(e.target.value + "T00:00:00") : null })} />
-                ) : <p className="mt-1 font-semibold text-slate-800">{fmtDate(d.patient.lastCalledAt)}</p>}
-              </div>
-              <div className="rounded-2xl bg-slate-50 p-3">
-                <p className="text-xs text-slate-400">Next Appointment</p>
-                {canEdit ? (
-                  <input type="date" defaultValue={toDateInput(d.patient.nextAppointment)}
-                    className="mt-1 px-2 py-1 rounded-lg border border-slate-200 text-sm bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
-                    onChange={(e) => updateDates.mutate({ id, nextAppointment: e.target.value ? new Date(e.target.value + "T00:00:00") : null })} />
-                ) : <p className="mt-1 font-semibold text-slate-800">{fmtDate(d.patient.nextAppointment)}</p>}
-              </div>
             </div>
           </div>
+
+          {/* Care Schedule */}
+          <Section title="Care Schedule" icon={Calendar}>
+            <div className="grid sm:grid-cols-2 gap-4">
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="text-xs text-slate-400 flex items-center gap-1.5"><Phone size={12} /> Last Called</p>
+                {canEdit ? (
+                  <input type="date" defaultValue={toDateInput(d.patient.lastCalledAt)}
+                    className="mt-1.5 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
+                    onChange={(e) => updateDates.mutate({ id, lastCalledAt: e.target.value ? new Date(e.target.value + "T00:00:00") : null })} />
+                ) : <p className="mt-1.5 font-semibold text-slate-800">{fmtDate(d.patient.lastCalledAt)}</p>}
+                <p className="text-[11px] text-slate-400 mt-1.5">Auto-updates when a CCM call is completed.</p>
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <p className="text-xs text-slate-400 flex items-center gap-1.5"><Calendar size={12} /> Next Appointment</p>
+                {canEdit ? (
+                  <input type="date" defaultValue={toDateInput(d.patient.nextAppointment)}
+                    className="mt-1.5 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
+                    onChange={(e) => updateDates.mutate({ id, nextAppointment: e.target.value ? new Date(e.target.value + "T00:00:00") : null })} />
+                ) : <p className="mt-1.5 font-semibold text-slate-800">{fmtDate(d.patient.nextAppointment)}</p>}
+                <p className="text-[11px] text-slate-400 mt-1.5">Appears on the dashboard's Upcoming Appointments.</p>
+              </div>
+            </div>
+          </Section>
 
           {/* Conditions */}
           <Section title="Chronic Conditions" icon={Activity}>

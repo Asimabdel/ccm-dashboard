@@ -66,7 +66,7 @@ import {
 } from "../drizzle/schema";
 import { ccmNotesRouter } from "./routers/ccmNotes";
 import { seedDatabase, isSeeded, currentMonth } from "./seed";
-import { ensureMonthlyTask, deletePatient } from "./db";
+import { ensureMonthlyTask, deletePatient, getUpcomingAppointments } from "./db";
 import { parsePatientCsv, findInBatchDuplicates } from "../shared/csvImport";
 import { clinics, providers } from "../drizzle/schema";
 
@@ -102,6 +102,14 @@ const statusEnum = z.enum([
   "cancelled", "unable_to_reach", "declined_ccm", "inactive",
 ]);
 const roleEnum = z.enum(["admin", "staff", "provider", "billing", "front_desk", "user"]);
+
+// Statuses that mean the patient was actually called this cycle — these stamp the
+// patient's "Last Called" date automatically.
+const CONTACTED_STATUSES = [
+  "in_progress", "completed", "called_no_answer", "voicemail_left",
+  "needs_provider_review", "needs_appointment", "documentation_incomplete",
+  "ready_for_billing", "billed",
+];
 
 export const appRouter = router({
   system: systemRouter,
@@ -326,6 +334,10 @@ export const appRouter = router({
         requireRole(ctx, ["admin"]);
         return getDailyCompletionTrend(input?.month || currentMonth());
       }),
+    upcomingAppointments: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx, ["admin", "staff", "front_desk", "provider", "billing"]);
+      return getUpcomingAppointments(8);
+    }),
   }),
 
   // ---- Patients ----
@@ -632,7 +644,14 @@ export const appRouter = router({
         requireRole(ctx, ["admin", "staff"]);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        await db.update(ccmTasks).set({ status: input.status, updatedAt: new Date() }).where(eq(ccmTasks.id, input.id));
+        const now = new Date();
+        const contacted = CONTACTED_STATUSES.includes(input.status);
+        await db.update(ccmTasks).set({ status: input.status, updatedAt: now, ...(contacted ? { dateContacted: now } : {}) }).where(eq(ccmTasks.id, input.id));
+        // A completed/contacted call automatically stamps the patient's Last Called date.
+        if (contacted) {
+          const task = await getCCMTaskById(input.id);
+          if (task?.patientId) await db.update(patients).set({ lastCalledAt: now, updatedAt: now }).where(eq(patients.id, task.patientId));
+        }
         await recomputeBilling(input.id, currentMonth());
         return getCCMTaskById(input.id);
       }),
@@ -643,8 +662,14 @@ export const appRouter = router({
         requireRole(ctx, ["admin", "staff"]);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const now = new Date();
+        const contacted = CONTACTED_STATUSES.includes(input.status);
         for (const id of input.ids) {
-          await db.update(ccmTasks).set({ status: input.status, updatedAt: new Date() }).where(eq(ccmTasks.id, id));
+          await db.update(ccmTasks).set({ status: input.status, updatedAt: now, ...(contacted ? { dateContacted: now } : {}) }).where(eq(ccmTasks.id, id));
+          if (contacted) {
+            const task = await getCCMTaskById(id);
+            if (task?.patientId) await db.update(patients).set({ lastCalledAt: now, updatedAt: now }).where(eq(patients.id, task.patientId));
+          }
           await recomputeBilling(id, currentMonth());
         }
         return { success: true, count: input.ids.length };
