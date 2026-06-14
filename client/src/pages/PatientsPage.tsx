@@ -4,12 +4,34 @@ import { trpc } from "@/lib/trpc";
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
-import { Search, Plus, Loader2, UserPlus, X, Upload, AlertTriangle, Activity } from "lucide-react";
+import { Search, Plus, Loader2, UserPlus, X, Upload, AlertTriangle, Activity, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import { PRIORITY_LABELS, priorityBadgeClass, statusBadgeClass, RPM_STATUS_LABELS, fmtDate, toDateInput } from "@/lib/ccm";
+import { cn } from "@/lib/utils";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+
+type SortKey = "name" | "risk" | "provider" | "clinic" | "lastCalled" | "nextAppt" | "status";
+type SortState = { key: SortKey; dir: "asc" | "desc" };
+
+/** Clickable, sticky table header cell with a sort indicator. */
+function SortTh({ label, k, sort, onSort, className }: {
+  label: string; k: SortKey; sort: SortState; onSort: (k: SortKey) => void; className?: string;
+}) {
+  const active = sort.key === k;
+  return (
+    <th
+      onClick={() => onSort(k)}
+      className={cn("px-5 py-3 font-medium select-none cursor-pointer hover:text-slate-600 transition-colors bg-slate-50", className)}
+    >
+      <span className="inline-flex items-center gap-1">
+        {label}
+        {active ? (sort.dir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />) : <ChevronsUpDown size={12} className="text-slate-300" />}
+      </span>
+    </th>
+  );
+}
 
 const CONDITIONS = [
   "Hypertension", "Type 2 Diabetes", "COPD", "CHF", "CKD", "Hyperlipidemia",
@@ -159,13 +181,45 @@ export default function PatientsPage() {
   const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
   const [clinicFilter, setClinicFilter] = useState<number>(0);
+  const [riskFilter, setRiskFilter] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [sort, setSort] = useState<SortState>({ key: "name", dir: "asc" });
+
+  const onSort = (k: SortKey) =>
+    setSort((s) => (s.key === k ? { key: k, dir: s.dir === "asc" ? "desc" : "asc" } : { key: k, dir: "asc" }));
 
   const clinics = trpc.clinics.list.useQuery(undefined, { enabled: !!user });
   const filters = useMemo(() => ({
     search: search || undefined,
     clinicId: clinicFilter || undefined,
-  }), [search, clinicFilter]);
+    riskLevel: (riskFilter || undefined) as "high" | "medium" | "low" | undefined,
+    enrollmentStatus: statusFilter || undefined,
+  }), [search, clinicFilter, riskFilter, statusFilter]);
   const patients = trpc.patients.list.useQuery(filters, { enabled: !!user });
+  const hasFilters = !!(search || clinicFilter || riskFilter || statusFilter);
+
+  const sortedPatients = useMemo(() => {
+    const rows = [...(patients.data || [])];
+    const dir = sort.dir === "asc" ? 1 : -1;
+    const riskOrder: Record<string, number> = { high: 3, medium: 2, low: 1 };
+    const time = (d: unknown) => (d ? new Date(d as string).getTime() : 0);
+    rows.sort((a, b) => {
+      let av: string | number = 0, bv: string | number = 0;
+      switch (sort.key) {
+        case "name": av = a.patient.name?.toLowerCase() ?? ""; bv = b.patient.name?.toLowerCase() ?? ""; break;
+        case "risk": av = riskOrder[a.patient.riskLevel ?? ""] ?? 0; bv = riskOrder[b.patient.riskLevel ?? ""] ?? 0; break;
+        case "provider": av = a.providerName ?? ""; bv = b.providerName ?? ""; break;
+        case "clinic": av = a.clinicName ?? ""; bv = b.clinicName ?? ""; break;
+        case "lastCalled": av = time(a.patient.lastCalledAt); bv = time(b.patient.lastCalledAt); break;
+        case "nextAppt": av = time(a.patient.nextAppointment); bv = time(b.patient.nextAppointment); break;
+        case "status": av = a.patient.ccmEnrollmentStatus ?? ""; bv = b.patient.ccmEnrollmentStatus ?? ""; break;
+      }
+      if (av < bv) return -dir;
+      if (av > bv) return dir;
+      return 0;
+    });
+    return rows;
+  }, [patients.data, sort]);
   const duplicates = trpc.patients.duplicates.useQuery(undefined, { enabled: !!user });
   const utils = trpc.useUtils();
 
@@ -211,8 +265,20 @@ export default function PatientsPage() {
             <option value={0}>All Clinics</option>
             {(clinics.data || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          {(search || clinicFilter) && (
-            <button onClick={() => { setSearch(""); setClinicFilter(0); }} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl text-sm text-slate-500 hover:bg-slate-100">
+          <select className={field} value={riskFilter} onChange={(e) => setRiskFilter(e.target.value)}>
+            <option value="">All Risk</option>
+            <option value="high">High risk</option>
+            <option value="medium">Medium risk</option>
+            <option value="low">Low risk</option>
+          </select>
+          <select className={field} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <option value="">All Status</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+            <option value="declined">Declined</option>
+          </select>
+          {hasFilters && (
+            <button onClick={() => { setSearch(""); setClinicFilter(0); setRiskFilter(""); setStatusFilter(""); }} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl text-sm text-slate-500 hover:bg-slate-100">
               <X size={14} /> Clear
             </button>
           )}
@@ -226,28 +292,35 @@ export default function PatientsPage() {
       </div>
 
       <div className="bg-white rounded-3xl border border-slate-100 overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-auto max-h-[70vh]">
           <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs uppercase tracking-wider text-slate-400 border-b border-slate-100 bg-slate-50/50">
-                <th className="px-5 py-3 font-medium">Patient</th>
-                <th className="px-5 py-3 font-medium">Conditions</th>
-                <th className="px-5 py-3 font-medium">Provider</th>
-                <th className="px-5 py-3 font-medium">Clinic</th>
-                <th className="px-5 py-3 font-medium">Last Called</th>
-                <th className="px-5 py-3 font-medium">Next Appt</th>
-                <th className="px-5 py-3 font-medium">Status</th>
-                <th className="px-5 py-3 font-medium">RPM</th>
+            <thead className="sticky top-0 z-10 shadow-[0_1px_0_0_rgb(241_245_249)]">
+              <tr className="text-left text-xs uppercase tracking-wider text-slate-400">
+                <SortTh label="Patient" k="name" sort={sort} onSort={onSort} />
+                <SortTh label="Risk" k="risk" sort={sort} onSort={onSort} />
+                <th className="px-5 py-3 font-medium bg-slate-50">Conditions</th>
+                <SortTh label="Provider" k="provider" sort={sort} onSort={onSort} />
+                <SortTh label="Clinic" k="clinic" sort={sort} onSort={onSort} />
+                <SortTh label="Last Called" k="lastCalled" sort={sort} onSort={onSort} />
+                <SortTh label="Next Appt" k="nextAppt" sort={sort} onSort={onSort} />
+                <SortTh label="Status" k="status" sort={sort} onSort={onSort} />
+                <th className="px-5 py-3 font-medium bg-slate-50">RPM</th>
               </tr>
             </thead>
             <tbody>
-              {patients.isLoading && (
-                <tr><td colSpan={8} className="px-5 py-12 text-center"><Loader2 className="animate-spin text-slate-300 mx-auto" /></td></tr>
+              {patients.isLoading && Array.from({ length: 6 }).map((_, i) => (
+                <tr key={`sk-${i}`} className="border-b border-slate-50 last:border-0">
+                  <td colSpan={9} className="px-5 py-3.5"><div className="h-8 rounded-lg bg-slate-100 animate-pulse" /></td>
+                </tr>
+              ))}
+              {!patients.isLoading && sortedPatients.length === 0 && (
+                <tr><td colSpan={9} className="px-5 py-16 text-center">
+                  <Search className="mx-auto text-slate-300 mb-2" size={28} />
+                  <p className="text-slate-500 font-medium">No patients found</p>
+                  <p className="text-sm font-light text-slate-400 mt-0.5">{hasFilters ? "Try adjusting your filters." : "Enroll a patient to get started."}</p>
+                </td></tr>
               )}
-              {!patients.isLoading && (patients.data || []).length === 0 && (
-                <tr><td colSpan={8} className="px-5 py-12 text-center text-slate-400 font-light">No patients found.</td></tr>
-              )}
-              {(patients.data || []).map((r) => (
+              {!patients.isLoading && sortedPatients.map((r) => (
                 <tr key={r.patient.id} onClick={() => setLocation(`/patients/${r.patient.id}`)}
                   className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60 cursor-pointer">
                   <td className="px-5 py-3">
@@ -260,6 +333,11 @@ export default function PatientsPage() {
                       )}
                     </p>
                     <p className="text-xs text-slate-400">{r.patient.phoneNumber}</p>
+                  </td>
+                  <td className="px-5 py-3">
+                    {r.patient.riskLevel ? (
+                      <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${priorityBadgeClass(r.patient.riskLevel)}`}>{PRIORITY_LABELS[r.patient.riskLevel] ?? r.patient.riskLevel}</span>
+                    ) : <span className="text-slate-300">—</span>}
                   </td>
                   <td className="px-5 py-3">
                     <div className="flex flex-wrap gap-1 max-w-[220px]">
