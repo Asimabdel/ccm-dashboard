@@ -23,9 +23,11 @@ export default function BulkImportPage() {
   const [csv, setCsv] = useState("");
   const [defaultClinicId, setDefaultClinicId] = useState(0);
   const [defaultProviderId, setDefaultProviderId] = useState(0);
+  const [defaultStaffId, setDefaultStaffId] = useState(0);
   const [skipExisting, setSkipExisting] = useState(true);
   const fileRef = useRef<HTMLInputElement>(null);
   const utils = trpc.useUtils();
+  const staff = trpc.staff.all.useQuery(undefined, { enabled: !!user });
 
   const preview = trpc.patients.bulkImportPreview.useMutation({
     onError: (e) => toast.error(e.message),
@@ -123,13 +125,20 @@ export default function BulkImportPage() {
                   {(data.providerOptions || []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </div>
+              <div>
+                <label className="text-xs text-slate-600">Assign all to employee (optional — puts every imported patient on this person's worklist)</label>
+                <select className={`${field} w-full`} value={defaultStaffId} onChange={(e) => setDefaultStaffId(Number(e.target.value))}>
+                  <option value={0}>Leave unassigned</option>
+                  {(staff.data || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
               <label className="flex items-center gap-2 text-sm text-slate-700">
                 <input type="checkbox" className="accent-slate-900" checked={skipExisting} onChange={(e) => setSkipExisting(e.target.checked)} />
                 Skip patients that already exist (matching name)
               </label>
               <button
                 disabled={commit.isPending || validCount === 0 || !defaultClinicId || !defaultProviderId}
-                onClick={() => commit.mutate({ csv, defaultClinicId, defaultProviderId, skipExistingDuplicates: skipExisting })}
+                onClick={() => commit.mutate({ csv, defaultClinicId, defaultProviderId, defaultStaffId: defaultStaffId || undefined, skipExistingDuplicates: skipExisting })}
                 className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[hsl(200_100%_45%)] text-white text-sm font-semibold hover:brightness-95 disabled:opacity-50 active:scale-[0.98] transition-transform">
                 {commit.isPending ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
                 Import {validCount} valid {validCount === 1 ? "patient" : "patients"}

@@ -54838,6 +54838,9 @@ async function getPatientDetail(patientId) {
   if (!patient) return void 0;
   const tasks = await db.select().from(ccmTasks).where(eq(ccmTasks.patientId, patientId)).orderBy(desc(ccmTasks.month));
   const notes = await db.select().from(ccmNotes).where(eq(ccmNotes.patientId, patientId)).orderBy(desc(ccmNotes.createdAt));
+  const completerIds = Array.from(new Set(tasks.map((t2) => t2.completedByStaffId).filter((x) => !!x)));
+  const completers = completerIds.length ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, completerIds)) : [];
+  const completedByName = Object.fromEntries(completers.map((c) => [c.id, c.name || ""]));
   const fus = await db.select().from(followUpItems).where(eq(followUpItems.patientId, patientId)).orderBy(desc(followUpItems.createdAt));
   const prov = patient.providerId ? await getProviderById(patient.providerId) : void 0;
   const clinicArr = await db.select().from(clinics).where(eq(clinics.id, patient.clinicId)).limit(1);
@@ -54846,6 +54849,7 @@ async function getPatientDetail(patientId) {
     patient,
     tasks,
     notes,
+    completedByName,
     followUps: fus,
     provider: prov,
     clinic: clinicArr[0],
@@ -55321,7 +55325,8 @@ async function bulkInsertPatients(rows) {
     rpmDeviceType: r.rpmDeviceType,
     lastCalledAt: r.lastCalledAt ?? null,
     nextAppointment: r.nextAppointment ?? null,
-    lastCCMDate: r.lastCCMDate ?? null
+    lastCCMDate: r.lastCCMDate ?? null,
+    assignedStaffId: r.assignedStaffId ?? null
   }));
   await db.insert(patients).values(values);
   return values.length;
@@ -76266,6 +76271,7 @@ var appRouter = router({
         csv: external_exports.string(),
         defaultClinicId: external_exports.number(),
         defaultProviderId: external_exports.number(),
+        defaultStaffId: external_exports.number().optional(),
         skipExistingDuplicates: external_exports.boolean().default(true)
       })
     ).mutation(async ({ input, ctx }) => {
@@ -76297,9 +76303,11 @@ var appRouter = router({
         rpmDeviceType: r.rpmDeviceType,
         lastCalledAt: r.lastCalled ? new Date(r.lastCalled) : null,
         nextAppointment: r.nextAppointment ? new Date(r.nextAppointment) : null,
-        lastCCMDate: r.completed && r.lastCalled ? new Date(r.lastCalled) : null
+        lastCCMDate: r.completed && r.lastCalled ? new Date(r.lastCalled) : null,
+        assignedStaffId: input.defaultStaffId ?? null
       }));
       const inserted = await bulkInsertPatients(mapped);
+      if (inserted > 0) await generateMonthlyWorklist(currentMonth());
       void logAudit(ctx, "bulk_import_patients", {
         entityType: "patient",
         description: `Bulk imported ${inserted} patients (skipped ${valid.length - inserted} duplicates, ${rows.length - valid.length} invalid)`

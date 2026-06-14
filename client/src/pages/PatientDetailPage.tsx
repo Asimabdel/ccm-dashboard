@@ -3,7 +3,7 @@ import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { trpc } from "@/lib/trpc";
 import { useParams, useLocation } from "wouter";
 import { useState } from "react";
-import { ArrowLeft, Loader2, Phone, Calendar, Shield, Globe, User, Activity, FileText, ClipboardList, Pencil, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, Phone, Calendar, Shield, Globe, User, Activity, FileText, ClipboardList, Pencil, Trash2, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import {
   PRIORITY_LABELS, STATUS_LABELS, priorityBadgeClass, statusBadgeClass, fmtDate, toDateInput, FOLLOWUP_TYPE_LABELS, FOLLOWUP_STATUS_LABELS,
@@ -21,6 +21,15 @@ function Section({ title, icon: Icon, children }: { title: string; icon: React.E
     </div>
   );
 }
+
+/** "2026-06" -> "June 2026" */
+function monthLabel(m: string) {
+  const [y, mo] = m.split("-").map(Number);
+  if (!y || !mo) return m;
+  return new Date(y, mo - 1, 1).toLocaleString("en-US", { month: "long", year: "numeric" });
+}
+
+const COMPLETED_STATUSES = ["completed", "ready_for_billing", "billed", "needs_provider_review"];
 
 export default function PatientDetailPage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
@@ -119,35 +128,57 @@ export default function PatientDetailPage() {
             </div>
           </Section>
 
-          {/* CCM Task history */}
-          <Section title="CCM Task History" icon={ClipboardList}>
-            <div className="space-y-2">
-              {d.tasks.length === 0 && <p className="text-sm text-slate-400 font-light">No CCM tasks yet.</p>}
-              {d.tasks.map((t) => (
-                <div key={t.id} className="flex items-center justify-between p-3 rounded-2xl bg-slate-50">
-                  <div>
-                    <p className="font-medium text-slate-800">{t.month}</p>
-                    <p className="text-xs text-slate-400">Contacted {fmtDate(t.dateContacted)}</p>
+          {/* CCM Call History — monthly call log with documentation */}
+          <Section title="CCM Call History" icon={ClipboardList}>
+            {(() => {
+              const noteByTask = new Map<number, (typeof d.notes)[number]>();
+              for (const n of d.notes) if (n.ccmTaskId != null) noteByTask.set(n.ccmTaskId, n);
+              const completedCount = d.tasks.filter((t) => COMPLETED_STATUSES.includes(t.status ?? "")).length;
+              if (d.tasks.length === 0) {
+                return <p className="text-sm text-slate-400 font-light">No calls recorded yet. A monthly call task is created automatically for active patients.</p>;
+              }
+              return (
+                <>
+                  <p className="text-sm text-slate-500 mb-3">
+                    <span className="font-semibold text-slate-800">{completedCount}</span> completed {completedCount === 1 ? "call" : "calls"} across {d.tasks.length} {d.tasks.length === 1 ? "month" : "months"}.
+                  </p>
+                  <div className="space-y-3">
+                    {d.tasks.map((t) => {
+                      const note = noteByTask.get(t.id);
+                      const done = COMPLETED_STATUSES.includes(t.status ?? "");
+                      const completedBy = t.completedByStaffId ? d.completedByName[t.completedByStaffId] : null;
+                      return (
+                        <div key={t.id} className="rounded-2xl border border-slate-100 p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${done ? "bg-emerald-100 text-emerald-600" : "bg-slate-100 text-slate-400"}`}>
+                                {done ? <CheckCircle2 size={18} /> : <Phone size={16} />}
+                              </div>
+                              <div>
+                                <p className="font-semibold text-slate-800">{monthLabel(t.month)}</p>
+                                <p className="text-xs text-slate-400">
+                                  {t.dateContacted ? `Called ${fmtDate(t.dateContacted)}` : t.completedAt ? `Completed ${fmtDate(t.completedAt)}` : "Not yet contacted"}
+                                  {completedBy ? ` · by ${completedBy}` : ""}
+                                </p>
+                              </div>
+                            </div>
+                            <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${statusBadgeClass(t.status ?? "not_started")}`}>{STATUS_LABELS[t.status ?? "not_started"] || t.status}</span>
+                          </div>
+                          {note?.generatedNote && (
+                            <details className="mt-3">
+                              <summary className="text-xs font-semibold text-[hsl(200_100%_40%)] cursor-pointer select-none flex items-center gap-1">
+                                <FileText size={12} /> View call note
+                              </summary>
+                              <p className="mt-2 text-sm text-slate-700 whitespace-pre-wrap rounded-xl bg-slate-50 p-3">{note.generatedNote}</p>
+                            </details>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
-                  <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${statusBadgeClass(t.status ?? "not_started")}`}>{STATUS_LABELS[t.status ?? "not_started"] || t.status}</span>
-                </div>
-              ))}
-            </div>
-          </Section>
-
-          {/* Notes */}
-          <Section title="CCM Documentation Notes" icon={FileText}>
-            <div className="space-y-3">
-              {d.notes.length === 0 && <p className="text-sm text-slate-400 font-light">No notes yet.</p>}
-              {d.notes.map((n) => (
-                <div key={n.id} className="p-4 rounded-2xl bg-slate-50">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-xs font-semibold text-slate-500">{fmtDate(n.createdAt)}</p>
-                  </div>
-                  <p className="text-sm text-slate-700 whitespace-pre-wrap line-clamp-6">{n.generatedNote || "—"}</p>
-                </div>
-              ))}
-            </div>
+                </>
+              );
+            })()}
           </Section>
 
           {/* Follow-ups */}

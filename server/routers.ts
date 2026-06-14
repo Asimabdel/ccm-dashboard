@@ -479,6 +479,7 @@ export const appRouter = router({
           csv: z.string(),
           defaultClinicId: z.number(),
           defaultProviderId: z.number(),
+          defaultStaffId: z.number().optional(),
           skipExistingDuplicates: z.boolean().default(true),
         })
       )
@@ -515,9 +516,13 @@ export const appRouter = router({
           lastCalledAt: r.lastCalled ? new Date(r.lastCalled) : null,
           nextAppointment: r.nextAppointment ? new Date(r.nextAppointment) : null,
           lastCCMDate: r.completed && r.lastCalled ? new Date(r.lastCalled) : null,
+          assignedStaffId: input.defaultStaffId ?? null,
         }));
 
         const inserted = await bulkInsertPatients(mapped);
+        // Create this month's worklist tasks for the imported patients (assigned to
+        // the chosen employee, if any), so they appear on the worklist right away.
+        if (inserted > 0) await generateMonthlyWorklist(currentMonth());
         void logAudit(ctx, "bulk_import_patients", {
           entityType: "patient",
           description: `Bulk imported ${inserted} patients (skipped ${valid.length - inserted} duplicates, ${rows.length - valid.length} invalid)`,

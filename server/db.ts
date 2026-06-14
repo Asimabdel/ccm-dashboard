@@ -518,6 +518,12 @@ export async function getPatientDetail(patientId: number) {
 
   const tasks = await db.select().from(ccmTasks).where(eq(ccmTasks.patientId, patientId)).orderBy(desc(ccmTasks.month));
   const notes = await db.select().from(ccmNotes).where(eq(ccmNotes.patientId, patientId)).orderBy(desc(ccmNotes.createdAt));
+  // Resolve the staff member who completed each call, for the call-history log.
+  const completerIds = Array.from(new Set(tasks.map((t) => t.completedByStaffId).filter((x): x is number => !!x)));
+  const completers = completerIds.length
+    ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, completerIds))
+    : [];
+  const completedByName: Record<number, string> = Object.fromEntries(completers.map((c) => [c.id, c.name || ""]));
   const fus = await db.select().from(followUpItems).where(eq(followUpItems.patientId, patientId)).orderBy(desc(followUpItems.createdAt));
   const prov = patient.providerId ? await getProviderById(patient.providerId) : undefined;
   const clinicArr = await db.select().from(clinics).where(eq(clinics.id, patient.clinicId)).limit(1);
@@ -527,6 +533,7 @@ export async function getPatientDetail(patientId: number) {
     patient,
     tasks,
     notes,
+    completedByName,
     followUps: fus,
     provider: prov,
     clinic: clinicArr[0],
@@ -1206,6 +1213,7 @@ export type BulkPatientRow = {
   lastCalledAt?: Date | null;
   nextAppointment?: Date | null;
   lastCCMDate?: Date | null;
+  assignedStaffId?: number | null;
 };
 
 /** Insert many patients in one transaction-ish batch. Returns inserted count. */
@@ -1230,6 +1238,7 @@ export async function bulkInsertPatients(rows: BulkPatientRow[]): Promise<number
     lastCalledAt: r.lastCalledAt ?? null,
     nextAppointment: r.nextAppointment ?? null,
     lastCCMDate: r.lastCCMDate ?? null,
+    assignedStaffId: r.assignedStaffId ?? null,
   }));
   await db.insert(patients).values(values);
   return values.length;
