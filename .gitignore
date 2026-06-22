@@ -4,8 +4,10 @@
 
 # Build outputs
 dist/
+dist-lambda/
 build/
 *.dist
+*.zip
 
 # Environment variables
 .env
