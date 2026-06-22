@@ -74990,7 +74990,19 @@ async function notifyOwner(payload) {
 // server/_core/trpc.ts
 var import_superjson = __toESM(require_dist2(), 1);
 var t = initTRPC.context().create({
-  transformer: import_superjson.default
+  transformer: import_superjson.default,
+  // Never leak raw SQL / schema / DB connection errors to the browser. If the
+  // database is unreachable or a query fails, log the real cause server-side and
+  // return a friendly, generic message instead of a stack/SQL dump.
+  errorFormatter({ shape, error: error46 }) {
+    const raw = `${error46.message} ${error46.cause?.message ?? ""}`;
+    const isDbError = error46.code === "INTERNAL_SERVER_ERROR" && /Failed query|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|PROTOCOL_CONNECTION_LOST|ER_[A-Z]|Too many connections|pool is closed|getaddrinfo/i.test(raw);
+    if (isDbError) {
+      if (error46.cause) console.error("[DB] Request failed:", error46.cause);
+      return { ...shape, message: "The service is temporarily unavailable. Please try again in a moment." };
+    }
+    return shape;
+  }
 });
 var router = t.router;
 var publicProcedure = t.procedure;
