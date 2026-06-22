@@ -1,3 +1,4 @@
+import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
 import { ENV } from "./env";
 
 export type Role = "system" | "user" | "assistant" | "tool" | "function";
@@ -339,7 +340,86 @@ const fetchWithBackoff = async (
     : new Error("LLM request failed after exhausting retries");
 };
 
+// ---------------------------------------------------------------------------
+// AWS Bedrock provider (HIPAA: covered by the AWS BAA)
+//
+// Used automatically when BEDROCK_MODEL_ID is set (i.e. on the AWS deployment).
+// On Lambda the IAM role supplies credentials — no API keys in code/env. Set
+// BEDROCK_MODEL_ID to a Claude model id you have access to in the Bedrock console
+// (e.g. an "anthropic.claude-*" id or a "us.anthropic.claude-*" inference profile).
+// ---------------------------------------------------------------------------
+
+function messageToText(content: MessageContent | MessageContent[]): string {
+  const arr = Array.isArray(content) ? content : [content];
+  return arr
+    .map((p) => (typeof p === "string" ? p : p.type === "text" ? p.text : ""))
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+let _bedrock: BedrockRuntimeClient | null = null;
+function bedrockClient(): BedrockRuntimeClient {
+  if (!_bedrock) {
+    const region = process.env.BEDROCK_REGION || process.env.AWS_REGION || "us-east-1";
+    _bedrock = new BedrockRuntimeClient({ region });
+  }
+  return _bedrock;
+}
+
+async function invokeBedrock(params: InvokeParams): Promise<InvokeResult> {
+  const modelId = process.env.BEDROCK_MODEL_ID;
+  if (!modelId) throw new Error("BEDROCK_MODEL_ID is not configured");
+
+  // Bedrock's Converse API takes system prompts separately from the conversation.
+  const system: { text: string }[] = [];
+  const messages: { role: "user" | "assistant"; content: { text: string }[] }[] = [];
+  for (const m of params.messages) {
+    const text = messageToText(m.content);
+    if (!text) continue;
+    if (m.role === "system") system.push({ text });
+    else if (m.role === "assistant") messages.push({ role: "assistant", content: [{ text }] });
+    else messages.push({ role: "user", content: [{ text }] });
+  }
+
+  const out = await bedrockClient().send(
+    new ConverseCommand({
+      modelId,
+      system: system.length ? system : undefined,
+      messages,
+      inferenceConfig: { maxTokens: params.maxTokens ?? params.max_tokens ?? 1024 },
+    })
+  );
+
+  const text = (out.output?.message?.content ?? [])
+    .map((c) => (c as { text?: string }).text ?? "")
+    .filter(Boolean)
+    .join("");
+
+  return {
+    id: out.$metadata?.requestId ?? "bedrock",
+    created: Math.floor(Date.now() / 1000),
+    model: modelId,
+    choices: [
+      { index: 0, message: { role: "assistant", content: text }, finish_reason: out.stopReason ?? "stop" },
+    ],
+    usage: out.usage
+      ? {
+          prompt_tokens: out.usage.inputTokens ?? 0,
+          completion_tokens: out.usage.outputTokens ?? 0,
+          total_tokens: out.usage.totalTokens ?? 0,
+        }
+      : undefined,
+  };
+}
+
 export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
+  // Prefer AWS Bedrock when configured (covered by the AWS BAA); otherwise the
+  // OpenAI-compatible (Forge) endpoint.
+  if (process.env.BEDROCK_MODEL_ID) {
+    return invokeBedrock(params);
+  }
+
   assertApiKey();
 
   const {
