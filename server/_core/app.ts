@@ -12,8 +12,8 @@ import { createContext } from "./context";
  * app can run in two environments:
  *   - As a long-lived Node server (server/_core/index.ts) where it also serves the
  *     built client (or the Vite dev middleware).
- *   - As a Vercel serverless function (api/index.ts) where the static client is
- *     served by Vercel's CDN and only API routes hit this handler.
+ *   - As an AWS Lambda function (server/_core/lambda.ts) where the same handler
+ *     serves both the API and the built SPA (see lambda.ts).
  */
 export function createApp(): Express {
   const app = express();

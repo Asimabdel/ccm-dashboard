@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "NODE_ENV=development tsx watch server/_core/index.ts",
     "build": "vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
-    "build:vercel": "vite build && esbuild server/_core/serverless.ts --platform=node --bundle --format=esm --outfile=api/index.js --banner:js=\"import{createRequire as __cr}from'module';const require=__cr(import.meta.url);\"",
     "build:lambda": "esbuild server/_core/lambda.ts --platform=node --bundle --format=esm --outfile=dist-lambda/index.mjs --banner:js=\"import{createRequire as __cr}from'module';const require=__cr(import.meta.url);\"",
     "start": "NODE_ENV=production node dist/index.js",
     "check": "tsc --noEmit",
