@@ -463,7 +463,7 @@ export async function getWorklistForMonth(month: string, filters?: {
     .leftJoin(providers, eq(patients.providerId, providers.id))
     .leftJoin(clinics, eq(patients.clinicId, clinics.id))
     .where(and(...conditions))
-    .orderBy(desc(ccmTasks.priorityLevel), desc(ccmTasks.updatedAt));
+    .orderBy(desc(ccmTasks.updatedAt));
 
   return rows;
 }
@@ -526,7 +526,7 @@ export async function getPatientDetail(patientId: number) {
   const completedByName: Record<number, string> = Object.fromEntries(completers.map((c) => [c.id, c.name || ""]));
   const fus = await db.select().from(followUpItems).where(eq(followUpItems.patientId, patientId)).orderBy(desc(followUpItems.createdAt));
   const prov = patient.providerId ? await getProviderById(patient.providerId) : undefined;
-  const clinicArr = await db.select().from(clinics).where(eq(clinics.id, patient.clinicId)).limit(1);
+  const clinicArr = patient.clinicId ? await db.select().from(clinics).where(eq(clinics.id, patient.clinicId)).limit(1) : [];
   const staffArr = patient.assignedStaffId ? await db.select().from(users).where(eq(users.id, patient.assignedStaffId)).limit(1) : [];
 
   return {

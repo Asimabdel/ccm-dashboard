@@ -1,12 +1,10 @@
 import { cn } from "@/lib/utils";
 import {
   STATUS_LABELS,
-  PRIORITY_LABELS,
   ESCALATION_STATUS_LABELS,
   BILLING_STATUS_LABELS,
   FOLLOWUP_STATUS_LABELS,
   statusBadgeClass,
-  priorityBadgeClass,
   escalationBadgeClass,
 } from "@/lib/ccm";
 
@@ -14,10 +12,6 @@ const base = "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-m
 
 export function StatusBadge({ status }: { status: string }) {
   return <span className={cn(base, statusBadgeClass(status))}>{STATUS_LABELS[status] || status}</span>;
-}
-
-export function PriorityBadge({ priority }: { priority: string }) {
-  return <span className={cn(base, priorityBadgeClass(priority))}>{PRIORITY_LABELS[priority] || priority}</span>;
 }
 
 export function EscalationBadge({ status }: { status: string }) {

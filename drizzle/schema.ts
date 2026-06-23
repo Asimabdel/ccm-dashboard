@@ -90,7 +90,7 @@ export const patients = mysqlTable("patients", {
   name: varchar("name", { length: 255 }).notNull(),
   dateOfBirth: datetime("dateOfBirth"),
   phoneNumber: varchar("phoneNumber", { length: 20 }).notNull(),
-  clinicId: int("clinicId").references(() => clinics.id).notNull(),
+  clinicId: int("clinicId").references(() => clinics.id),
   providerId: int("providerId").references(() => providers.id).notNull(),
   preferredLanguage: varchar("preferredLanguage", { length: 50 }).default("English"),
   chronicConditions: json("chronicConditions").$type<string[]>().default([]),

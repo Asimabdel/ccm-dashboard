@@ -6,7 +6,7 @@ import { useState } from "react";
 import { ArrowLeft, Loader2, Phone, Calendar, Shield, Globe, User, Activity, FileText, ClipboardList, Pencil, Trash2, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import {
-  PRIORITY_LABELS, STATUS_LABELS, priorityBadgeClass, statusBadgeClass, fmtDate, toDateInput, FOLLOWUP_TYPE_LABELS, FOLLOWUP_STATUS_LABELS,
+  STATUS_LABELS, statusBadgeClass, fmtDate, toDateInput, FOLLOWUP_TYPE_LABELS, FOLLOWUP_STATUS_LABELS,
 } from "@/lib/ccm";
 import { PatientFormDialog, type PatientLike } from "@/components/PatientFormDialog";
 import {
@@ -81,7 +81,6 @@ export default function PatientDetailPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
-                <span className={`px-3 py-1.5 rounded-full text-xs font-semibold ${priorityBadgeClass(d.patient.riskLevel ?? "medium")}`}>{PRIORITY_LABELS[d.patient.riskLevel ?? "medium"]} Priority</span>
                 <span className={`px-3 py-1.5 rounded-full text-xs font-semibold ${statusBadgeClass(d.patient.ccmEnrollmentStatus ?? "active")}`}>{d.patient.ccmEnrollmentStatus}</span>
                 {canEdit && (
                   <button onClick={() => setEditOpen(true)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-50">

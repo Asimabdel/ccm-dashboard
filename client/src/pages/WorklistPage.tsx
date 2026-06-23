@@ -6,7 +6,7 @@ import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { Loader2, Phone, X, CheckCircle2, ListChecks } from "lucide-react";
 import {
-  STATUS_LABELS, STATUS_OPTIONS, PRIORITY_LABELS, priorityBadgeClass, statusBadgeClass, currentMonthStr,
+  STATUS_LABELS, STATUS_OPTIONS, statusBadgeClass, currentMonthStr,
 } from "@/lib/ccm";
 
 export default function WorklistPage() {
@@ -14,7 +14,6 @@ export default function WorklistPage() {
   const [, setLocation] = useLocation();
   const [month] = useState(currentMonthStr());
   const [statusFilter, setStatusFilter] = useState("");
-  const [priorityFilter, setPriorityFilter] = useState("");
   const [clinicFilter, setClinicFilter] = useState(0);
   const [selected, setSelected] = useState<number[]>([]);
   const [bulkStatus, setBulkStatus] = useState("");
@@ -25,10 +24,9 @@ export default function WorklistPage() {
   const filters = useMemo(() => ({
     month,
     status: statusFilter || undefined,
-    priorityLevel: (priorityFilter || undefined) as any,
     clinicId: clinicFilter || undefined,
     assignedStaffId: mineOnly && user ? user.id : undefined,
-  }), [month, statusFilter, priorityFilter, clinicFilter, mineOnly, user]);
+  }), [month, statusFilter, clinicFilter, mineOnly, user]);
   const worklist = trpc.worklist.forMonth.useQuery(filters, { enabled: !!user });
   const utils = trpc.useUtils();
 
@@ -36,10 +34,6 @@ export default function WorklistPage() {
 
   const updateStatus = trpc.worklist.updateStatus.useMutation({
     onSuccess: () => { utils.worklist.forMonth.invalidate(); toast.success("Status updated."); },
-    onError: (e) => toast.error(e.message),
-  });
-  const updatePriority = trpc.worklist.updatePriority.useMutation({
-    onSuccess: () => { utils.worklist.forMonth.invalidate(); },
     onError: (e) => toast.error(e.message),
   });
   const bulkUpdate = trpc.worklist.bulkUpdateStatus.useMutation({
@@ -63,16 +57,12 @@ export default function WorklistPage() {
             <option value="">All Statuses</option>
             {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
           </select>
-          <select className={field} value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
-            <option value="">All Priorities</option>
-            <option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
-          </select>
           <select className={field} value={clinicFilter} onChange={(e) => setClinicFilter(Number(e.target.value))}>
             <option value={0}>All Clinics</option>
             {(clinics.data || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          {(statusFilter || priorityFilter || clinicFilter) && (
-            <button onClick={() => { setStatusFilter(""); setPriorityFilter(""); setClinicFilter(0); }} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl text-sm text-slate-500 hover:bg-slate-100"><X size={14} /> Clear</button>
+          {(statusFilter || clinicFilter) && (
+            <button onClick={() => { setStatusFilter(""); setClinicFilter(0); }} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl text-sm text-slate-500 hover:bg-slate-100"><X size={14} /> Clear</button>
           )}
           {user?.role === "staff" && (
             <button onClick={() => setMineOnly((m) => !m)}
@@ -102,7 +92,6 @@ export default function WorklistPage() {
                 {isStaff && <th className="px-4 py-3 w-10"></th>}
                 <th className="px-5 py-3 font-medium">Patient</th>
                 <th className="px-5 py-3 font-medium">Provider</th>
-                <th className="px-5 py-3 font-medium">Priority</th>
                 <th className="px-5 py-3 font-medium">Status</th>
                 <th className="px-5 py-3 font-medium text-right">Action</th>
               </tr>
@@ -120,16 +109,6 @@ export default function WorklistPage() {
                     <p className="text-xs text-slate-400">{r.clinicName} - {r.staffName || "Unassigned"}</p>
                   </td>
                   <td className="px-5 py-3 text-slate-600">{r.providerName || "-"}</td>
-                  <td className="px-5 py-3">
-                    {isStaff ? (
-                      <select value={r.task.priorityLevel ?? "medium"} onChange={(e) => updatePriority.mutate({ id: r.task.id, priorityLevel: e.target.value as any })}
-                        className={`px-2 py-1 rounded-full text-[11px] font-semibold border-0 ${priorityBadgeClass(r.task.priorityLevel ?? "medium")}`}>
-                        <option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
-                      </select>
-                    ) : (
-                      <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${priorityBadgeClass(r.task.priorityLevel ?? "medium")}`}>{PRIORITY_LABELS[r.task.priorityLevel ?? "medium"]}</span>
-                    )}
-                  </td>
                   <td className="px-5 py-3">
                     {isStaff ? (
                       <select value={r.task.status ?? "not_started"} onChange={(e) => updateStatus.mutate({ id: r.task.id, status: e.target.value as any })}

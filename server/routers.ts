@@ -347,7 +347,6 @@ export const appRouter = router({
         z.object({
           clinicId: z.number().optional(),
           providerId: z.number().optional(),
-          riskLevel: z.enum(["high", "medium", "low"]).optional(),
           enrollmentStatus: z.string().optional(),
           search: z.string().optional(),
         }).optional()
@@ -380,13 +379,11 @@ export const appRouter = router({
           name: z.string().min(1),
           dateOfBirth: z.date().optional(),
           phoneNumber: z.string().min(1),
-          clinicId: z.number(),
+          clinicId: z.number().optional(),
           providerId: z.number(),
           preferredLanguage: z.string().optional(),
           chronicConditions: z.array(z.string()).optional(),
           insurance: z.string().optional(),
-          riskLevel: z.enum(["high", "medium", "low"]).optional(),
-          priorityLevel: z.enum(["high", "medium", "low"]).optional(),
           consentStatus: z.enum(["consented", "pending", "declined"]).optional(),
           assignedStaffId: z.number().optional(),
         })
@@ -404,8 +401,6 @@ export const appRouter = router({
           preferredLanguage: input.preferredLanguage || "English",
           chronicConditions: input.chronicConditions || [],
           insurance: input.insurance,
-          riskLevel: input.riskLevel || "medium",
-          priorityLevel: input.priorityLevel || input.riskLevel || "medium",
           ccmEnrollmentStatus: "active",
           consentStatus: input.consentStatus || "pending",
           assignedStaffId: input.assignedStaffId,
@@ -554,8 +549,6 @@ export const appRouter = router({
           name: z.string().optional(),
           phoneNumber: z.string().optional(),
           dateOfBirth: z.date().nullable().optional(),
-          riskLevel: z.enum(["high", "medium", "low"]).optional(),
-          priorityLevel: z.enum(["high", "medium", "low"]).optional(),
           chronicConditions: z.array(z.string()).optional(),
           insurance: z.string().optional(),
           preferredLanguage: z.string().optional(),
@@ -609,7 +602,6 @@ export const appRouter = router({
         z.object({
           month: z.string().optional(),
           status: z.string().optional(),
-          priorityLevel: z.enum(["high", "medium", "low"]).optional(),
           assignedStaffId: z.number().optional(),
           clinicId: z.number().optional(),
           providerId: z.number().optional(),
@@ -673,16 +665,6 @@ export const appRouter = router({
           await recomputeBilling(id, currentMonth());
         }
         return { success: true, count: input.ids.length };
-      }),
-
-    updatePriority: protectedProcedure
-      .input(z.object({ id: z.number(), priorityLevel: z.enum(["high", "medium", "low"]) }))
-      .mutation(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin", "staff"]);
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        await db.update(ccmTasks).set({ priorityLevel: input.priorityLevel }).where(eq(ccmTasks.id, input.id));
-        return getCCMTaskById(input.id);
       }),
 
     // Assignment: manual single, bulk, and rule-based

@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { Search, Plus, Loader2, UserPlus, X, Upload, AlertTriangle, Activity, ChevronUp, ChevronDown, ChevronsUpDown, MoreVertical, Pencil, Trash2 } from "lucide-react";
-import { PRIORITY_LABELS, priorityBadgeClass, statusBadgeClass, RPM_STATUS_LABELS, fmtDate, toDateInput } from "@/lib/ccm";
+import { statusBadgeClass, RPM_STATUS_LABELS, fmtDate, toDateInput } from "@/lib/ccm";
 import { cn } from "@/lib/utils";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { PatientFormDialog, type PatientLike } from "@/components/PatientFormDialog";
 
-type SortKey = "name" | "risk" | "provider" | "clinic" | "lastCalled" | "nextAppt" | "status";
+type SortKey = "name" | "provider" | "clinic" | "lastCalled" | "nextAppt" | "status";
 type SortState = { key: SortKey; dir: "asc" | "desc" };
 
 /** Clickable, sticky table header cell with a sort indicator. */
@@ -43,8 +43,6 @@ const CONDITIONS = [
   "Atrial Fibrillation", "Asthma", "Osteoarthritis", "Depression", "Obesity", "GERD",
 ];
 
-const RISK_OPTIONS = ["high", "medium", "low"] as const;
-
 function EnrollDialog({ onDone }: { onDone: () => void }) {
   const [open, setOpen] = useState(false);
   const clinics = trpc.clinics.list.useQuery(undefined, { enabled: open });
@@ -53,7 +51,7 @@ function EnrollDialog({ onDone }: { onDone: () => void }) {
 
   const [form, setForm] = useState({
     name: "", phoneNumber: "", clinicId: 0, providerId: 0, insurance: "",
-    preferredLanguage: "English", priorityLevel: "medium" as "high" | "medium" | "low",
+    preferredLanguage: "English",
     consentStatus: "pending" as "consented" | "pending" | "declined",
     assignedStaffId: 0, conditions: [] as string[], dob: "",
   });
@@ -69,18 +67,17 @@ function EnrollDialog({ onDone }: { onDone: () => void }) {
   });
 
   const submit = () => {
-    if (!form.name || !form.phoneNumber || !form.clinicId || !form.providerId) {
-      toast.error("Name, phone, clinic, and provider are required.");
+    if (!form.name || !form.phoneNumber || !form.providerId) {
+      toast.error("Name, phone, and provider are required.");
       return;
     }
     create.mutate({
       name: form.name,
       phoneNumber: form.phoneNumber,
-      clinicId: form.clinicId,
+      clinicId: form.clinicId || undefined,
       providerId: form.providerId,
       insurance: form.insurance || undefined,
       preferredLanguage: form.preferredLanguage,
-      priorityLevel: form.priorityLevel,
       consentStatus: form.consentStatus,
       assignedStaffId: form.assignedStaffId || undefined,
       chronicConditions: form.conditions,
@@ -112,9 +109,9 @@ function EnrollDialog({ onDone }: { onDone: () => void }) {
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-medium text-slate-500">Clinic *</label>
+              <label className="text-xs font-medium text-slate-500">Clinic</label>
               <select className={field} value={form.clinicId} onChange={(e) => setForm({ ...form, clinicId: Number(e.target.value) })}>
-                <option value={0}>Select clinic</option>
+                <option value={0}>No clinic</option>
                 {(clinics.data || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
@@ -128,12 +125,6 @@ function EnrollDialog({ onDone }: { onDone: () => void }) {
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-medium text-slate-500">Priority</label>
-              <select className={field} value={form.priorityLevel} onChange={(e) => setForm({ ...form, priorityLevel: e.target.value as any })}>
-                {RISK_OPTIONS.map((r) => <option key={r} value={r}>{PRIORITY_LABELS[r]}</option>)}
-              </select>
-            </div>
-            <div>
               <label className="text-xs font-medium text-slate-500">Consent</label>
               <select className={field} value={form.consentStatus} onChange={(e) => setForm({ ...form, consentStatus: e.target.value as any })}>
                 <option value="pending">Pending</option>
@@ -141,19 +132,17 @@ function EnrollDialog({ onDone }: { onDone: () => void }) {
                 <option value="declined">Declined</option>
               </select>
             </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-medium text-slate-500">Language</label>
               <input className={field} value={form.preferredLanguage} onChange={(e) => setForm({ ...form, preferredLanguage: e.target.value })} />
             </div>
-            <div>
-              <label className="text-xs font-medium text-slate-500">Assigned Staff</label>
-              <select className={field} value={form.assignedStaffId} onChange={(e) => setForm({ ...form, assignedStaffId: Number(e.target.value) })}>
-                <option value={0}>Unassigned</option>
-                {(staff.data || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-            </div>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-slate-500">Assigned Staff</label>
+            <select className={field} value={form.assignedStaffId} onChange={(e) => setForm({ ...form, assignedStaffId: Number(e.target.value) })}>
+              <option value={0}>Unassigned</option>
+              {(staff.data || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
           </div>
           <div>
             <label className="text-xs font-medium text-slate-500">Chronic Conditions</label>
@@ -186,7 +175,6 @@ export default function PatientsPage() {
   const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
   const [clinicFilter, setClinicFilter] = useState<number>(0);
-  const [riskFilter, setRiskFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [sort, setSort] = useState<SortState>({ key: "name", dir: "asc" });
 
@@ -197,22 +185,19 @@ export default function PatientsPage() {
   const filters = useMemo(() => ({
     search: search || undefined,
     clinicId: clinicFilter || undefined,
-    riskLevel: (riskFilter || undefined) as "high" | "medium" | "low" | undefined,
     enrollmentStatus: statusFilter || undefined,
-  }), [search, clinicFilter, riskFilter, statusFilter]);
+  }), [search, clinicFilter, statusFilter]);
   const patients = trpc.patients.list.useQuery(filters, { enabled: !!user });
-  const hasFilters = !!(search || clinicFilter || riskFilter || statusFilter);
+  const hasFilters = !!(search || clinicFilter || statusFilter);
 
   const sortedPatients = useMemo(() => {
     const rows = [...(patients.data || [])];
     const dir = sort.dir === "asc" ? 1 : -1;
-    const riskOrder: Record<string, number> = { high: 3, medium: 2, low: 1 };
     const time = (d: unknown) => (d ? new Date(d as string).getTime() : 0);
     rows.sort((a, b) => {
       let av: string | number = 0, bv: string | number = 0;
       switch (sort.key) {
         case "name": av = a.patient.name?.toLowerCase() ?? ""; bv = b.patient.name?.toLowerCase() ?? ""; break;
-        case "risk": av = riskOrder[a.patient.riskLevel ?? ""] ?? 0; bv = riskOrder[b.patient.riskLevel ?? ""] ?? 0; break;
         case "provider": av = a.providerName ?? ""; bv = b.providerName ?? ""; break;
         case "clinic": av = a.clinicName ?? ""; bv = b.clinicName ?? ""; break;
         case "lastCalled": av = time(a.patient.lastCalledAt); bv = time(b.patient.lastCalledAt); break;
@@ -278,12 +263,6 @@ export default function PatientsPage() {
             <option value={0}>All Clinics</option>
             {(clinics.data || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          <select className={field} value={riskFilter} onChange={(e) => setRiskFilter(e.target.value)}>
-            <option value="">All Risk</option>
-            <option value="high">High risk</option>
-            <option value="medium">Medium risk</option>
-            <option value="low">Low risk</option>
-          </select>
           <select className={field} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
             <option value="">All Status</option>
             <option value="active">Active</option>
@@ -291,7 +270,7 @@ export default function PatientsPage() {
             <option value="declined">Declined</option>
           </select>
           {hasFilters && (
-            <button onClick={() => { setSearch(""); setClinicFilter(0); setRiskFilter(""); setStatusFilter(""); }} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl text-sm text-slate-500 hover:bg-slate-100">
+            <button onClick={() => { setSearch(""); setClinicFilter(0); setStatusFilter(""); }} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl text-sm text-slate-500 hover:bg-slate-100">
               <X size={14} /> Clear
             </button>
           )}
@@ -310,7 +289,6 @@ export default function PatientsPage() {
             <thead className="sticky top-0 z-10 shadow-[0_1px_0_0_rgb(241_245_249)]">
               <tr className="text-left text-xs uppercase tracking-wider text-slate-400">
                 <SortTh label="Patient" k="name" sort={sort} onSort={onSort} />
-                <SortTh label="Risk" k="risk" sort={sort} onSort={onSort} />
                 <th className="px-5 py-3 font-medium bg-slate-50">Conditions</th>
                 <SortTh label="Provider" k="provider" sort={sort} onSort={onSort} />
                 <SortTh label="Clinic" k="clinic" sort={sort} onSort={onSort} />
@@ -324,11 +302,11 @@ export default function PatientsPage() {
             <tbody>
               {patients.isLoading && Array.from({ length: 6 }).map((_, i) => (
                 <tr key={`sk-${i}`} className="border-b border-slate-50 last:border-0">
-                  <td colSpan={10} className="px-5 py-3.5"><div className="h-8 rounded-lg bg-slate-100 animate-pulse" /></td>
+                  <td colSpan={9} className="px-5 py-3.5"><div className="h-8 rounded-lg bg-slate-100 animate-pulse" /></td>
                 </tr>
               ))}
               {!patients.isLoading && sortedPatients.length === 0 && (
-                <tr><td colSpan={10} className="px-5 py-16 text-center">
+                <tr><td colSpan={9} className="px-5 py-16 text-center">
                   <Search className="mx-auto text-slate-300 mb-2" size={28} />
                   <p className="text-slate-500 font-medium">No patients found</p>
                   <p className="text-sm font-light text-slate-400 mt-0.5">{hasFilters ? "Try adjusting your filters." : "Enroll a patient to get started."}</p>
@@ -347,11 +325,6 @@ export default function PatientsPage() {
                       )}
                     </p>
                     <p className="text-xs text-slate-400">{r.patient.phoneNumber}</p>
-                  </td>
-                  <td className="px-5 py-3">
-                    {r.patient.riskLevel ? (
-                      <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${priorityBadgeClass(r.patient.riskLevel)}`}>{PRIORITY_LABELS[r.patient.riskLevel] ?? r.patient.riskLevel}</span>
-                    ) : <span className="text-slate-300">—</span>}
                   </td>
                   <td className="px-5 py-3">
                     <div className="flex flex-wrap gap-1 max-w-[220px]">

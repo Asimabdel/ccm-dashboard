@@ -3,13 +3,11 @@ import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { Loader2, UserPlus, Save } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { PRIORITY_LABELS } from "@/lib/ccm";
 
 const CONDITIONS = [
   "Hypertension", "Type 2 Diabetes", "COPD", "CHF", "CKD", "Hyperlipidemia",
   "Atrial Fibrillation", "Asthma", "Osteoarthritis", "Depression", "Obesity", "GERD",
 ];
-const RISK_OPTIONS = ["high", "medium", "low"] as const;
 
 export type PatientLike = {
   id: number;
@@ -17,10 +15,8 @@ export type PatientLike = {
   phoneNumber: string;
   dateOfBirth?: string | Date | null;
   insurance?: string | null;
-  clinicId: number;
+  clinicId?: number | null;
   providerId: number;
-  priorityLevel?: string | null;
-  riskLevel?: string | null;
   consentStatus?: string | null;
   preferredLanguage?: string | null;
   assignedStaffId?: number | null;
@@ -30,7 +26,7 @@ export type PatientLike = {
 
 const EMPTY = {
   name: "", phoneNumber: "", clinicId: 0, providerId: 0, insurance: "",
-  preferredLanguage: "English", priorityLevel: "medium" as "high" | "medium" | "low",
+  preferredLanguage: "English",
   consentStatus: "pending" as "consented" | "pending" | "declined",
   assignedStaffId: 0, conditions: [] as string[], dob: "",
   ccmEnrollmentStatus: "active" as "active" | "inactive" | "declined",
@@ -59,7 +55,6 @@ export function PatientFormDialog({ mode, patient, open, onOpenChange, onDone }:
         providerId: patient.providerId ?? 0,
         insurance: patient.insurance ?? "",
         preferredLanguage: patient.preferredLanguage ?? "English",
-        priorityLevel: ((patient.priorityLevel ?? patient.riskLevel ?? "medium") as "high" | "medium" | "low"),
         consentStatus: ((patient.consentStatus ?? "pending") as "consented" | "pending" | "declined"),
         assignedStaffId: patient.assignedStaffId ?? 0,
         conditions: (patient.chronicConditions as string[]) ?? [],
@@ -82,19 +77,17 @@ export function PatientFormDialog({ mode, patient, open, onOpenChange, onDone }:
   const pending = create.isPending || update.isPending;
 
   const submit = () => {
-    if (!form.name || !form.phoneNumber || !form.clinicId || !form.providerId) {
-      toast.error("Name, phone, clinic, and provider are required.");
+    if (!form.name || !form.phoneNumber || !form.providerId) {
+      toast.error("Name, phone, and provider are required.");
       return;
     }
     const common = {
       name: form.name,
       phoneNumber: form.phoneNumber,
-      clinicId: form.clinicId,
+      clinicId: form.clinicId || undefined,
       providerId: form.providerId,
       insurance: form.insurance || undefined,
       preferredLanguage: form.preferredLanguage,
-      priorityLevel: form.priorityLevel,
-      riskLevel: form.priorityLevel,
       consentStatus: form.consentStatus,
       assignedStaffId: form.assignedStaffId || undefined,
       chronicConditions: form.conditions,
@@ -128,9 +121,9 @@ export function PatientFormDialog({ mode, patient, open, onOpenChange, onDone }:
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-medium text-slate-500">Clinic *</label>
+              <label className="text-xs font-medium text-slate-500">Clinic</label>
               <select className={field} value={form.clinicId} onChange={(e) => setForm({ ...form, clinicId: Number(e.target.value) })}>
-                <option value={0}>Select clinic</option>
+                <option value={0}>No clinic</option>
                 {(clinics.data || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
@@ -144,12 +137,6 @@ export function PatientFormDialog({ mode, patient, open, onOpenChange, onDone }:
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-medium text-slate-500">Priority</label>
-              <select className={field} value={form.priorityLevel} onChange={(e) => setForm({ ...form, priorityLevel: e.target.value as "high" | "medium" | "low" })}>
-                {RISK_OPTIONS.map((r) => <option key={r} value={r}>{PRIORITY_LABELS[r]}</option>)}
-              </select>
-            </div>
-            <div>
               <label className="text-xs font-medium text-slate-500">Consent</label>
               <select className={field} value={form.consentStatus} onChange={(e) => setForm({ ...form, consentStatus: e.target.value as "consented" | "pending" | "declined" })}>
                 <option value="pending">Pending</option>
@@ -157,19 +144,17 @@ export function PatientFormDialog({ mode, patient, open, onOpenChange, onDone }:
                 <option value="declined">Declined</option>
               </select>
             </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-medium text-slate-500">Language</label>
               <input className={field} value={form.preferredLanguage} onChange={(e) => setForm({ ...form, preferredLanguage: e.target.value })} />
             </div>
-            <div>
-              <label className="text-xs font-medium text-slate-500">Assigned Staff</label>
-              <select className={field} value={form.assignedStaffId} onChange={(e) => setForm({ ...form, assignedStaffId: Number(e.target.value) })}>
-                <option value={0}>Unassigned</option>
-                {(staff.data || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-            </div>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-slate-500">Assigned Staff</label>
+            <select className={field} value={form.assignedStaffId} onChange={(e) => setForm({ ...form, assignedStaffId: Number(e.target.value) })}>
+              <option value={0}>Unassigned</option>
+              {(staff.data || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
           </div>
           {mode === "edit" && (
             <div>
