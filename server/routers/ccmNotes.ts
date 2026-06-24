@@ -7,7 +7,6 @@ export const ccmNotesRouter = router({
     .input(
       z.object({
         patientName: z.string(),
-        chronicConditions: z.array(z.string()).optional(),
         responses: z.object({
           howFeeling: z.string().optional(),
           newSymptoms: z.string().optional(),
@@ -24,36 +23,34 @@ export const ccmNotesRouter = router({
       })
     )
     .mutation(async ({ input }) => {
-      const conditions = (input.chronicConditions ?? []).filter(Boolean);
-      const prompt = `Write a Chronic Care Management (CCM) monthly care-management note documenting the telephone encounter below. Format it as a proper CCM note suitable for the medical record and CCM billing documentation.
+      const prompt = `Generate a professional and concise CCM (Chronic Care Management) monthly follow-up note based on the following patient call responses. The note should be well-organized, clinically appropriate, and suitable for medical records.
 
-PATIENT: ${input.patientName}
-DATE OF SERVICE: ${new Date().toLocaleDateString()}
-ENCOUNTER TYPE: Telephone — CCM monthly check-in
-CHRONIC CONDITIONS BEING MANAGED: ${conditions.length ? conditions.join(", ") : "Not specified"}
+Patient Name: ${input.patientName}
+Date: ${new Date().toLocaleDateString()}
 
-Patient-reported during the call:
-- Current health status: ${input.responses.howFeeling || "Not reported"}
-- New or worsening symptoms: ${input.responses.newSymptoms || "None reported"}
-- Medication adherence: ${input.responses.medicationAdherence || "Not discussed"}
-- Medication refills needed: ${input.responses.refillsNeeded || "None"}
-- Recent ER/hospitalization: ${input.responses.erHospitalizationSince || "None"}
-- Recent specialist visits: ${input.responses.recentSpecialistVisits || "None"}
-- Blood pressure reading: ${input.responses.bloodPressureReading || "Not obtained"}
-- Blood sugar reading: ${input.responses.bloodSugarReading || "Not obtained"}
-- Upcoming appointments: ${input.responses.upcomingAppointments || "None scheduled"}
-- Follow-up/testing needed: ${input.responses.followUpNeeded || "None identified"}
-- Patient concerns/questions: ${input.responses.patientConcerns || "None reported"}
+Call Assessment:
+- Patient's Current Health Status: ${input.responses.howFeeling || "Not reported"}
+- New or Worsening Symptoms: ${input.responses.newSymptoms || "None reported"}
+- Medication Adherence: ${input.responses.medicationAdherence || "Not discussed"}
+- Medication Refills Needed: ${input.responses.refillsNeeded || "None"}
+- Recent ER/Hospitalization: ${input.responses.erHospitalizationSince || "None"}
+- Recent Specialist Visits: ${input.responses.recentSpecialistVisits || "None"}
+- Blood Pressure Reading: ${input.responses.bloodPressureReading || "Not taken"}
+- Blood Sugar Reading: ${input.responses.bloodSugarReading || "Not taken"}
+- Upcoming Appointments: ${input.responses.upcomingAppointments || "None scheduled"}
+- Follow-up/Testing Needed: ${input.responses.followUpNeeded || "None identified"}
+- Patient Concerns/Questions: ${input.responses.patientConcerns || "None reported"}
 
-Produce the note with these sections, in this order and with these headings:
-1. REASON FOR CONTACT — that this is the monthly CCM check-in for the chronic conditions above.
-2. SUBJECTIVE — patient-reported status, symptoms, medication adherence/refills, and any recent ER/hospitalizations or specialist visits.
-3. OBJECTIVE / VITALS — any readings provided (BP, blood sugar); write "Not obtained this encounter" if none.
-4. ASSESSMENT — a brief status line for each chronic condition being managed.
-5. CARE PLAN & COORDINATION — interventions, patient education, medication actions, referrals, scheduling, and any care coordination performed.
-6. FOLLOW-UP — next steps, upcoming appointments, and when the next CCM contact should occur.
+Generate a structured clinical note with the following sections:
+1. CHIEF COMPLAINT/REASON FOR CONTACT
+2. HISTORY OF PRESENT ILLNESS
+3. VITAL SIGNS/MEASUREMENTS (if available)
+4. MEDICATION REVIEW
+5. ASSESSMENT
+6. PLAN/RECOMMENDATIONS
+7. FOLLOW-UP
 
-Keep it professional, clinically appropriate, and concise (about 250-450 words). Do not invent clinical findings that were not provided. Do NOT add a signature, "documented by", or date/time line at the end — that is appended separately.`;
+The note should be professional, concise (300-500 words), and ready for inclusion in the patient's medical record.`;
 
       try {
         const response = await invokeLLM({
@@ -61,7 +58,7 @@ Keep it professional, clinically appropriate, and concise (about 250-450 words).
             {
               role: "system",
               content:
-                "You are an experienced medical documentation specialist who writes Chronic Care Management (CCM) monthly notes. Produce well-organized, clinically appropriate CCM notes from the call summary using the exact section headings requested. Be concise and never fabricate clinical findings.",
+                "You are an experienced medical documentation specialist. Generate professional, clinically appropriate CCM notes based on call summaries. Ensure notes are well-organized, concise, and suitable for medical records.",
             },
             {
               role: "user",

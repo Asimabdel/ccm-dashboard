@@ -34,24 +34,6 @@ const SCRIPT: { key: keyof Responses; question: string; placeholder: string }[] 
   { key: "patientConcerns", question: "Any other concerns from the patient?", placeholder: "Questions, social needs, barriers…" },
 ];
 
-const ROLE_LABELS: Record<string, string> = {
-  admin: "Admin", staff: "Care Coordinator", provider: "Provider",
-  billing: "Billing", front_desk: "Front Desk",
-};
-
-// Matches a previously-applied signature block so re-stamping replaces it
-// instead of stacking multiple stamps.
-const STAMP_RE = /\n+—{2,}[\s\S]*?Completed by:[\s\S]*$/;
-
-/** Append (or refresh) the "Completed by … / Date & time" signature on a note. */
-function stampNote(body: string, employee: string, role?: string): string {
-  const clean = (body || "").replace(STAMP_RE, "").trimEnd();
-  const roleLabel = role ? ROLE_LABELS[role] ?? role : "";
-  const when = new Date().toLocaleString(undefined, { dateStyle: "long", timeStyle: "short" });
-  const who = `${employee}${roleLabel ? ` — ${roleLabel}` : ""}`;
-  return `${clean}\n\n————————————————————\nCompleted by: ${who}\nDate & time: ${when}`;
-}
-
 export default function CallWorkflowPage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
   const [, params] = useRoute("/workflow/:id");
@@ -92,13 +74,7 @@ export default function CallWorkflowPage() {
   }, [existingNote.data, existingNote.isFetched, task.data, hydrated]);
 
   const genNote = trpc.ccmNotesAI.generateNote.useMutation({
-    onSuccess: (r) => {
-      const raw = typeof r.note === "string" ? r.note : String(r.note);
-      if (r.success === false) { setGeneratedNote(raw); toast.error("AI couldn't generate the note. Try again or write it manually."); return; }
-      setGeneratedNote(stampNote(raw, user?.name || user?.email || "Staff", user?.role));
-      setAiGeneratedAt(r.generatedAt ?? Date.now());
-      toast.success("Note drafted by AI. Review and edit as needed.");
-    },
+    onSuccess: (r) => { setGeneratedNote(typeof r.note === "string" ? r.note : String(r.note)); setAiGeneratedAt(r.generatedAt ?? Date.now()); toast.success("Note drafted by AI. Review and edit as needed."); },
     onError: (e) => toast.error(e.message),
   });
   const saveNote = trpc.ccmNotes.save.useMutation({
@@ -186,7 +162,7 @@ export default function CallWorkflowPage() {
           <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_28px_-18px_rgba(15,23,42,0.18)] p-6">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2"><Sparkles size={16} className="text-[hsl(280_60%_55%)]" /><h3 className="font-bold text-slate-900">CCM Documentation Note</h3></div>
-              <button disabled={genNote.isPending} onClick={() => genNote.mutate({ patientName: p?.name || "Patient", chronicConditions: conditions, responses })}
+              <button disabled={genNote.isPending} onClick={() => genNote.mutate({ patientName: p?.name || "Patient", responses })}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl bg-[hsl(280_60%_55%)] text-white text-sm font-semibold hover:brightness-110 active:scale-[0.97] transition disabled:opacity-50">
                 {genNote.isPending ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Generate with AI
               </button>
@@ -211,9 +187,7 @@ export default function CallWorkflowPage() {
               <Save size={15} /> Save Draft
             </button>
             <button disabled={saveNote.isPending} onClick={() => saveNote.mutate({
-              ccmTaskId: taskId, patientId: patientId!, ...responses,
-              // Stamp the completed note with the logged-in employee + date/time.
-              generatedNote: generatedNote.trim() ? stampNote(generatedNote, user?.name || user?.email || "Staff", user?.role) : generatedNote,
+              ccmTaskId: taskId, patientId: patientId!, ...responses, generatedNote,
               aiGeneratedAt: aiGeneratedAt ?? undefined,
               escalationFlag: escalate, escalationReason: escalate ? escalationReason : undefined,
               markCompleted: true,
