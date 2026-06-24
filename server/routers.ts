@@ -67,7 +67,7 @@ import {
 import { ccmNotesRouter } from "./routers/ccmNotes";
 import { seedDatabase, isSeeded, currentMonth } from "./seed";
 import { ensureMonthlyTask, deletePatient, getUpcomingAppointments } from "./db";
-import { parsePatientCsv, findInBatchDuplicates } from "../shared/csvImport";
+import { parsePatientCsv, findInBatchDuplicates, matchProviderId, matchWorklistStatus } from "../shared/csvImport";
 import { clinics, providers } from "../drizzle/schema";
 
 // ---- Role guards ----
@@ -466,13 +466,27 @@ export const appRouter = router({
         const existing = await findExistingByNames(rows.map((r) => r.name));
         const allClinics = await getAllClinics();
         const allProviders = await getAllProviders();
+        const provOpts = allProviders.map((p) => ({ id: p.provider.id, name: p.provider.name }));
+        const provById = new Map(provOpts.map((p) => [p.id, p.name]));
+        // Resolve each row's free-text provider onto a canonical provider so the
+        // preview shows the consolidation (e.g. "Dr. Sudad" -> "Sudad Al Hadad").
+        const rowsResolved = rows.map((r) => {
+          const pid = matchProviderId(r.provider, provOpts);
+          return {
+            ...r,
+            resolvedProviderId: pid,
+            resolvedProviderName: pid ? provById.get(pid) ?? null : null,
+            // Map the file's status onto a canonical worklist status for the preview.
+            resolvedStatus: matchWorklistStatus(r.wellnessCallStatus) ?? null,
+          };
+        });
         return {
           template,
-          rows,
+          rows: rowsResolved,
           inBatchDuplicates: Array.from(inBatch),
           existingDuplicates: existing,
           clinicOptions: allClinics.map((c) => ({ id: c.id, name: c.name })),
-          providerOptions: allProviders.map((p) => ({ id: p.provider.id, name: p.provider.name })),
+          providerOptions: provOpts,
         };
       }),
 
@@ -484,8 +498,10 @@ export const appRouter = router({
       .input(
         z.object({
           csv: z.string(),
-          defaultClinicId: z.number(),
-          defaultProviderId: z.number(),
+          // Optional fallbacks — only used when a row's clinic/provider can't be
+          // resolved from the file. Import no longer requires them.
+          defaultClinicId: z.number().optional(),
+          defaultProviderId: z.number().optional(),
           defaultStaffId: z.number().optional(),
           skipExistingDuplicates: z.boolean().default(true),
         })
@@ -498,7 +514,7 @@ export const appRouter = router({
         const allClinics = await getAllClinics();
         const allProviders = await getAllProviders();
         const clinicByName = new Map(allClinics.map((c) => [c.name.toLowerCase().trim(), c.id]));
-        const providerByName = new Map(allProviders.map((p) => [p.provider.name.toLowerCase().trim(), p.provider.id]));
+        const provOpts = allProviders.map((p) => ({ id: p.provider.id, name: p.provider.name }));
         const existing = await findExistingByNames(rows.map((r) => r.name));
 
         const valid = rows.filter((r) => r.errors.length === 0);
@@ -511,8 +527,10 @@ export const appRouter = router({
           name: r.name,
           dateOfBirth: r.dateOfBirth ? new Date(r.dateOfBirth) : null,
           phoneNumber: r.phoneNumber,
-          clinicId: (r.clinic && clinicByName.get(r.clinic.toLowerCase().trim())) || input.defaultClinicId,
-          providerId: (r.provider && providerByName.get(r.provider.toLowerCase().trim())) || input.defaultProviderId,
+          // Resolve clinic/provider from the file; fall back to the optional
+          // defaults; otherwise leave unset (both columns are nullable now).
+          clinicId: (r.clinic && clinicByName.get(r.clinic.toLowerCase().trim())) || input.defaultClinicId || null,
+          providerId: matchProviderId(r.provider, provOpts) ?? (input.defaultProviderId || null),
           preferredLanguage: r.preferredLanguage,
           chronicConditions: r.chronicConditions,
           insurance: r.insurance,
@@ -524,11 +542,13 @@ export const appRouter = router({
           nextAppointment: r.nextAppointment ? new Date(r.nextAppointment) : null,
           lastCCMDate: r.completed && r.lastCalled ? new Date(r.lastCalled) : null,
           assignedStaffId: input.defaultStaffId ?? null,
+          // Carry the file's status onto this month's worklist task.
+          worklistStatus: matchWorklistStatus(r.wellnessCallStatus),
         }));
 
-        const inserted = await bulkInsertPatients(mapped);
-        // Create this month's worklist tasks for the imported patients (assigned to
-        // the chosen employee, if any), so they appear on the worklist right away.
+        // Inserts patients AND their current-month worklist tasks (with the mapped
+        // status). generateMonthlyWorklist then backfills any other active patients.
+        const inserted = await bulkInsertPatients(mapped, currentMonth());
         if (inserted > 0) await generateMonthlyWorklist(currentMonth());
         void logAudit(ctx, "bulk_import_patients", {
           entityType: "patient",
@@ -783,10 +803,12 @@ export const appRouter = router({
         // Record that this patient was contacted now (powers the "Last Called" column)
         await db.update(patients).set({ lastCalledAt: new Date() }).where(eq(patients.id, input.patientId));
 
-        // Escalation -> create provider escalation + notify provider
+        // Escalation -> create provider escalation + notify provider.
+        // Requires a provider on the patient (escalations route to a provider);
+        // patients imported without a provider simply can't be escalated this way.
         if (input.escalationFlag && noteId) {
           const patient = await getPatientById(input.patientId);
-          if (patient) {
+          if (patient && patient.providerId) {
             await db.insert(providerEscalations).values({
               ccmNoteId: noteId,
               patientId: input.patientId,

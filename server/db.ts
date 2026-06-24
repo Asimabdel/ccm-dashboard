@@ -1222,8 +1222,8 @@ export type BulkPatientRow = {
   name: string;
   dateOfBirth?: Date | null;
   phoneNumber?: string;
-  clinicId: number;
-  providerId: number;
+  clinicId: number | null;
+  providerId: number | null;
   preferredLanguage?: string;
   chronicConditions?: string[];
   insurance?: string;
@@ -1235,10 +1235,16 @@ export type BulkPatientRow = {
   nextAppointment?: Date | null;
   lastCCMDate?: Date | null;
   assignedStaffId?: number | null;
+  /** Canonical worklist status (from matchWorklistStatus) for this month's task. */
+  worklistStatus?: string | null;
 };
 
-/** Insert many patients in one transaction-ish batch. Returns inserted count. */
-export async function bulkInsertPatients(rows: BulkPatientRow[]): Promise<number> {
+/**
+ * Insert many patients in one batch. When `month` is given, also creates each
+ * patient's worklist task for that month, carrying the per-row `worklistStatus`
+ * (so an import preserves the status from the file). Returns inserted count.
+ */
+export async function bulkInsertPatients(rows: BulkPatientRow[], month?: string): Promise<number> {
   const db = await getDb();
   if (!db || rows.length === 0) return 0;
   const values = rows.map((r) => ({
@@ -1261,7 +1267,22 @@ export async function bulkInsertPatients(rows: BulkPatientRow[]): Promise<number
     lastCCMDate: r.lastCCMDate ?? null,
     assignedStaffId: r.assignedStaffId ?? null,
   }));
-  await db.insert(patients).values(values);
+  const res: any = await db.insert(patients).values(values);
+  // A single multi-row INSERT yields consecutive auto-increment ids beginning at
+  // insertId, so row i maps to patient id (firstId + i).
+  const firstId = Number(res?.[0]?.insertId ?? 0);
+  if (month && firstId > 0) {
+    const taskValues = rows.map((r, i) => ({
+      patientId: firstId + i,
+      month,
+      assignedStaffId: r.assignedStaffId ?? null,
+      priorityLevel: "medium" as const,
+      status: ((r.worklistStatus as any) || (r.assignedStaffId ? "assigned" : "not_started")),
+      // A completed import row represents a call that already happened.
+      dateContacted: r.worklistStatus === "completed" ? (r.lastCalledAt ?? null) : null,
+    }));
+    await db.insert(ccmTasks).values(taskValues);
+  }
   return values.length;
 }
 

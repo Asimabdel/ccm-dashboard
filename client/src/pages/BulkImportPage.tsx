@@ -5,6 +5,7 @@ import { useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { Loader2, Upload, FileText, AlertTriangle, CheckCircle2, ArrowLeft, Download } from "lucide-react";
+import { STATUS_LABELS } from "@/lib/ccm";
 
 const SAMPLE_DRMAI = `Name,Provider,Wellness Call,Date Completed,Next Appointment,Notes
 Doe, Jane,Dr. Mai,Completed,6/3,8/15,Doing well
@@ -112,18 +113,19 @@ export default function BulkImportPage() {
                 </p>
               )}
               <div>
-                <label className="text-xs text-slate-600">Default clinic (used when a row has no clinic)</label>
+                <label className="text-xs text-slate-600">Default clinic (optional — only used if a row's clinic can't be matched)</label>
                 <select className={`${field} w-full`} value={defaultClinicId} onChange={(e) => setDefaultClinicId(Number(e.target.value))}>
-                  <option value={0}>Select clinic…</option>
+                  <option value={0}>No default (leave blank)</option>
                   {(data.clinicOptions || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </div>
               <div>
-                <label className="text-xs text-slate-600">Default provider (used when a row's provider can't be matched)</label>
+                <label className="text-xs text-slate-600">Default provider (optional — only used if a row's provider can't be matched)</label>
                 <select className={`${field} w-full`} value={defaultProviderId} onChange={(e) => setDefaultProviderId(Number(e.target.value))}>
-                  <option value={0}>Select provider…</option>
+                  <option value={0}>No default (leave blank)</option>
                   {(data.providerOptions || []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
+                <p className="text-[11px] text-slate-500 mt-1">Providers in the file are auto-matched to existing providers — name variations (e.g. "Dr. Sudad", "Sudad Al Hadad") are consolidated. See the Provider column in the preview.</p>
               </div>
               <div>
                 <label className="text-xs text-slate-600">Assign all to employee (optional — puts every imported patient on this person's worklist)</label>
@@ -137,13 +139,12 @@ export default function BulkImportPage() {
                 Skip patients that already exist (matching name)
               </label>
               <button
-                disabled={commit.isPending || validCount === 0 || !defaultClinicId || !defaultProviderId}
-                onClick={() => commit.mutate({ csv, defaultClinicId, defaultProviderId, defaultStaffId: defaultStaffId || undefined, skipExistingDuplicates: skipExisting })}
+                disabled={commit.isPending || validCount === 0}
+                onClick={() => commit.mutate({ csv, defaultClinicId: defaultClinicId || undefined, defaultProviderId: defaultProviderId || undefined, defaultStaffId: defaultStaffId || undefined, skipExistingDuplicates: skipExisting })}
                 className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[hsl(200_100%_45%)] text-white text-sm font-semibold hover:brightness-95 disabled:opacity-50 active:scale-[0.98] transition-transform">
                 {commit.isPending ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
                 Import {validCount} valid {validCount === 1 ? "patient" : "patients"}
               </button>
-              {(!defaultClinicId || !defaultProviderId) && <p className="text-[11px] text-amber-600">Select a default clinic and provider to enable import.</p>}
             </div>
           )}
         </div>
@@ -186,11 +187,31 @@ export default function BulkImportPage() {
                         <tr key={r.rowNumber} className={`border-b border-slate-100 last:border-0 ${hasError ? "bg-rose-50/40" : ""}`}>
                           <td className="px-4 py-2 text-slate-500">{r.rowNumber}</td>
                           <td className="px-4 py-2 font-medium text-slate-900">{r.name || <span className="text-rose-500">(missing)</span>}</td>
-                          <td className="px-4 py-2 text-slate-700">{r.provider || <span className="text-slate-400">—</span>}</td>
+                          <td className="px-4 py-2 text-slate-700">
+                            {r.resolvedProviderName ? (
+                              <div>
+                                <span className="text-slate-800">{r.resolvedProviderName}</span>
+                                {r.provider && r.provider.toLowerCase() !== r.resolvedProviderName.toLowerCase() && (
+                                  <span className="block text-[10px] text-slate-400">from "{r.provider}"</span>
+                                )}
+                              </div>
+                            ) : r.provider ? (
+                              <span className="text-amber-700" title="No matching provider in the system — will be left blank">{r.provider} <span className="text-[10px]">(unmatched)</span></span>
+                            ) : <span className="text-slate-400">—</span>}
+                          </td>
                           <td className="px-4 py-2 text-slate-700">{r.lastCalled || <span className="text-slate-400">—</span>}</td>
                           <td className="px-4 py-2 text-slate-700">{r.nextAppointment || <span className="text-slate-400">—</span>}</td>
                           <td className="px-4 py-2 text-slate-700">
-                            {r.completed ? <span className="text-emerald-700 font-medium">Completed</span> : (r.wellnessCallStatus || <span className="text-slate-400">—</span>)}
+                            {r.resolvedStatus ? (
+                              <div>
+                                <span className={r.resolvedStatus === "completed" ? "text-emerald-700 font-medium" : "text-slate-800"}>{STATUS_LABELS[r.resolvedStatus] ?? r.resolvedStatus}</span>
+                                {r.wellnessCallStatus && (STATUS_LABELS[r.resolvedStatus] ?? "").toLowerCase() !== r.wellnessCallStatus.toLowerCase() && (
+                                  <span className="block text-[10px] text-slate-400">from "{r.wellnessCallStatus}"</span>
+                                )}
+                              </div>
+                            ) : r.wellnessCallStatus ? (
+                              <span className="text-amber-700" title="No matching status — task will start as Not Started">{r.wellnessCallStatus} <span className="text-[10px]">(unmatched)</span></span>
+                            ) : <span className="text-slate-400">—</span>}
                           </td>
                           <td className="px-4 py-2">
                             <div className="flex flex-wrap gap-1">

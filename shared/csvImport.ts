@@ -224,6 +224,9 @@ export function parsePatientCsv(
       row.rpmEnrolled = parseBool(get(cols, "rpmenrolled"));
       row.rpmDeviceType = get(cols, "rpmdevicetype") || undefined;
       row.nextAppointment = parseFlexibleDate(get(cols, "nextappointment"), opts?.defaultYear);
+      const statusRaw = get(cols, "status") || get(cols, "wellnesscall");
+      row.wellnessCallStatus = statusRaw || undefined;
+      row.completed = statusRaw ? isCompletedStatus(statusRaw) : undefined;
     }
 
     // Only the patient name is required — all other info is optional and can be
@@ -234,6 +237,122 @@ export function parsePatientCsv(
   }
 
   return { rows, template };
+}
+
+// Titles/credentials that should be ignored when matching a provider name, so
+// "Dr. Sudad", "Dr Sudad", "Sudad Al Hadad, MD" all reduce to the same tokens.
+const PROVIDER_STOPWORDS = new Set([
+  "dr", "doctor", "md", "do", "np", "pa", "pac", "pa-c", "rn", "arnp", "fnp",
+  "crnp", "mr", "mrs", "ms", "prof", "professor",
+]);
+
+/**
+ * Normalize a provider name for fuzzy matching: lowercase, drop punctuation and
+ * title/credential words, collapse whitespace. e.g. "Dr. Sudad" -> "sudad",
+ * "Sudad Al Hadad, MD" -> "sudad al hadad".
+ */
+export function normalizeProviderName(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[.,]/g, " ")
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0 && !PROVIDER_STOPWORDS.has(t))
+    .join(" ")
+    .trim();
+}
+
+/**
+ * Resolve a free-text provider string from an import to one of the providers
+ * already in the system, consolidating name variations onto a single canonical
+ * provider. Returns the matched provider id, or null if nothing matches well
+ * enough (caller can then fall back to a default or leave it unset).
+ *
+ * Matching rules (after stripping titles/credentials):
+ *   - exact normalized equality wins outright;
+ *   - otherwise accept when one name's tokens are fully contained in the other's
+ *     ("Sudad" ⊆ "Sudad Al Hadad") or they share at least two tokens.
+ * The best-scoring candidate is returned; a lone shared first name is not enough.
+ */
+export function matchProviderId(
+  raw: string | undefined | null,
+  providers: { id: number; name: string }[],
+): number | null {
+  const n = normalizeProviderName(raw || "");
+  if (!n) return null;
+  const tokensN = Array.from(new Set(n.split(" ").filter(Boolean)));
+  if (tokensN.length === 0) return null;
+
+  let best: number | null = null;
+  let bestScore = 0;
+  for (const p of providers) {
+    const np = normalizeProviderName(p.name);
+    if (!np) continue;
+    if (np === n) return p.id; // exact match wins immediately
+    const tokensP = Array.from(new Set(np.split(" ").filter(Boolean)));
+    let inter = 0;
+    for (const t of tokensN) if (tokensP.includes(t)) inter++;
+    if (inter === 0) continue;
+    const subset = inter === tokensN.length || inter === tokensP.length;
+    if (!subset && inter < 2) continue; // avoid matching on a single shared name
+    const score = inter * 10 + (subset ? 5 : 0);
+    if (score > bestScore) {
+      bestScore = score;
+      best = p.id;
+    }
+  }
+  return best;
+}
+
+/**
+ * Map a free-text status from an import file onto the closest CCM worklist status
+ * (the same set offered in the app's status dropdown). Returns a canonical status
+ * key, or null if nothing fits (caller falls back to the default not_started/assigned).
+ *
+ * Handles the real values seen in exports — "Completed", "Not Answer try again",
+ * "Wellness Call", "Left VM", etc. — via exact-label match first, then keywords.
+ */
+export function matchWorklistStatus(raw?: string | null): string | null {
+  if (!raw) return null;
+  const s = raw.toLowerCase().replace(/[_\-/]/g, " ").replace(/\s+/g, " ").trim();
+  if (!s) return null;
+
+  // Exact canonical labels / common phrasings.
+  const exact: Record<string, string> = {
+    "not started": "not_started", "assigned": "assigned",
+    "called no answer": "called_no_answer", "no answer": "called_no_answer",
+    "voicemail left": "voicemail_left", "left voicemail": "voicemail_left",
+    "wrong number": "wrong_number", "needs callback": "needs_callback",
+    "in progress": "in_progress", "completed": "completed", "complete": "completed",
+    "needs provider review": "needs_provider_review", "needs appointment": "needs_appointment",
+    "documentation incomplete": "documentation_incomplete", "ready for billing": "ready_for_billing",
+    "billed": "billed", "cancelled": "cancelled", "canceled": "cancelled",
+    "unable to reach": "unable_to_reach", "declined ccm": "declined_ccm",
+    "declined": "declined_ccm", "inactive": "inactive",
+  };
+  if (exact[s]) return exact[s];
+
+  const has = (...ks: string[]) => ks.some((k) => s.includes(k));
+  // Order matters: most specific / outcome-bearing first.
+  if (has("complet")) return "completed";
+  if (has("voicemail", "left vm", "vm left", "left message", "left msg", "left a message")) return "voicemail_left";
+  if (has("wrong number", "wrong #", "wrong num")) return "wrong_number";
+  if (has("no answer", "not answer", "no ans", "didnt answer", "didn't answer", "did not answer", "unanswered")) return "called_no_answer";
+  if (has("unable to reach", "unreachable", "cant reach", "can't reach", "no contact")) return "unable_to_reach";
+  if (has("provider review", "md review", "needs review", "review needed")) return "needs_provider_review";
+  if (has("appointment", "appt")) return "needs_appointment";
+  if (has("callback", "call back", "try again", "follow up", "followup", "reattempt", "retry")) return "needs_callback";
+  if (has("ready for billing", "bill ready", "billable")) return "ready_for_billing";
+  if (has("billed", "invoiced")) return "billed";
+  if (has("document", "charting", "incomplete doc", "note incomplete")) return "documentation_incomplete";
+  if (has("cancel")) return "cancelled";
+  if (has("declin", "refus", "opt out", "opted out")) return "declined_ccm";
+  if (has("inactive", "discharg", "deceased", "moved")) return "inactive";
+  if (has("in progress", "started", "ongoing", "working")) return "in_progress";
+  if (has("assigned")) return "assigned";
+  // Pending wellness call / new / to-be-called → not yet started.
+  if (has("wellness", "not started", "not completed", "pending", "new", "to call")) return "not_started";
+  return null;
 }
 
 /** Find duplicate names *within* the parsed batch (case-insensitive). */
