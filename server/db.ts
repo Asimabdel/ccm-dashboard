@@ -49,6 +49,16 @@ function createPool(databaseUrl: string) {
     password: decodeURIComponent(u.password),
     database: u.pathname.replace(/^\//, "") || undefined,
     ssl,
+    // Tuned for serverless (Lambda runs one request per instance at a time, and
+    // RDS t4g.micro caps at ~60 connections). Keep each instance's footprint small
+    // so many concurrent users don't exhaust the database's connection limit:
+    // a tiny pool, release idle connections quickly, and keep the socket alive to
+    // avoid reconnect latency on warm invocations.
+    connectionLimit: 3,
+    maxIdle: 1,
+    idleTimeout: 30_000,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 10_000,
   });
 }
 

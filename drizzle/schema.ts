@@ -9,6 +9,7 @@ import {
   decimal,
   json,
   datetime,
+  index,
 } from "drizzle-orm/mysql-core";
 
 /**
@@ -114,7 +115,10 @@ export const patients = mysqlTable("patients", {
   rpmDeviceType: varchar("rpmDeviceType", { length: 100 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+}, (t) => ({
+  // Speeds up the patient list's "active/inactive" filter and worklist generation.
+  enrollmentStatusIdx: index("patients_enrollmentStatus_idx").on(t.ccmEnrollmentStatus),
+}));
 
 export type Patient = typeof patients.$inferSelect;
 export type InsertPatient = typeof patients.$inferInsert;
@@ -160,7 +164,11 @@ export const ccmTasks = mysqlTable("ccmTasks", {
   comments: text("comments"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+}, (t) => ({
+  // The worklist is queried by month every load; without this it's a full scan.
+  monthIdx: index("ccmTasks_month_idx").on(t.month),
+  monthStatusIdx: index("ccmTasks_month_status_idx").on(t.month, t.status),
+}));
 
 export type CCMTask = typeof ccmTasks.$inferSelect;
 export type InsertCCMTask = typeof ccmTasks.$inferInsert;
@@ -365,7 +373,10 @@ export const auditLogs = mysqlTable("auditLogs", {
   description: text("description"),
   ipAddress: varchar("ipAddress", { length: 64 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, (t) => ({
+  // The audit log lists newest-first; index the sort column.
+  createdAtIdx: index("auditLogs_createdAt_idx").on(t.createdAt),
+}));
 
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type InsertAuditLog = typeof auditLogs.$inferInsert;
