@@ -70,6 +70,15 @@ describe("matchWorklistStatus — maps file status to the dropdown options", () 
     expect(matchWorklistStatus("In Progress")).toBe("in_progress");
   });
 
+  it("treats 'to be completed' phrasings as NOT done (still to be called)", () => {
+    expect(matchWorklistStatus("Needs to be completed")).toBe("not_started");
+    expect(matchWorklistStatus("To be completed")).toBe("not_started");
+    expect(matchWorklistStatus("Needs completion")).toBe("not_started");
+    // but a plain "Completed" is still done
+    expect(matchWorklistStatus("Completed")).toBe("completed");
+    expect(matchWorklistStatus("Completed by Mai")).toBe("completed");
+  });
+
   it("handles the administrative / no-response values in real sheets", () => {
     expect(matchWorklistStatus("No response")).toBe("called_no_answer");
     expect(matchWorklistStatus("No response twice")).toBe("called_no_answer");

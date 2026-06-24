@@ -161,7 +161,10 @@ export function detectTemplate(headers: string[]): ImportTemplate {
 /** Map a wellness-call / completion status to a completion flag. */
 function isCompletedStatus(status: string): boolean {
   const s = status.toLowerCase();
-  if (s.includes("not complet") || s.includes("uncomplet") || s.includes("incomplet")) return false;
+  if (
+    s.includes("not complet") || s.includes("uncomplet") || s.includes("incomplet") ||
+    s.includes("to be complet") || s.includes("to complete") || s.includes("needs complet")
+  ) return false; // e.g. "Not Completed", "Needs to be completed" — still to do
   return s.includes("complet");
 }
 
@@ -412,7 +415,9 @@ export function matchWorklistStatus(raw?: string | null): string | null {
   const has = (...ks: string[]) => ks.some((k) => s.includes(k));
   // Order matters: most specific / outcome-bearing first.
   // "Not Completed" / "incomplete" must be caught before the generic "complet".
-  if (has("not complet", "uncomplet")) return "not_started";
+  // "Needs to be completed" / "to be completed" still need doing — catch these
+  // before the generic "complet" check so they don't read as Completed.
+  if (has("not complet", "uncomplet", "to be complet", "to complete", "needs complet", "need to complet")) return "not_started";
   if (has("complet")) return "completed";
   if (has("voicemail", "left vm", "vm left", "left message", "left msg", "left a message")) return "voicemail_left";
   if (has("wrong number", "wrong #", "wrong num")) return "wrong_number";
