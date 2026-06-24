@@ -39,6 +39,19 @@ describe("matchProviderId — consolidates name variations onto one provider", (
     // "John Smith" shares only "john" with "John Doe" — not enough to match.
     expect(matchProviderId("John Smith", [{ id: 9, name: "John Doe" }])).toBeNull();
   });
+
+  it("matches via aliases when the file name shares no words with the stored name", () => {
+    // Real case: system stores "Al Hadad" / "Maggie" but the sheet says Dr. Sudad / Dr. Magdalene.
+    const withAliases = [
+      { id: 2, name: "Al Hadad", aliases: ["Sudad"] },
+      { id: 4, name: "Maggie", aliases: ["Magdalene"] },
+      { id: 1, name: "Mansour", aliases: [] },
+    ];
+    expect(matchProviderId("Dr. Sudad", withAliases)).toBe(2);
+    expect(matchProviderId("Dr. Magdalene", withAliases)).toBe(4);
+    expect(matchProviderId("Dr. Mansour", withAliases)).toBe(1);
+    expect(matchProviderId("Dr. Nobody", withAliases)).toBeNull();
+  });
 });
 
 describe("matchWorklistStatus — maps file status to the dropdown options", () => {

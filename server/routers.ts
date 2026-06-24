@@ -466,7 +466,7 @@ export const appRouter = router({
         const existing = await findExistingByNames(rows.map((r) => r.name));
         const allClinics = await getAllClinics();
         const allProviders = await getAllProviders();
-        const provOpts = allProviders.map((p) => ({ id: p.provider.id, name: p.provider.name }));
+        const provOpts = allProviders.map((p) => ({ id: p.provider.id, name: p.provider.name, aliases: p.provider.aliases ?? [] }));
         const provById = new Map(provOpts.map((p) => [p.id, p.name]));
         // Resolve each row's free-text provider onto a canonical provider so the
         // preview shows the consolidation (e.g. "Dr. Sudad" -> "Sudad Al Hadad").
@@ -514,7 +514,7 @@ export const appRouter = router({
         const allClinics = await getAllClinics();
         const allProviders = await getAllProviders();
         const clinicByName = new Map(allClinics.map((c) => [c.name.toLowerCase().trim(), c.id]));
-        const provOpts = allProviders.map((p) => ({ id: p.provider.id, name: p.provider.name }));
+        const provOpts = allProviders.map((p) => ({ id: p.provider.id, name: p.provider.name, aliases: p.provider.aliases ?? [] }));
         const existing = await findExistingByNames(rows.map((r) => r.name));
 
         const valid = rows.filter((r) => r.errors.length === 0);
@@ -1007,7 +1007,7 @@ export const appRouter = router({
     listByClinic: protectedProcedure.input(z.number()).query(async ({ input }) => getProvidersByClinic(input)),
     getById: protectedProcedure.input(z.number()).query(async ({ input }) => getProviderById(input)),
     create: protectedProcedure
-      .input(z.object({ name: z.string().min(1), title: z.string().optional(), clinicId: z.number().optional(), userId: z.number().optional() }))
+      .input(z.object({ name: z.string().min(1), title: z.string().optional(), clinicId: z.number().optional(), userId: z.number().optional(), aliases: z.array(z.string()).optional() }))
       .mutation(async ({ input, ctx }) => {
         requireRole(ctx, ["admin"]);
         const db = await getDb();
@@ -1016,7 +1016,7 @@ export const appRouter = router({
         return { success: true };
       }),
     update: protectedProcedure
-      .input(z.object({ id: z.number(), name: z.string().min(1), title: z.string().optional(), clinicId: z.number().optional(), userId: z.number().optional() }))
+      .input(z.object({ id: z.number(), name: z.string().min(1), title: z.string().optional(), clinicId: z.number().optional(), userId: z.number().optional(), aliases: z.array(z.string()).optional() }))
       .mutation(async ({ input, ctx }) => {
         requireRole(ctx, ["admin"]);
         const db = await getDb();

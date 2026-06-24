@@ -59,6 +59,9 @@ export const providers = mysqlTable("providers", {
   name: varchar("name", { length: 255 }).notNull(),
   title: varchar("title", { length: 100 }),
   clinicId: int("clinicId").references(() => clinics.id),
+  // Alternate names this provider is known by (e.g. on imported sheets), so a
+  // patient import can resolve "Dr. Sudad" -> "Al Hadad" or "Magdalene" -> "Maggie".
+  aliases: json("aliases").$type<string[]>().default([]),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 

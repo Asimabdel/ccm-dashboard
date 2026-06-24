@@ -297,7 +297,7 @@ export function normalizeProviderName(raw: string): string {
  */
 export function matchProviderId(
   raw: string | undefined | null,
-  providers: { id: number; name: string }[],
+  providers: { id: number; name: string; aliases?: string[] | null }[],
 ): number | null {
   const n = normalizeProviderName(raw || "");
   if (!n) return null;
@@ -307,19 +307,23 @@ export function matchProviderId(
   let best: number | null = null;
   let bestScore = 0;
   for (const p of providers) {
-    const np = normalizeProviderName(p.name);
-    if (!np) continue;
-    if (np === n) return p.id; // exact match wins immediately
-    const tokensP = Array.from(new Set(np.split(" ").filter(Boolean)));
-    let inter = 0;
-    for (const t of tokensN) if (tokensP.includes(t)) inter++;
-    if (inter === 0) continue;
-    const subset = inter === tokensN.length || inter === tokensP.length;
-    if (!subset && inter < 2) continue; // avoid matching on a single shared name
-    const score = inter * 10 + (subset ? 5 : 0);
-    if (score > bestScore) {
-      bestScore = score;
-      best = p.id;
+    // Compare against the provider's name and any configured aliases.
+    const candidates = [p.name, ...(p.aliases ?? [])];
+    for (const cand of candidates) {
+      const np = normalizeProviderName(cand);
+      if (!np) continue;
+      if (np === n) return p.id; // exact name/alias match wins immediately
+      const tokensP = Array.from(new Set(np.split(" ").filter(Boolean)));
+      let inter = 0;
+      for (const t of tokensN) if (tokensP.includes(t)) inter++;
+      if (inter === 0) continue;
+      const subset = inter === tokensN.length || inter === tokensP.length;
+      if (!subset && inter < 2) continue; // avoid matching on a single shared name
+      const score = inter * 10 + (subset ? 5 : 0);
+      if (score > bestScore) {
+        bestScore = score;
+        best = p.id;
+      }
     }
   }
   return best;
