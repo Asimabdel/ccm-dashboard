@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchProviderId, matchWorklistStatus, normalizeProviderName } from "../shared/csvImport";
+import { matchProviderId, matchWorklistStatus, normalizeProviderName, parsePatientCsv } from "../shared/csvImport";
 
 const PROVIDERS = [
   { id: 1, name: "Sudad Al Hadad" },
@@ -57,9 +57,47 @@ describe("matchWorklistStatus — maps file status to the dropdown options", () 
     expect(matchWorklistStatus("In Progress")).toBe("in_progress");
   });
 
+  it("handles the administrative / no-response values in real sheets", () => {
+    expect(matchWorklistStatus("No response")).toBe("called_no_answer");
+    expect(matchWorklistStatus("No response twice")).toBe("called_no_answer");
+    expect(matchWorklistStatus("Not Completed")).toBe("not_started");
+    expect(matchWorklistStatus("Completed by Salma")).toBe("completed");
+    expect(matchWorklistStatus("Deny CCM Care")).toBe("declined_ccm");
+    expect(matchWorklistStatus("Insurance Inactive")).toBe("inactive");
+    expect(matchWorklistStatus("PCP Changed")).toBe("inactive");
+    expect(matchWorklistStatus("Insurance Changed")).toBe("inactive");
+  });
+
   it("returns null for blank/unknown so the task uses the default", () => {
     expect(matchWorklistStatus("")).toBeNull();
     expect(matchWorklistStatus(undefined)).toBeNull();
     expect(matchWorklistStatus("xyzzy")).toBeNull();
+  });
+});
+
+describe("parsePatientCsv — Patient/Provider/Completion Status sheet", () => {
+  const CSV = [
+    "Patient,Provider,Completion Status,Date CCM Completed ,,,,,,,,,,Notes ",
+    "Saarah Sultana,Dr. Sudad,Completed,6/1,,,,,,,,,,",
+    '"Thompson, Sonya",Dr. Sudad,Completed,6/2,,,,,,,,,,',
+    "Terrell Taylor,Dr. Sudad,Insurance Inactive ,,,,,,,,,,,",
+    ",,,,,,,,,,,,,",
+    ",,,,,,,,,,,,,",
+  ].join("\n");
+
+  it("recognizes the header (no longer 'unknown')", () => {
+    const { template, headerError } = parsePatientCsv(CSV);
+    expect(headerError).toBeUndefined();
+    expect(template).toBe("drmai");
+  });
+
+  it("parses names (incl. 'Last, First'), provider, and status; skips blank rows", () => {
+    const { rows } = parsePatientCsv(CSV);
+    expect(rows).toHaveLength(3); // two trailing blank rows dropped
+    expect(rows[0].name).toBe("Saarah Sultana");
+    expect(rows[0].provider).toBe("Dr. Sudad");
+    expect(rows[0].wellnessCallStatus).toBe("Completed");
+    expect(rows[1].name).toBe("Sonya Thompson");
+    expect(rows[0].errors).toHaveLength(0);
   });
 });

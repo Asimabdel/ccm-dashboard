@@ -132,25 +132,36 @@ export function parseFlexibleDate(raw: string | undefined, defaultYear?: number)
   return undefined;
 }
 
+// Header aliases (already normalized: lowercased, spaces/underscores/hyphens removed).
+// Different practices label the same columns differently, so accept the common ones.
+const NAME_KEYS = ["name", "patientname", "patient"];
+const STATUS_KEYS = ["wellnesscall", "completionstatus", "status", "callstatus"];
+const COMPLETED_DATE_KEYS = ["datecompleted", "dateccmcompleted", "completiondate", "ccmdate"];
+
 /** Detect which template a header row represents. */
 export function detectTemplate(headers: string[]): ImportTemplate {
   const h = headers.map(normalizeHeader);
   const has = (k: string) => h.includes(k);
+  const hasAny = (keys: string[]) => keys.some((k) => h.includes(k));
   if (has("patientname") && (has("chartnotetype") || has("servicedate") || has("signed"))) {
     return "chartnotes";
   }
-  if (has("name") && has("wellnesscall")) {
+  // A name column plus a call/completion-status column = a CCM call sheet
+  // (the "Dr.Mai" shape and look-alikes: Patient/Provider/Completion Status/...).
+  if (hasAny(NAME_KEYS) && hasAny(STATUS_KEYS)) {
     return "drmai";
   }
-  if (has("name") || has("patientname")) {
+  if (hasAny(NAME_KEYS)) {
     return "generic";
   }
   return "unknown";
 }
 
-/** Map a Template-A wellness-call status to a completion flag. */
+/** Map a wellness-call / completion status to a completion flag. */
 function isCompletedStatus(status: string): boolean {
-  return status.toLowerCase().includes("complet");
+  const s = status.toLowerCase();
+  if (s.includes("not complet") || s.includes("uncomplet") || s.includes("incomplet")) return false;
+  return s.includes("complet");
 }
 
 export function parsePatientCsv(
@@ -183,10 +194,20 @@ export function parsePatientCsv(
     const i = idx(key);
     return i >= 0 ? (cols[i] ?? "").trim() : "";
   };
+  /** First non-empty value among several possible header names. */
+  const getAny = (cols: string[], keys: string[]) => {
+    for (const k of keys) {
+      const v = get(cols, k);
+      if (v) return v;
+    }
+    return "";
+  };
 
   const rows: ParsedPatientRow[] = [];
   for (let i = 1; i < lines.length; i++) {
     const cols = splitCsvLine(lines[i]);
+    // Skip blank filler rows (these exports often have hundreds of empty ",,,,," lines).
+    if (cols.every((c) => c.trim() === "")) continue;
     const errors: string[] = [];
     const row: ParsedPatientRow = { rowNumber: i + 1, name: "", errors };
 
@@ -198,17 +219,17 @@ export function parsePatientCsv(
       row.completed = true;
       row.wellnessCallStatus = "Completed";
     } else if (template === "drmai") {
-      row.name = normalizePersonName(get(cols, "name"));
+      row.name = normalizePersonName(getAny(cols, NAME_KEYS));
       row.provider = get(cols, "provider") || undefined;
-      const status = get(cols, "wellnesscall");
+      const status = getAny(cols, STATUS_KEYS);
       row.wellnessCallStatus = status || undefined;
       row.completed = isCompletedStatus(status);
-      row.lastCalled = parseFlexibleDate(get(cols, "datecompleted"), opts?.defaultYear);
+      row.lastCalled = parseFlexibleDate(getAny(cols, COMPLETED_DATE_KEYS), opts?.defaultYear);
       row.nextAppointment = parseFlexibleDate(get(cols, "nextappointment"), opts?.defaultYear);
       row.notes = get(cols, "notes") || undefined;
     } else {
       // generic
-      row.name = normalizePersonName(get(cols, "name") || get(cols, "patientname"));
+      row.name = normalizePersonName(getAny(cols, NAME_KEYS));
       row.phoneNumber = get(cols, "phonenumber") || undefined;
       row.dateOfBirth = parseFlexibleDate(get(cols, "dateofbirth"), opts?.defaultYear);
       row.clinic = get(cols, "clinic") || undefined;
@@ -334,11 +355,13 @@ export function matchWorklistStatus(raw?: string | null): string | null {
 
   const has = (...ks: string[]) => ks.some((k) => s.includes(k));
   // Order matters: most specific / outcome-bearing first.
+  // "Not Completed" / "incomplete" must be caught before the generic "complet".
+  if (has("not complet", "uncomplet")) return "not_started";
   if (has("complet")) return "completed";
   if (has("voicemail", "left vm", "vm left", "left message", "left msg", "left a message")) return "voicemail_left";
   if (has("wrong number", "wrong #", "wrong num")) return "wrong_number";
-  if (has("no answer", "not answer", "no ans", "didnt answer", "didn't answer", "did not answer", "unanswered")) return "called_no_answer";
   if (has("unable to reach", "unreachable", "cant reach", "can't reach", "no contact")) return "unable_to_reach";
+  if (has("no answer", "not answer", "no ans", "no response", "no resp", "noresponse", "didnt answer", "didn't answer", "did not answer", "unanswered")) return "called_no_answer";
   if (has("provider review", "md review", "needs review", "review needed")) return "needs_provider_review";
   if (has("appointment", "appt")) return "needs_appointment";
   if (has("callback", "call back", "try again", "follow up", "followup", "reattempt", "retry")) return "needs_callback";
@@ -346,12 +369,13 @@ export function matchWorklistStatus(raw?: string | null): string | null {
   if (has("billed", "invoiced")) return "billed";
   if (has("document", "charting", "incomplete doc", "note incomplete")) return "documentation_incomplete";
   if (has("cancel")) return "cancelled";
-  if (has("declin", "refus", "opt out", "opted out")) return "declined_ccm";
-  if (has("inactive", "discharg", "deceased", "moved")) return "inactive";
+  if (has("declin", "refus", "deny", "opt out", "opted out")) return "declined_ccm";
+  // Administrative drop-offs (insurance lapsed, PCP changed, etc.) → mark inactive.
+  if (has("inactive", "discharg", "deceased", "moved", "pcp chang", "provider chang", "insurance chang", "insurance inactive", "pcp change")) return "inactive";
   if (has("in progress", "started", "ongoing", "working")) return "in_progress";
   if (has("assigned")) return "assigned";
   // Pending wellness call / new / to-be-called → not yet started.
-  if (has("wellness", "not started", "not completed", "pending", "new", "to call")) return "not_started";
+  if (has("wellness", "not started", "pending", "new", "to call")) return "not_started";
   return null;
 }
 

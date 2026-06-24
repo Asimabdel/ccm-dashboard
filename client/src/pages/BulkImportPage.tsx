@@ -12,7 +12,7 @@ Doe, Jane,Dr. Mai,Completed,6/3,8/15,Doing well
 Smith, John,Dr. Mai,Not Completed,,7/1,Left voicemail`;
 
 const TEMPLATE_LABELS: Record<string, string> = {
-  drmai: "Dr.Mai CCMs export",
+  drmai: "CCM call sheet (name + provider + status)",
   chartnotes: "Chart Notes Report export",
   generic: "Generic patient sheet",
   unknown: "Unknown",
