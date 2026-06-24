@@ -14,6 +14,7 @@ Smith, John,Dr. Mai,Not Completed,,7/1,Left voicemail`;
 const TEMPLATE_LABELS: Record<string, string> = {
   drmai: "CCM call sheet (name + provider + status)",
   chartnotes: "Chart Notes Report export",
+  ccmlist: "CCM call list (no header)",
   generic: "Generic patient sheet",
   unknown: "Unknown",
 };
@@ -178,13 +179,13 @@ export default function BulkImportPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {data.rows.map((r) => {
+                    {data.rows.map((r, i) => {
                       const key = r.name.toLowerCase().replace(/\s+/g, " ").trim();
                       const isExisting = !!existing[key];
                       const isInBatch = inBatch.has(r.rowNumber);
                       const hasError = r.errors.length > 0;
                       return (
-                        <tr key={r.rowNumber} className={`border-b border-slate-100 last:border-0 ${hasError ? "bg-rose-50/40" : ""}`}>
+                        <tr key={i} className={`border-b border-slate-100 last:border-0 ${hasError ? "bg-rose-50/40" : ""}`}>
                           <td className="px-4 py-2 text-slate-500">{r.rowNumber}</td>
                           <td className="px-4 py-2 font-medium text-slate-900">{r.name || <span className="text-rose-500">(missing)</span>}</td>
                           <td className="px-4 py-2 text-slate-700">

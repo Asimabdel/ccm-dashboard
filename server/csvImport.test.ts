@@ -114,3 +114,33 @@ describe("parsePatientCsv — Patient/Provider/Completion Status sheet", () => {
     expect(rows[0].errors).toHaveLength(0);
   });
 });
+
+describe("parsePatientCsv — header-less CCM call list", () => {
+  const CSV = [
+    "Elvon Jarrett,Dr. Mansour,Active,Completed,06/09,,,,Elvis Angulo,Active,Completed,06/15",
+    "Dalia,Mendoza,Active,Completed,Done,,,,,,,",
+    '"Mirza, Afaf",Dr. Sudad,Active,Completed,Done by Ahmad,,,,,,,',
+    "ROBIN WILLIAMS,Dr. Mansour,Inactive,Not Completed,Insurance INACTIVE,,,,,,,",
+  ].join("\n");
+
+  it("detects the header-less list (first row is data, not a header)", () => {
+    const { template, headerError } = parsePatientCsv(CSV);
+    expect(headerError).toBeUndefined();
+    expect(template).toBe("ccmlist");
+  });
+
+  it("handles full names + provider, split first/last names, 'Last, First', enrollment, and the side-by-side second patient", () => {
+    const { rows } = parsePatientCsv(CSV);
+    expect(rows.map((r) => r.name)).toEqual([
+      "Elvon Jarrett", "Elvis Angulo", "Dalia Mendoza", "Afaf Mirza", "ROBIN WILLIAMS",
+    ]);
+    expect(rows[0].provider).toBe("Dr. Mansour");
+    expect(rows[0].enrollmentStatus).toBe("active");
+    expect(rows[1].provider).toBeUndefined(); // second patient block has no provider
+    expect(rows[2].provider).toBeUndefined(); // "Dalia Mendoza" was a split name, not a provider
+    expect(rows[3].provider).toBe("Dr. Sudad");
+    expect(rows[4].enrollmentStatus).toBe("inactive");
+    expect(rows[4].wellnessCallStatus).toBe("Not Completed");
+    expect(rows[4].completed).toBe(false);
+  });
+});

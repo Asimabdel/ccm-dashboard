@@ -1237,6 +1237,7 @@ export type BulkPatientRow = {
   assignedStaffId?: number | null;
   /** Canonical worklist status (from matchWorklistStatus) for this month's task. */
   worklistStatus?: string | null;
+  ccmEnrollmentStatus?: "active" | "inactive" | "declined" | "transferred";
 };
 
 /**
@@ -1257,7 +1258,7 @@ export async function bulkInsertPatients(rows: BulkPatientRow[], month?: string)
     chronicConditions: r.chronicConditions || [],
     insurance: r.insurance,
     priorityLevel: "medium" as const,
-    ccmEnrollmentStatus: "active" as const,
+    ccmEnrollmentStatus: r.ccmEnrollmentStatus || ("active" as const),
     consentStatus: r.consentStatus || "pending",
     rpmEnrolled: r.rpmEnrolled ?? false,
     rpmStatus: r.rpmStatus || (r.rpmEnrolled ? "enrolled" : "not_enrolled"),
@@ -1272,16 +1273,20 @@ export async function bulkInsertPatients(rows: BulkPatientRow[], month?: string)
   // insertId, so row i maps to patient id (firstId + i).
   const firstId = Number(res?.[0]?.insertId ?? 0);
   if (month && firstId > 0) {
-    const taskValues = rows.map((r, i) => ({
-      patientId: firstId + i,
-      month,
-      assignedStaffId: r.assignedStaffId ?? null,
-      priorityLevel: "medium" as const,
-      status: ((r.worklistStatus as any) || (r.assignedStaffId ? "assigned" : "not_started")),
-      // A completed import row represents a call that already happened.
-      dateContacted: r.worklistStatus === "completed" ? (r.lastCalledAt ?? null) : null,
-    }));
-    await db.insert(ccmTasks).values(taskValues);
+    const taskValues = rows
+      .map((r, i) => ({ r, i }))
+      // Inactive patients don't get a monthly worklist task.
+      .filter(({ r }) => (r.ccmEnrollmentStatus || "active") === "active")
+      .map(({ r, i }) => ({
+        patientId: firstId + i,
+        month,
+        assignedStaffId: r.assignedStaffId ?? null,
+        priorityLevel: "medium" as const,
+        status: (r.worklistStatus as any) || (r.assignedStaffId ? "assigned" : "not_started"),
+        // A completed import row represents a call that already happened.
+        dateContacted: r.worklistStatus === "completed" ? (r.lastCalledAt ?? null) : null,
+      }));
+    if (taskValues.length) await db.insert(ccmTasks).values(taskValues);
   }
   return values.length;
 }

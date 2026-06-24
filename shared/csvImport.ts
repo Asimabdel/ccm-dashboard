@@ -14,7 +14,7 @@
  * Generic — name + any of phoneNumber/dob/clinic/provider/etc.
  */
 
-export type ImportTemplate = "drmai" | "chartnotes" | "generic" | "unknown";
+export type ImportTemplate = "drmai" | "chartnotes" | "generic" | "ccmlist" | "unknown";
 
 export type ParsedPatientRow = {
   rowNumber: number;
@@ -34,6 +34,7 @@ export type ParsedPatientRow = {
   nextAppointment?: string; // raw date string
   wellnessCallStatus?: string; // raw status text from Template A
   completed?: boolean; // whether this row represents a completed CCM
+  enrollmentStatus?: "active" | "inactive"; // from an Active/Inactive column
   notes?: string;
   errors: string[];
 };
@@ -178,14 +179,26 @@ export function parsePatientCsv(
 
   const rawHeaders = splitCsvLine(lines[0]);
   const headers = rawHeaders.map(normalizeHeader);
-  const template = detectTemplate(rawHeaders);
+  let template = detectTemplate(rawHeaders);
+
+  // Header-less "CCM call list" working sheets (e.g. Salma's): no header row, the
+  // 4th column is consistently "Completed"/"Not Completed". Detect by content.
+  let headerless = false;
+  if (template === "unknown") {
+    const isStatusRow = (l: string) => /^(completed|not\s*completed)$/i.test((splitCsvLine(l)[3] ?? "").trim());
+    const statusRows = lines.filter(isStatusRow).length;
+    if (statusRows >= Math.max(2, Math.ceil(lines.length * 0.4))) {
+      template = "ccmlist";
+      headerless = true;
+    }
+  }
 
   if (template === "unknown") {
     return {
       rows: [],
       template,
       headerError:
-        'Could not recognize this file. Expected one of: the "Dr.Mai CCMs" export (Name, Provider, Wellness Call, ...), the "Chart Notes Report" export (PATIENT NAME, SERVICE DATE, PROVIDER, ...), or a generic sheet with a "name" column.',
+        'Could not recognize this file. Expected one of: the "Dr.Mai CCMs" export (Name, Provider, Wellness Call, ...), the "Chart Notes Report" export (PATIENT NAME, SERVICE DATE, PROVIDER, ...), a header-less CCM call list (Name, Provider, Active/Inactive, Completed/Not Completed, ...), or a generic sheet with a "name" column.',
     };
   }
 
@@ -203,11 +216,50 @@ export function parsePatientCsv(
     return "";
   };
 
+  // Build a row for the header-less CCM call-list format (positional columns).
+  const ccmRow = (rowNumber: number, rawName: string, rawProvider: string, enrollment: string, status: string, dateOrNote: string, extraNote: string): ParsedPatientRow => {
+    const errors: string[] = [];
+    const row: ParsedPatientRow = { rowNumber, name: normalizePersonName(rawName), errors };
+    row.provider = rawProvider.trim() || undefined;
+    row.enrollmentStatus = /inactive/i.test(enrollment) ? "inactive" : "active";
+    row.wellnessCallStatus = status.trim() || undefined;
+    row.completed = status.trim() ? isCompletedStatus(status) : undefined;
+    const d = parseFlexibleDate(dateOrNote, opts?.defaultYear);
+    row.lastCalled = d;
+    const note = [d ? "" : dateOrNote, extraNote].map((s) => s.trim()).filter(Boolean).join(" ");
+    row.notes = note || undefined;
+    if (!row.name) errors.push("Patient name is required");
+    return row;
+  };
+
   const rows: ParsedPatientRow[] = [];
-  for (let i = 1; i < lines.length; i++) {
+  const startLine = headerless ? 0 : 1;
+  for (let i = startLine; i < lines.length; i++) {
     const cols = splitCsvLine(lines[i]);
     // Skip blank filler rows (these exports often have hundreds of empty ",,,,," lines).
     if (cols.every((c) => c.trim() === "")) continue;
+
+    if (template === "ccmlist") {
+      const c0 = (cols[0] ?? "").trim();
+      const c1 = (cols[1] ?? "").trim();
+      // Decide whether col 1 is the provider or the last half of a "First,Last" name.
+      let name = c0;
+      let provider = "";
+      if (/^dr\.?\s/i.test(c1) || c0.includes(" ") || c0.includes(",")) {
+        name = c0; provider = c1; // c0 is already a full name; c1 is the provider
+      } else if (c1) {
+        name = `${c0} ${c1}`.trim(); // single first name + last name split across two columns
+      }
+      rows.push(ccmRow(i + 1, name, provider, cols[2] ?? "", cols[3] ?? "", cols[4] ?? "", cols[5] ?? ""));
+      // Some rows carry a second patient in a side-by-side block
+      // (cols 8-11: name, Active/Inactive, status, date — no provider).
+      const c8 = (cols[8] ?? "").trim();
+      if (c8 && /^(completed|not\s*completed)$/i.test((cols[10] ?? "").trim())) {
+        rows.push(ccmRow(i + 1, c8, "", cols[9] ?? "", cols[10] ?? "", cols[11] ?? "", ""));
+      }
+      continue;
+    }
+
     const errors: string[] = [];
     const row: ParsedPatientRow = { rowNumber: i + 1, name: "", errors };
 

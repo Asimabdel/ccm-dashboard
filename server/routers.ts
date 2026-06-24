@@ -544,6 +544,7 @@ export const appRouter = router({
           assignedStaffId: input.defaultStaffId ?? null,
           // Carry the file's status onto this month's worklist task.
           worklistStatus: matchWorklistStatus(r.wellnessCallStatus),
+          ccmEnrollmentStatus: r.enrollmentStatus,
         }));
 
         // Inserts patients AND their current-month worklist tasks (with the mapped
