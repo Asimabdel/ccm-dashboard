@@ -1309,15 +1309,22 @@ export async function bulkInsertPatients(rows: BulkPatientRow[], month?: string)
       .map((r, i) => ({ r, i }))
       // Inactive patients don't get a monthly worklist task.
       .filter(({ r }) => (r.ccmEnrollmentStatus || "active") === "active")
-      .map(({ r, i }) => ({
-        patientId: firstId + i,
-        month,
-        assignedStaffId: r.assignedStaffId ?? null,
-        priorityLevel: "medium" as const,
-        status: (r.worklistStatus as any) || (r.assignedStaffId ? "assigned" : "not_started"),
-        // A completed import row represents a call that already happened.
-        dateContacted: r.worklistStatus === "completed" ? (r.lastCalledAt ?? null) : null,
-      }));
+      .map(({ r, i }) => {
+        const isCompleted = r.worklistStatus === "completed";
+        return {
+          patientId: firstId + i,
+          month,
+          assignedStaffId: r.assignedStaffId ?? null,
+          priorityLevel: "medium" as const,
+          status: (r.worklistStatus as any) || (r.assignedStaffId ? "assigned" : "not_started"),
+          // A completed import row represents a call that already happened — stamp the
+          // completion date + crediting staff so it shows in the completion report
+          // (the date comes from the file; fall back to now when the file had none).
+          dateContacted: isCompleted ? (r.lastCalledAt ?? null) : null,
+          completedAt: isCompleted ? (r.lastCalledAt ?? new Date()) : null,
+          completedByStaffId: isCompleted ? (r.assignedStaffId ?? null) : null,
+        };
+      });
     if (taskValues.length) await db.insert(ccmTasks).values(taskValues);
   }
   return values.length;
@@ -1394,7 +1401,14 @@ export async function getCompletionReport(opts: {
     sql`${ccmTasks.completedAt} IS NOT NULL`,
     inArray(ccmTasks.status, ["completed", "ready_for_billing", "billed"]),
   ];
-  if (opts.from) conds.push(gte(ccmTasks.completedAt, new Date(opts.from)));
+  // Include the whole "from" calendar day: callers send local midnight, which is a
+  // few hours into the UTC day, so floor it to the day start or boundary-day
+  // completions (stored at UTC midnight) get dropped.
+  if (opts.from) {
+    const from = new Date(opts.from);
+    from.setUTCHours(0, 0, 0, 0);
+    conds.push(gte(ccmTasks.completedAt, from));
+  }
   if (opts.to) conds.push(lte(ccmTasks.completedAt, new Date(opts.to)));
 
   const rows = await db
