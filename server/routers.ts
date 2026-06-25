@@ -30,6 +30,7 @@ import {
   getAllStaffUsers,
   getAllProviders,
   generateMonthlyWorklist,
+  ensureMonthlyWorklistGenerated,
   recomputeBilling,
   createNotification,
   markNotificationRead,
@@ -631,6 +632,9 @@ export const appRouter = router({
       .query(async ({ input, ctx }) => {
         requireRole(ctx, ["admin", "staff", "provider", "billing", "front_desk"]);
         const month = input?.month || currentMonth();
+        // At the start of a new month, auto-generate everyone's worklist so each
+        // active patient shows up as "assigned" to their staff (once per month).
+        if (month === currentMonth()) await ensureMonthlyWorklistGenerated(month);
         return getWorklistForMonth(month, input);
       }),
 
@@ -639,6 +643,7 @@ export const appRouter = router({
       .query(async ({ input, ctx }) => {
         requireRole(ctx, ["staff", "admin"]);
         const month = input?.month || currentMonth();
+        if (month === currentMonth()) await ensureMonthlyWorklistGenerated(month);
         return getWorklistForMonth(month, { assignedStaffId: ctx.user.id });
       }),
 

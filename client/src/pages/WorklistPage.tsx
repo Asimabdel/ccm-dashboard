@@ -4,9 +4,9 @@ import { trpc } from "@/lib/trpc";
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
-import { Loader2, Phone, X, CheckCircle2, ListChecks } from "lucide-react";
+import { Loader2, Phone, X, CheckCircle2, ListChecks, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import {
-  STATUS_LABELS, STATUS_OPTIONS, statusBadgeClass, currentMonthStr,
+  STATUS_LABELS, STATUS_OPTIONS, statusBadgeClass, currentMonthStr, fmtDate,
 } from "@/lib/ccm";
 
 export default function WorklistPage() {
@@ -30,6 +30,19 @@ export default function WorklistPage() {
   const worklist = trpc.worklist.forMonth.useQuery(filters, { enabled: !!user });
   const utils = trpc.useUtils();
 
+  // Optional sort by "Last Called": none -> oldest first (asc) -> newest first (desc).
+  // Never-called patients count as oldest, so ascending surfaces the most overdue first.
+  const [lastCalledSort, setLastCalledSort] = useState<"none" | "asc" | "desc">("none");
+  const sortedRows = useMemo(() => {
+    const data = worklist.data || [];
+    if (lastCalledSort === "none") return data;
+    const t = (d: unknown) => (d ? new Date(d as string).getTime() : 0);
+    return [...data].sort((a, b) => {
+      const av = t(a.patient.lastCalledAt), bv = t(b.patient.lastCalledAt);
+      return lastCalledSort === "asc" ? av - bv : bv - av;
+    });
+  }, [worklist.data, lastCalledSort]);
+
   const isStaff = user && ["admin", "staff"].includes(user.role);
 
   const updateStatus = trpc.worklist.updateStatus.useMutation({
@@ -45,7 +58,7 @@ export default function WorklistPage() {
     return <div className="min-h-screen flex items-center justify-center bg-white"><Loader2 className="animate-spin text-slate-400" /></div>;
   }
 
-  const rows = worklist.data || [];
+  const rows = sortedRows;
   const field = "px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]";
   const toggle = (id: number) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
 
@@ -92,6 +105,16 @@ export default function WorklistPage() {
                 {isStaff && <th className="px-4 py-3 w-10"></th>}
                 <th className="px-5 py-3 font-medium">Patient</th>
                 <th className="px-5 py-3 font-medium">Provider</th>
+                <th
+                  onClick={() => setLastCalledSort((d) => (d === "none" ? "asc" : d === "asc" ? "desc" : "none"))}
+                  className="px-5 py-3 font-medium cursor-pointer select-none hover:text-slate-600 transition-colors"
+                  title="Sort by date last called"
+                >
+                  <span className="inline-flex items-center gap-1">
+                    Last Called
+                    {lastCalledSort === "asc" ? <ChevronUp size={12} /> : lastCalledSort === "desc" ? <ChevronDown size={12} /> : <ChevronsUpDown size={12} className="text-slate-300" />}
+                  </span>
+                </th>
                 <th className="px-5 py-3 font-medium">Status</th>
                 <th className="px-5 py-3 font-medium text-right">Action</th>
               </tr>
@@ -109,6 +132,7 @@ export default function WorklistPage() {
                     <p className="text-xs text-slate-400">{r.clinicName} - {r.staffName || "Unassigned"}</p>
                   </td>
                   <td className="px-5 py-3 text-slate-600">{r.providerName || "-"}</td>
+                  <td className="px-5 py-3 text-slate-600 whitespace-nowrap">{fmtDate(r.patient.lastCalledAt)}</td>
                   <td className="px-5 py-3">
                     {isStaff ? (
                       <select value={r.task.status ?? "not_started"} onChange={(e) => updateStatus.mutate({ id: r.task.id, status: e.target.value as any })}

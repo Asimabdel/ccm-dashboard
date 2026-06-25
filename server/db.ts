@@ -826,6 +826,28 @@ export async function generateMonthlyWorklist(month: string) {
   return { created: toCreate.length };
 }
 
+// Tracks which months this warm Lambda instance has already generated, so the
+// auto-generation below runs at most once per instance per month.
+const _generatedMonths = new Set<string>();
+
+/**
+ * Make sure the worklist for `month` exists, generating it at most once per warm
+ * instance. Called when the current-month worklist is loaded so that at the start
+ * of each month every active patient automatically gets a fresh task assigned to
+ * their staff (status "assigned"), without needing a scheduled job. Idempotent —
+ * generateMonthlyWorklist only adds tasks for active patients missing one.
+ */
+export async function ensureMonthlyWorklistGenerated(month: string) {
+  if (_generatedMonths.has(month)) return;
+  _generatedMonths.add(month); // mark first so a failure doesn't loop; cleared on error
+  try {
+    await generateMonthlyWorklist(month);
+  } catch (e) {
+    _generatedMonths.delete(month);
+    console.warn("[Worklist] auto-generation failed:", e);
+  }
+}
+
 /**
  * Ensure an active patient has a CCM task for `month`, creating it if missing and
  * keeping its staff assignment in sync with the patient's assignedStaffId.
