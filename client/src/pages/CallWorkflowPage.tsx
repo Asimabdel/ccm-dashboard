@@ -162,7 +162,7 @@ export default function CallWorkflowPage() {
           <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_28px_-18px_rgba(15,23,42,0.18)] p-6">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2"><Sparkles size={16} className="text-[hsl(280_60%_55%)]" /><h3 className="font-bold text-slate-900">CCM Documentation Note</h3></div>
-              <button disabled={genNote.isPending} onClick={() => genNote.mutate({ patientName: p?.name || "Patient", responses })}
+              <button disabled={genNote.isPending} onClick={() => genNote.mutate({ patientName: p?.name || "Patient", localDateTime: new Date().toLocaleString(undefined, { dateStyle: "long", timeStyle: "short" }), responses })}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl bg-[hsl(280_60%_55%)] text-white text-sm font-semibold hover:brightness-110 active:scale-[0.97] transition disabled:opacity-50">
                 {genNote.isPending ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Generate with AI
               </button>

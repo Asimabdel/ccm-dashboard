@@ -7,6 +7,7 @@ export const ccmNotesRouter = router({
     .input(
       z.object({
         patientName: z.string(),
+        localDateTime: z.string().optional(), // caller's local date+time string for the header
         responses: z.object({
           howFeeling: z.string().optional(),
           newSymptoms: z.string().optional(),
@@ -25,11 +26,12 @@ export const ccmNotesRouter = router({
     .mutation(async ({ input, ctx }) => {
       // The staff member who made the call = whoever is logged in (authoritative).
       const employee = (ctx.user?.name && ctx.user.name.trim()) || ctx.user?.email || "CCM Staff";
+      const dateTime = input.localDateTime || new Date().toLocaleString();
+      // The three header lines, placed deterministically at the very top of the note.
+      const header = `Patient Name: ${input.patientName}\nDate and time: ${dateTime}\nCompleted by: ${employee}`;
       const prompt = `Generate a professional and concise CCM (Chronic Care Management) monthly follow-up note based on the following patient call responses. The note should be well-organized, clinically appropriate, and suitable for medical records.
 
-Patient Name: ${input.patientName}
-Date: ${new Date().toLocaleDateString()}
-Call completed by (CCM staff member who conducted this call): ${employee}
+Patient: ${input.patientName}
 
 Call Assessment:
 - Patient's Current Health Status: ${input.responses.howFeeling || "Not reported"}
@@ -53,7 +55,7 @@ Generate a structured clinical note with the following sections:
 6. PLAN/RECOMMENDATIONS
 7. FOLLOW-UP
 
-The note should be professional, concise (300-500 words), and ready for inclusion in the patient's medical record. End the note with a final signature line reading exactly: "Completed by: ${employee}". Use this exact name — never a placeholder such as [Your Name].`;
+The note should be professional, concise (300-500 words), and ready for inclusion in the patient's medical record. Begin directly with the first section heading — do NOT add a title, patient name, date, or "completed by" line, as those are added separately at the top of the note.`;
 
       try {
         const response = await invokeLLM({
@@ -71,19 +73,11 @@ The note should be professional, concise (300-500 words), and ready for inclusio
         });
 
         const raw = response.choices[0]?.message?.content;
-        let generatedNote =
-          typeof raw === "string" && raw.trim()
-            ? raw
-            : "Unable to generate note. Please try again.";
-
-        // Safety net: guarantee the caller's name appears even if the model omitted it.
-        if (typeof raw === "string" && raw.trim() && !generatedNote.toLowerCase().includes(employee.toLowerCase())) {
-          generatedNote = `${generatedNote.trimEnd()}\n\nCompleted by: ${employee}`;
-        }
+        const body = typeof raw === "string" && raw.trim() ? raw.trim() : "";
 
         return {
           success: true,
-          note: generatedNote,
+          note: body ? `${header}\n\n${body}` : "Unable to generate note. Please try again.",
           generatedAt: Date.now(),
         };
       } catch (error) {
