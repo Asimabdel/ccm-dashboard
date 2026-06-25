@@ -22,11 +22,14 @@ export const ccmNotesRouter = router({
         }),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      // The staff member who made the call = whoever is logged in (authoritative).
+      const employee = (ctx.user?.name && ctx.user.name.trim()) || ctx.user?.email || "CCM Staff";
       const prompt = `Generate a professional and concise CCM (Chronic Care Management) monthly follow-up note based on the following patient call responses. The note should be well-organized, clinically appropriate, and suitable for medical records.
 
 Patient Name: ${input.patientName}
 Date: ${new Date().toLocaleDateString()}
+Call completed by (CCM staff member who conducted this call): ${employee}
 
 Call Assessment:
 - Patient's Current Health Status: ${input.responses.howFeeling || "Not reported"}
@@ -50,7 +53,7 @@ Generate a structured clinical note with the following sections:
 6. PLAN/RECOMMENDATIONS
 7. FOLLOW-UP
 
-The note should be professional, concise (300-500 words), and ready for inclusion in the patient's medical record.`;
+The note should be professional, concise (300-500 words), and ready for inclusion in the patient's medical record. End the note with a final signature line reading exactly: "Completed by: ${employee}". Use this exact name — never a placeholder such as [Your Name].`;
 
       try {
         const response = await invokeLLM({
@@ -67,9 +70,16 @@ The note should be professional, concise (300-500 words), and ready for inclusio
           ],
         });
 
-        const generatedNote =
-          response.choices[0]?.message?.content ||
-          "Unable to generate note. Please try again.";
+        const raw = response.choices[0]?.message?.content;
+        let generatedNote =
+          typeof raw === "string" && raw.trim()
+            ? raw
+            : "Unable to generate note. Please try again.";
+
+        // Safety net: guarantee the caller's name appears even if the model omitted it.
+        if (typeof raw === "string" && raw.trim() && !generatedNote.toLowerCase().includes(employee.toLowerCase())) {
+          generatedNote = `${generatedNote.trimEnd()}\n\nCompleted by: ${employee}`;
+        }
 
         return {
           success: true,
