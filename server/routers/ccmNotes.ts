@@ -8,6 +8,17 @@ export const ccmNotesRouter = router({
       z.object({
         patientName: z.string(),
         localDateTime: z.string().optional(), // caller's local date+time string for the header
+        chronicConditions: z.array(z.string()).optional(),
+        carePlan: z
+          .object({
+            problems: z
+              .array(z.object({ condition: z.string(), goal: z.string(), intervention: z.string() }))
+              .optional(),
+            medications: z.string().optional(),
+            additionalNotes: z.string().optional(),
+            reviewedThisMonth: z.boolean().optional(),
+          })
+          .optional(),
         responses: z.object({
           howFeeling: z.string().optional(),
           newSymptoms: z.string().optional(),
@@ -29,10 +40,33 @@ export const ccmNotesRouter = router({
       const dateTime = input.localDateTime || new Date().toLocaleString();
       // The three header lines, placed deterministically at the very top of the note.
       const header = `Patient Name: ${input.patientName}\nDate and time: ${dateTime}\nCompleted by: ${employee}`;
+
+      const conditions = (input.chronicConditions || []).filter((c) => c && c.trim());
+      const plan = input.carePlan;
+      const planProblems = (plan?.problems || []).filter((p) => p.condition && p.condition.trim());
+      const carePlanBlock = `
+Chronic Conditions Managed: ${conditions.length ? conditions.join(", ") : "Not specified"}
+
+Comprehensive Care Plan:
+${
+  planProblems.length
+    ? planProblems
+        .map(
+          (p, i) =>
+            `  ${i + 1}. ${p.condition} — Goal: ${p.goal || "not set"}; Intervention: ${p.intervention || "not set"}`
+        )
+        .join("\n")
+    : "  No structured problem/goal entries recorded."
+}
+Medication Management: ${plan?.medications || "Not documented"}
+Care Plan Additional Notes: ${plan?.additionalNotes || "None"}
+Care Plan Reviewed/Updated With Patient This Month: ${plan?.reviewedThisMonth ? "Yes" : "No"}
+`;
+
       const prompt = `Generate a professional and concise CCM (Chronic Care Management) monthly follow-up note based on the following patient call responses. The note should be well-organized, clinically appropriate, and suitable for medical records.
 
 Patient: ${input.patientName}
-
+${carePlanBlock}
 Call Assessment:
 - Patient's Current Health Status: ${input.responses.howFeeling || "Not reported"}
 - New or Worsening Symptoms: ${input.responses.newSymptoms || "None reported"}
@@ -48,14 +82,15 @@ Call Assessment:
 
 Generate a structured clinical note with the following sections:
 1. CHIEF COMPLAINT/REASON FOR CONTACT
-2. HISTORY OF PRESENT ILLNESS
-3. VITAL SIGNS/MEASUREMENTS (if available)
-4. MEDICATION REVIEW
-5. ASSESSMENT
-6. PLAN/RECOMMENDATIONS
-7. FOLLOW-UP
+2. CHRONIC CONDITIONS & CARE PLAN REVIEW (list the conditions managed; for each, state the goal and intervention from the care plan; explicitly note whether the comprehensive care plan was reviewed/updated with the patient this month)
+3. HISTORY OF PRESENT ILLNESS
+4. VITAL SIGNS/MEASUREMENTS (if available)
+5. MEDICATION REVIEW
+6. ASSESSMENT
+7. PLAN/RECOMMENDATIONS
+8. FOLLOW-UP
 
-The note should be professional, concise (300-500 words), and ready for inclusion in the patient's medical record. Begin directly with the first section heading — do NOT add a title, patient name, date, or "completed by" line, as those are added separately at the top of the note.`;
+The note should be professional, concise (350-600 words), and ready for inclusion in the patient's medical record. Begin directly with the first section heading — do NOT add a title, patient name, date, or "completed by" line, as those are added separately at the top of the note.`;
 
       try {
         const response = await invokeLLM({

@@ -9,6 +9,7 @@ import {
   patients,
   ccmTasks,
   ccmNotes,
+  carePlans,
   providerEscalations,
   followUpItems,
   billingRecords,
@@ -557,6 +558,51 @@ export async function getPatientDetail(patientId: number) {
   };
 }
 
+/** The patient's current comprehensive CCM care plan (one per patient). */
+export async function getCarePlan(patientId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(carePlans)
+    .where(eq(carePlans.patientId, patientId))
+    .orderBy(desc(carePlans.updatedAt))
+    .limit(1);
+  return rows[0];
+}
+
+/** Create or update the patient's care plan; optionally stamp a monthly review. */
+export async function upsertCarePlan(input: {
+  patientId: number;
+  problems: { condition: string; goal: string; intervention: string }[];
+  medications?: string;
+  additionalNotes?: string;
+  reviewedByStaffId?: number;
+  reviewedMonth?: string;
+  markReviewed?: boolean;
+}) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const existing = await getCarePlan(input.patientId);
+  const base: Record<string, unknown> = {
+    patientId: input.patientId,
+    problems: input.problems ?? [],
+    medications: input.medications,
+    additionalNotes: input.additionalNotes,
+  };
+  if (input.markReviewed) {
+    base.lastReviewedAt = new Date();
+    base.lastReviewedByStaffId = input.reviewedByStaffId;
+    base.lastReviewedMonth = input.reviewedMonth;
+  }
+  if (existing) {
+    await db.update(carePlans).set(base).where(eq(carePlans.id, existing.id));
+    return { ...existing, ...base };
+  }
+  const res: any = await db.insert(carePlans).values(base as any);
+  return { id: res[0]?.insertId ?? 0, ...base };
+}
+
 /** Admin dashboard aggregate stats for a month */
 export async function getAdminStats(month: string) {
   const db = await getDb();
@@ -1071,6 +1117,10 @@ export async function recomputeBilling(taskId: number, month: string) {
   else if (task.providerReviewNeeded) billingStatus = "provider_review_pending";
   else if (contacted) billingStatus = "in_progress";
 
+  // Care plan must be reviewed/updated this same billing month to count toward CCM.
+  const plan = await getCarePlan(task.patientId);
+  const carePlanReviewed = !!plan && plan.lastReviewedMonth === month;
+
   const existing = await db.select().from(billingRecords).where(eq(billingRecords.ccmTaskId, taskId)).limit(1);
   const values = {
     ccmTaskId: taskId,
@@ -1079,7 +1129,7 @@ export async function recomputeBilling(taskId: number, month: string) {
     timeThresholdMet: true,
     documentationComplete: docComplete,
     providerAssociated: true,
-    carePlanReviewed: docComplete,
+    carePlanReviewed,
     noMissingFields: docComplete,
     providerReviewCompleted: providerReviewDone,
     billingStatus,

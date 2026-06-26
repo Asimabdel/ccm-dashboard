@@ -205,7 +205,11 @@ export const ccmNotes = mysqlTable("ccmNotes", {
   // Escalation
   escalationReason: text("escalationReason"),
   escalationFlag: boolean("escalationFlag").default(false),
-  
+
+  // CCM care-plan review attestation for this call (the comprehensive care plan
+  // was reviewed/updated with the patient this month — a CCM billing requirement)
+  carePlanReviewed: boolean("carePlanReviewed").default(false),
+
   // Follow-up actions
   followUpActions: json("followUpActions").$type<string[]>().default([]),
   
@@ -216,6 +220,32 @@ export const ccmNotes = mysqlTable("ccmNotes", {
 
 export type CCMNote = typeof ccmNotes.$inferSelect;
 export type InsertCCMNote = typeof ccmNotes.$inferInsert;
+
+/**
+ * Comprehensive CCM care plan — one living plan per patient.
+ * The `problems` list is the patient's chronic-condition problem list, each with a
+ * measurable goal and the planned intervention/management (the CCM care-plan core).
+ * Reviewed/updated each month during the guided call.
+ */
+export const carePlans = mysqlTable("carePlans", {
+  id: int("id").autoincrement().primaryKey(),
+  patientId: int("patientId").references(() => patients.id).notNull(),
+  problems: json("problems")
+    .$type<{ condition: string; goal: string; intervention: string }[]>()
+    .default([]),
+  medications: text("medications"),        // current medications / reconciliation summary
+  additionalNotes: text("additionalNotes"), // psychosocial, social services, overall summary
+  lastReviewedAt: datetime("lastReviewedAt"),
+  lastReviewedByStaffId: int("lastReviewedByStaffId").references(() => users.id),
+  lastReviewedMonth: varchar("lastReviewedMonth", { length: 7 }), // YYYY-MM
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  patientIdx: index("carePlans_patient_idx").on(t.patientId),
+}));
+
+export type CarePlan = typeof carePlans.$inferSelect;
+export type InsertCarePlan = typeof carePlans.$inferInsert;
 
 /**
  * Provider escalations and reviews
