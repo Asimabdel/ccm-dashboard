@@ -732,6 +732,24 @@ export const appRouter = router({
         return getCCMTaskById(input.id);
       }),
 
+    // Undo a no-answer attempt logged by mistake: decrement the counter (never
+    // below 0). If that was the last attempt, send the task back to "assigned".
+    unlogNoAnswer: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "staff"]);
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const task = await getCCMTaskById(input.id);
+        if (!task) throw new TRPCError({ code: "NOT_FOUND", message: "Task not found." });
+        const next = Math.max(0, (task.noAnswerCount ?? 0) - 1);
+        const update: any = { noAnswerCount: next, updatedAt: new Date() };
+        if (next === 0 && task.status === "called_no_answer") update.status = "assigned";
+        await db.update(ccmTasks).set(update).where(eq(ccmTasks.id, input.id));
+        await recomputeBilling(input.id, currentMonth());
+        return getCCMTaskById(input.id);
+      }),
+
     // Assignment: manual single, bulk, and rule-based
     assign: protectedProcedure
       .input(z.object({ taskIds: z.array(z.number()), staffId: z.number() }))

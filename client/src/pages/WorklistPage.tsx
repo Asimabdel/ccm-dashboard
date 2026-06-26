@@ -4,7 +4,7 @@ import { trpc } from "@/lib/trpc";
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
-import { Loader2, Phone, PhoneOff, X, CheckCircle2, ListChecks, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
+import { Loader2, Phone, PhoneOff, X, CheckCircle2, ListChecks, ChevronUp, ChevronDown, ChevronsUpDown, Minus } from "lucide-react";
 import {
   WORKLIST_STATUS_OPTIONS, WORKLIST_STATUS_LABELS, worklistStatusValue,
   statusBadgeClass, currentMonthStr, fmtDate,
@@ -53,6 +53,10 @@ export default function WorklistPage() {
   });
   const logNoAnswer = trpc.worklist.logNoAnswer.useMutation({
     onSuccess: () => { utils.worklist.forMonth.invalidate(); toast.success("No-answer attempt logged."); },
+    onError: (e) => toast.error(e.message),
+  });
+  const unlogNoAnswer = trpc.worklist.unlogNoAnswer.useMutation({
+    onSuccess: () => { utils.worklist.forMonth.invalidate(); toast.success("No-answer attempt removed."); },
     onError: (e) => toast.error(e.message),
   });
   const bulkUpdate = trpc.worklist.bulkUpdateStatus.useMutation({
@@ -141,9 +145,18 @@ export default function WorklistPage() {
                   <td className="px-5 py-3 text-slate-600">{r.providerName || "-"}</td>
                   <td className="px-5 py-3 text-slate-600 whitespace-nowrap">{fmtDate(r.patient.lastCalledAt)}</td>
                   <td className="px-5 py-3">
-                    {(r.task.noAnswerCount ?? 0) > 0
-                      ? <span className="inline-flex items-center gap-1 text-amber-700 font-semibold" title="No-answer attempts this month"><PhoneOff size={13} /> {r.task.noAnswerCount}×</span>
-                      : <span className="text-slate-300">—</span>}
+                    {(r.task.noAnswerCount ?? 0) > 0 ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="inline-flex items-center gap-1 text-amber-700 font-semibold" title="No-answer attempts this month"><PhoneOff size={13} /> {r.task.noAnswerCount}×</span>
+                        {isStaff && (
+                          <button onClick={() => unlogNoAnswer.mutate({ id: r.task.id })} disabled={unlogNoAnswer.isPending}
+                            title="Remove a no-answer attempt (logged by mistake)"
+                            className="inline-flex items-center justify-center w-5 h-5 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 disabled:opacity-50 transition">
+                            <Minus size={13} />
+                          </button>
+                        )}
+                      </span>
+                    ) : <span className="text-slate-300">—</span>}
                   </td>
                   <td className="px-5 py-3">
                     {(() => {
