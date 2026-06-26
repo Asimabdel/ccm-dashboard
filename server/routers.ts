@@ -71,7 +71,7 @@ import {
 } from "../drizzle/schema";
 import { ccmNotesRouter } from "./routers/ccmNotes";
 import { seedDatabase, isSeeded, currentMonth } from "./seed";
-import { ensureMonthlyTask, deletePatient, getUpcomingAppointments, getCarePlan, upsertCarePlan } from "./db";
+import { ensureMonthlyTask, deletePatient, getUpcomingAppointments } from "./db";
 import { parsePatientCsv, findInBatchDuplicates, matchProviderId, matchWorklistStatus } from "../shared/csvImport";
 import { clinics, providers } from "../drizzle/schema";
 
@@ -771,7 +771,6 @@ export const appRouter = router({
           aiGeneratedAt: z.number().optional(),
           escalationFlag: z.boolean().optional(),
           escalationReason: z.string().optional(),
-          carePlanReviewed: z.boolean().optional(),
           followUpActions: z.array(z.string()).optional(),
           markCompleted: z.boolean().optional(),
         })
@@ -801,7 +800,6 @@ export const appRouter = router({
           aiGeneratedAt: input.aiGeneratedAt ? new Date(input.aiGeneratedAt) : undefined,
           escalationFlag: input.escalationFlag || false,
           escalationReason: input.escalationReason,
-          carePlanReviewed: input.carePlanReviewed || false,
           followUpActions: input.followUpActions || [],
         };
 
@@ -869,38 +867,6 @@ export const appRouter = router({
 
         await recomputeBilling(input.ccmTaskId, currentMonth());
         return { success: true, noteId };
-      }),
-  }),
-
-  // ---- Comprehensive care plan (one living plan per patient) ----
-  carePlan: router({
-    get: protectedProcedure.input(z.number()).query(async ({ input }) => getCarePlan(input)),
-
-    save: protectedProcedure
-      .input(
-        z.object({
-          patientId: z.number(),
-          problems: z
-            .array(z.object({ condition: z.string(), goal: z.string(), intervention: z.string() }))
-            .default([]),
-          medications: z.string().optional(),
-          additionalNotes: z.string().optional(),
-          markReviewed: z.boolean().optional(),
-        })
-      )
-      .mutation(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin", "staff"]);
-        const plan = await upsertCarePlan({
-          ...input,
-          reviewedByStaffId: ctx.user.id,
-          reviewedMonth: currentMonth(),
-        });
-        void logAudit(ctx, "update_patient", {
-          entityType: "patient",
-          entityId: input.patientId,
-          description: `Updated care plan for patient #${input.patientId}`,
-        });
-        return plan;
       }),
   }),
 
