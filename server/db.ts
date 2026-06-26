@@ -670,9 +670,17 @@ export async function getCoordinatorDashboard(staffId: number, month: string) {
   if (!db) return null;
 
   const tasks = await db
-    .select({ status: ccmTasks.status, completedAt: ccmTasks.completedAt })
+    .select({
+      taskId: ccmTasks.id,
+      status: ccmTasks.status,
+      completedAt: ccmTasks.completedAt,
+      patientId: patients.id,
+      patientName: patients.name,
+      lastCalledAt: patients.lastCalledAt,
+    })
     .from(ccmTasks)
-    .where(and(eq(ccmTasks.assignedStaffId, staffId), eq(ccmTasks.month, month)));
+    .innerJoin(patients, eq(ccmTasks.patientId, patients.id))
+    .where(and(eq(ccmTasks.assignedStaffId, staffId), eq(ccmTasks.month, month), eq(patients.ccmEnrollmentStatus, "active")));
 
   const assigned = tasks.length;
   const completed = tasks.filter((t) => COMPLETED_TASK_STATUSES.includes(t.status as string)).length;
@@ -710,11 +718,24 @@ export async function getCoordinatorDashboard(staffId: number, month: string) {
   const neededPerDay = goal > completed ? (workRemaining >= 1 ? Math.ceil((goal - completed) / workRemaining) : goal - completed) : 0;
   const projectedEom = workElapsed >= 1 ? Math.round((completed / workElapsed) * workInMonth) : completed;
 
+  // Actionable work queues: patients to re-attempt (call-back) and not-yet-reached
+  // (overdue), oldest-contacted first so the most overdue surface at the top.
+  const CALLBACK_STATUSES = ["called_no_answer", "voicemail_left", "needs_callback"];
+  const TODO_STATUSES = ["not_started", "assigned", "in_progress"];
+  const byOldest = (a: { lastCalledAt: Date | null }, b: { lastCalledAt: Date | null }) =>
+    (a.lastCalledAt ? new Date(a.lastCalledAt).getTime() : 0) - (b.lastCalledAt ? new Date(b.lastCalledAt).getTime() : 0);
+  const item = (t: typeof tasks[number]) => ({ taskId: t.taskId, patientId: t.patientId, name: t.patientName, status: t.status as string, lastCalledAt: t.lastCalledAt });
+  const callbackAll = tasks.filter((t) => CALLBACK_STATUSES.includes(t.status as string)).sort(byOldest);
+  const overdueAll = tasks.filter((t) => TODO_STATUSES.includes(t.status as string)).sort(byOldest);
+
   return {
     month, assigned, completed, remaining, avgPerDay, completedToday,
     daysElapsed, daysInMonth, daysRemaining,
     workDaysPerWeek, workDaysElapsed: Math.round(workElapsed), workDaysRemaining: Math.round(workRemaining),
     goal, neededPerDay, projectedEom, statusCounts,
+    callbackCount: callbackAll.length, overdueCount: overdueAll.length,
+    callbackQueue: callbackAll.slice(0, 12).map(item),
+    overdueQueue: overdueAll.slice(0, 12).map(item),
   };
 }
 

@@ -4,8 +4,9 @@ import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { trpc } from "@/lib/trpc";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Loader2, CheckCircle2, ListTodo, TrendingUp, Target, Phone, Save, Users } from "lucide-react";
-import { STATUS_LABELS, statusBadgeClass, currentMonthStr } from "@/lib/ccm";
+import { useLocation } from "wouter";
+import { Loader2, CheckCircle2, ListTodo, TrendingUp, Target, Phone, Save, Users, PhoneMissed, Clock } from "lucide-react";
+import { STATUS_LABELS, statusBadgeClass, currentMonthStr, fmtDate } from "@/lib/ccm";
 
 type Tone = "default" | "good" | "warn" | "accent";
 function StatCard({ icon: Icon, label, value, sub, tone = "default" }: {
@@ -31,13 +32,47 @@ function StatCard({ icon: Icon, label, value, sub, tone = "default" }: {
   );
 }
 
+type QueueItem = { taskId: number; patientId: number; name: string; status: string; lastCalledAt: string | Date | null };
 type Dash = {
   staffName?: string; assigned?: number; completed?: number; remaining?: number;
   avgPerDay?: number; completedToday?: number; daysElapsed?: number; daysInMonth?: number;
   daysRemaining?: number; goal?: number; neededPerDay?: number; projectedEom?: number;
   workDaysPerWeek?: number; workDaysElapsed?: number; workDaysRemaining?: number;
   statusCounts?: Record<string, number>;
+  callbackCount?: number; overdueCount?: number;
+  callbackQueue?: QueueItem[]; overdueQueue?: QueueItem[];
 };
+
+function QueueCard({ title, icon: Icon, items, total, emptyText }: {
+  title: string; icon: React.ElementType; items: QueueItem[]; total: number; emptyText: string;
+}) {
+  const [, setLocation] = useLocation();
+  return (
+    <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-sm">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2"><Icon size={16} className="text-amber-500" /><h3 className="font-bold text-slate-800">{title}</h3></div>
+        <span className="text-sm font-semibold text-slate-500">{total}</span>
+      </div>
+      {items.length === 0 ? (
+        <p className="text-sm text-slate-400 py-5 text-center">{emptyText}</p>
+      ) : (
+        <div className="divide-y divide-slate-50">
+          {items.map((it) => (
+            <button key={it.taskId} onClick={() => setLocation(`/workflow/${it.taskId}`)}
+              className="w-full flex items-center justify-between gap-3 py-2.5 px-2 -mx-2 text-left rounded-lg hover:bg-slate-50/70 transition">
+              <div className="min-w-0">
+                <p className="font-medium text-slate-800 truncate">{it.name}</p>
+                <p className="text-xs text-slate-400 truncate">{STATUS_LABELS[it.status] ?? it.status} · {it.lastCalledAt ? `last called ${fmtDate(it.lastCalledAt)}` : "never called"}</p>
+              </div>
+              <span className="inline-flex items-center gap-1 text-xs font-semibold text-[hsl(200_100%_45%)] shrink-0"><Phone size={12} /> Call</span>
+            </button>
+          ))}
+          {total > items.length && <p className="pt-2 text-xs text-slate-400 text-center">+{total - items.length} more — see your worklist</p>}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function DashboardView({ d, month }: { d: Dash; month: string }) {
   const completed = d.completed ?? 0;
@@ -80,6 +115,11 @@ function DashboardView({ d, month }: { d: Dash; month: string }) {
         <StatCard icon={ListTodo} tone="warn" label="Remaining" value={d.remaining ?? 0} sub={`of ${d.assigned ?? 0} assigned`} />
         <StatCard icon={TrendingUp} tone="accent" label="Avg / work day" value={d.avgPerDay ?? 0} sub={`over ${d.workDaysElapsed ?? 0} work day(s) so far`} />
         <StatCard icon={Phone} label="My patients" value={d.assigned ?? 0} sub={`${d.workDaysRemaining ?? 0} work day(s) left this month`} />
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-4">
+        <QueueCard title="Needs a call-back" icon={PhoneMissed} items={d.callbackQueue || []} total={d.callbackCount ?? 0} emptyText="No call-backs pending — nice work." />
+        <QueueCard title="Overdue / not started" icon={Clock} items={d.overdueQueue || []} total={d.overdueCount ?? 0} emptyText="All caught up on outreach." />
       </div>
 
       {d.statusCounts && Object.keys(d.statusCounts).length > 0 && (
