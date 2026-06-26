@@ -1,7 +1,7 @@
 import type React from "react";
 import {
   LayoutDashboard, Users, ClipboardList, UserCog, AlertTriangle, Receipt,
-  BarChart3, PhoneCall, CalendarClock, ShieldCheck, Building2, Stethoscope,
+  BarChart3, PhoneCall, CalendarClock, ShieldCheck, Building2, Stethoscope, Target,
 } from "lucide-react";
 
 export interface NavItem {
@@ -23,12 +23,14 @@ export const NAV: Record<Role, NavItem[]> = {
     { label: "Billing", path: "/billing", icon: Receipt },
     { label: "Follow-ups", path: "/follow-ups", icon: CalendarClock },
     { label: "Reports", path: "/reports", icon: BarChart3 },
+    { label: "Coordinators", path: "/coordinator", icon: Target },
     { label: "Providers", path: "/providers", icon: Stethoscope },
     { label: "Clinics", path: "/clinics", icon: Building2 },
     { label: "Team & Access", path: "/team", icon: UserCog },
     { label: "Audit Log", path: "/audit", icon: ShieldCheck },
   ],
   staff: [
+    { label: "My Dashboard", path: "/coordinator", icon: LayoutDashboard },
     { label: "My Worklist", path: "/worklist", icon: ClipboardList },
     { label: "Patients", path: "/patients", icon: Users },
     { label: "Call Workflow", path: "/workflow", icon: PhoneCall },

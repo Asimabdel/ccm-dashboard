@@ -23,6 +23,9 @@ import {
   getStaffPerformance,
   getClinicPerformance,
   getDailyCompletionTrend,
+  getCoordinatorDashboard,
+  getCoordinatorGoalsOverview,
+  setMonthlyGoal,
   getEnrichedEscalations,
   getEnrichedBilling,
   getEnrichedFollowUps,
@@ -1085,6 +1088,37 @@ export const appRouter = router({
         requireRole(ctx, ["admin", "billing"]);
         const rows = await getCompletionReport({ groupBy: input.groupBy, from: input.from, to: input.to });
         return { groupBy: input.groupBy, rows, total: rows.reduce((s, r) => s + r.count, 0) };
+      }),
+  }),
+
+  // ---- Per-coordinator dashboards + admin-set monthly goals ----
+  coordinator: router({
+    // A coordinator's own dashboard (staff); an admin can pass a staffId to view any.
+    dashboard: protectedProcedure
+      .input(z.object({ staffId: z.number().optional(), month: z.string().optional() }).optional())
+      .query(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "staff"]);
+        const month = input?.month || currentMonth();
+        const staffId = ctx.user.role === "admin" && input?.staffId ? input.staffId : ctx.user.id;
+        const data = await getCoordinatorDashboard(staffId, month);
+        const who = staffId === ctx.user.id ? ctx.user : (await getAllStaffUsers()).find((s) => s.id === staffId);
+        return { staffId, staffName: who?.name || who?.email || "Coordinator", ...(data || {}) };
+      }),
+    // Admin: every coordinator with their goal + completed/assigned for the month.
+    goalsOverview: protectedProcedure
+      .input(z.object({ month: z.string().optional() }).optional())
+      .query(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin"]);
+        return getCoordinatorGoalsOverview(input?.month || currentMonth());
+      }),
+    // Admin sets/updates a coordinator's goal for a month.
+    setGoal: protectedProcedure
+      .input(z.object({ userId: z.number(), month: z.string(), goal: z.number().int().min(0).max(100000) }))
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin"]);
+        await setMonthlyGoal(input.userId, input.month, input.goal);
+        void logAudit(ctx, "manage_access", { entityType: "user", entityId: input.userId, description: `Set ${input.month} CCM goal to ${input.goal} for user #${input.userId}` });
+        return { success: true };
       }),
   }),
 });

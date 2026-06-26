@@ -16,6 +16,7 @@ import {
   productivityMetrics,
   auditLogs,
   teamInvites,
+  monthlyGoals,
   type InsertAuditLog,
   type User,
 } from "../drizzle/schema";
@@ -626,6 +627,96 @@ export async function getStaffPerformance(month: string) {
     map.set(r.staffId, cur);
   }
   return Array.from(map.values());
+}
+
+const COMPLETED_TASK_STATUSES = ["completed", "ready_for_billing", "billed"];
+
+/** Get a coordinator's admin-set CCM goal for a month (0 if none). */
+export async function getMonthlyGoal(userId: number, month: string): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db
+    .select({ goal: monthlyGoals.goal })
+    .from(monthlyGoals)
+    .where(and(eq(monthlyGoals.userId, userId), eq(monthlyGoals.month, month)))
+    .limit(1);
+  return rows[0]?.goal ?? 0;
+}
+
+/** Admin sets/updates a coordinator's CCM goal for a month (upsert). */
+export async function setMonthlyGoal(userId: number, month: string, goal: number) {
+  const db = await getDb();
+  if (!db) return;
+  const existing = await db
+    .select({ id: monthlyGoals.id })
+    .from(monthlyGoals)
+    .where(and(eq(monthlyGoals.userId, userId), eq(monthlyGoals.month, month)))
+    .limit(1);
+  if (existing[0]) {
+    await db.update(monthlyGoals).set({ goal, updatedAt: new Date() }).where(eq(monthlyGoals.id, existing[0].id));
+  } else {
+    await db.insert(monthlyGoals).values({ userId, month, goal });
+  }
+}
+
+/** Stats for one care coordinator's month: completed, remaining, pace, goal, etc. */
+export async function getCoordinatorDashboard(staffId: number, month: string) {
+  const db = await getDb();
+  if (!db) return null;
+
+  const tasks = await db
+    .select({ status: ccmTasks.status, completedAt: ccmTasks.completedAt })
+    .from(ccmTasks)
+    .where(and(eq(ccmTasks.assignedStaffId, staffId), eq(ccmTasks.month, month)));
+
+  const assigned = tasks.length;
+  const completed = tasks.filter((t) => COMPLETED_TASK_STATUSES.includes(t.status as string)).length;
+  const remaining = Math.max(0, assigned - completed);
+
+  const statusCounts: Record<string, number> = {};
+  for (const t of tasks) statusCounts[t.status as string] = (statusCounts[t.status as string] || 0) + 1;
+
+  // Calendar math for the requested month.
+  const [y, m] = month.split("-").map(Number);
+  const now = new Date();
+  const curMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const isCurrent = month === curMonth;
+  const isPast = y < now.getFullYear() || (y === now.getFullYear() && m < now.getMonth() + 1);
+  const daysElapsed = isCurrent ? now.getDate() : isPast ? daysInMonth : 0;
+  const daysRemaining = Math.max(0, daysInMonth - daysElapsed);
+  const avgPerDay = daysElapsed > 0 ? Math.round((completed / daysElapsed) * 10) / 10 : 0;
+
+  const todayStr = now.toISOString().slice(0, 10);
+  const completedToday = tasks.filter(
+    (t) => COMPLETED_TASK_STATUSES.includes(t.status as string) && t.completedAt && new Date(t.completedAt).toISOString().slice(0, 10) === todayStr,
+  ).length;
+
+  const goal = await getMonthlyGoal(staffId, month);
+  const neededPerDay = goal > completed && daysRemaining > 0 ? Math.ceil((goal - completed) / daysRemaining) : 0;
+  const projectedEom = Math.round(avgPerDay * daysInMonth);
+
+  return {
+    month, assigned, completed, remaining, avgPerDay, completedToday,
+    daysElapsed, daysInMonth, daysRemaining, goal, neededPerDay, projectedEom, statusCounts,
+  };
+}
+
+/** Admin overview: every coordinator with their goal + completed/assigned for a month. */
+export async function getCoordinatorGoalsOverview(month: string) {
+  const staff = (await getAllStaffUsers()).filter((s) => s.role === "staff");
+  const perf = await getStaffPerformance(month);
+  const perfMap = new Map(perf.map((p) => [p.staffId, p]));
+  const db = await getDb();
+  const goalRows = db ? await db.select().from(monthlyGoals).where(eq(monthlyGoals.month, month)) : [];
+  const goalMap = new Map(goalRows.map((g) => [g.userId, g.goal]));
+  return staff.map((s) => ({
+    userId: s.id,
+    name: s.name || s.email || `User ${s.id}`,
+    goal: goalMap.get(s.id) ?? 0,
+    completed: perfMap.get(s.id)?.completed ?? 0,
+    assigned: perfMap.get(s.id)?.assigned ?? 0,
+  }));
 }
 
 /** Per-clinic performance for a month */

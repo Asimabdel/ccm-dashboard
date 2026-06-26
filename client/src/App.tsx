@@ -6,6 +6,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import AdminDashboard from "./pages/AdminDashboard";
+import CoordinatorDashboard from "./pages/CoordinatorDashboard";
 import PatientsPage from "./pages/PatientsPage";
 import PatientDetailPage from "./pages/PatientDetailPage";
 import WorklistPage from "./pages/WorklistPage";
@@ -28,6 +29,7 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/change-password" component={ChangePasswordPage} />
       <Route path="/admin" component={AdminDashboard} />
+      <Route path="/coordinator" component={CoordinatorDashboard} />
       <Route path="/patients" component={PatientsPage} />
       <Route path="/patients/import" component={BulkImportPage} />
       <Route path="/patients/:id" component={PatientDetailPage} />

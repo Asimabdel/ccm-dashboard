@@ -380,3 +380,20 @@ export const auditLogs = mysqlTable("auditLogs", {
 
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type InsertAuditLog = typeof auditLogs.$inferInsert;
+
+/**
+ * Per-coordinator monthly CCM completion goal, set by an admin at the start of
+ * each month. One row per (user, month).
+ */
+export const monthlyGoals = mysqlTable("monthlyGoals", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").references(() => users.id).notNull(),
+  month: varchar("month", { length: 7 }).notNull(), // YYYY-MM
+  goal: int("goal").notNull().default(0),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  userMonthIdx: index("monthlyGoals_user_month_idx").on(t.userId, t.month),
+}));
+
+export type MonthlyGoal = typeof monthlyGoals.$inferSelect;
