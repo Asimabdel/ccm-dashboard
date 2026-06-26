@@ -453,6 +453,9 @@ export async function getWorklistForMonth(month: string, filters?: {
   const staffAlias = alias(users, "staff");
 
   const conditions = [eq(ccmTasks.month, month)];
+  // The worklist only shows actively-enrolled patients — inactive and declined
+  // patients live on their own tabs.
+  conditions.push(eq(patients.ccmEnrollmentStatus, "active"));
   if (filters?.status) conditions.push(eq(ccmTasks.status, filters.status as any));
   if (filters?.priorityLevel) conditions.push(eq(ccmTasks.priorityLevel, filters.priorityLevel));
   if (filters?.assignedStaffId) conditions.push(eq(ccmTasks.assignedStaffId, filters.assignedStaffId));
@@ -977,6 +980,15 @@ export async function ensureMonthlyTask(patientId: number, month: string) {
 
   const existing = await getCCMTaskByPatientAndMonth(patientId, month);
   if (existing) {
+    // Reactivated patient: clear a stuck inactive/declined task so they return to
+    // the worklist with a fresh status.
+    if (patient.ccmEnrollmentStatus === "active" && (existing.status === "inactive" || existing.status === "declined_ccm")) {
+      await db
+        .update(ccmTasks)
+        .set({ status: patient.assignedStaffId ? "assigned" : "not_started", assignedStaffId: patient.assignedStaffId ?? null, updatedAt: new Date() })
+        .where(eq(ccmTasks.id, existing.id));
+      return;
+    }
     const desiredStaff = patient.assignedStaffId ?? null;
     if ((existing.assignedStaffId ?? null) !== desiredStaff) {
       // If a task was unstarted and now has an owner, mark it assigned.
@@ -1393,6 +1405,10 @@ export type BulkPatientRow = {
 export async function bulkInsertPatients(rows: BulkPatientRow[], month?: string): Promise<number> {
   const db = await getDb();
   if (!db || rows.length === 0) return 0;
+  // A row imported as "Deny CCM Care" / "Inactive" makes the patient declined/inactive,
+  // so they land on the right tab and stay off the worklist (no task created).
+  const enrollOf = (r: BulkPatientRow): "active" | "inactive" | "declined" | "transferred" =>
+    r.worklistStatus === "declined_ccm" ? "declined" : r.worklistStatus === "inactive" ? "inactive" : (r.ccmEnrollmentStatus || "active");
   const values = rows.map((r) => ({
     name: r.name,
     dateOfBirth: r.dateOfBirth ?? null,
@@ -1403,7 +1419,7 @@ export async function bulkInsertPatients(rows: BulkPatientRow[], month?: string)
     chronicConditions: r.chronicConditions || [],
     insurance: r.insurance,
     priorityLevel: "medium" as const,
-    ccmEnrollmentStatus: r.ccmEnrollmentStatus || ("active" as const),
+    ccmEnrollmentStatus: enrollOf(r),
     consentStatus: r.consentStatus || "pending",
     rpmEnrolled: r.rpmEnrolled ?? false,
     rpmStatus: r.rpmStatus || (r.rpmEnrolled ? "enrolled" : "not_enrolled"),
@@ -1420,8 +1436,8 @@ export async function bulkInsertPatients(rows: BulkPatientRow[], month?: string)
   if (month && firstId > 0) {
     const taskValues = rows
       .map((r, i) => ({ r, i }))
-      // Inactive patients don't get a monthly worklist task.
-      .filter(({ r }) => (r.ccmEnrollmentStatus || "active") === "active")
+      // Inactive/declined patients don't get a monthly worklist task.
+      .filter(({ r }) => enrollOf(r) === "active")
       .map(({ r, i }) => {
         const isCompleted = r.worklistStatus === "completed";
         return {

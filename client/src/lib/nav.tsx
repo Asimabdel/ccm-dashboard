@@ -2,6 +2,7 @@ import type React from "react";
 import {
   LayoutDashboard, Users, ClipboardList, UserCog, AlertTriangle, Receipt,
   BarChart3, PhoneCall, CalendarClock, ShieldCheck, Building2, Stethoscope, Target,
+  UserMinus, Ban,
 } from "lucide-react";
 
 export interface NavItem {
@@ -18,6 +19,8 @@ export const NAV: Record<Role, NavItem[]> = {
     { label: "Dashboard", path: "/admin", icon: LayoutDashboard },
     { label: "Patients", path: "/patients", icon: Users },
     { label: "Monthly Worklist", path: "/worklist", icon: ClipboardList },
+    { label: "Inactive Patients", path: "/inactive-patients", icon: UserMinus },
+    { label: "Declined CCM", path: "/declined-patients", icon: Ban },
     { label: "Staff Assignment", path: "/assignment", icon: UserCog },
     { label: "Escalations", path: "/escalations", icon: AlertTriangle },
     { label: "Billing", path: "/billing", icon: Receipt },
@@ -33,6 +36,8 @@ export const NAV: Record<Role, NavItem[]> = {
     { label: "My Dashboard", path: "/coordinator", icon: LayoutDashboard },
     { label: "My Worklist", path: "/worklist", icon: ClipboardList },
     { label: "Patients", path: "/patients", icon: Users },
+    { label: "Inactive Patients", path: "/inactive-patients", icon: UserMinus },
+    { label: "Declined CCM", path: "/declined-patients", icon: Ban },
     { label: "Call Workflow", path: "/workflow", icon: PhoneCall },
   ],
   provider: [

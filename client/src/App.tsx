@@ -8,6 +8,8 @@ import Home from "./pages/Home";
 import AdminDashboard from "./pages/AdminDashboard";
 import CoordinatorDashboard from "./pages/CoordinatorDashboard";
 import PatientsPage from "./pages/PatientsPage";
+import InactivePatientsPage from "./pages/InactivePatientsPage";
+import DeclinedPatientsPage from "./pages/DeclinedPatientsPage";
 import PatientDetailPage from "./pages/PatientDetailPage";
 import WorklistPage from "./pages/WorklistPage";
 import CallWorkflowPage from "./pages/CallWorkflowPage";
@@ -31,6 +33,8 @@ function Router() {
       <Route path="/admin" component={AdminDashboard} />
       <Route path="/coordinator" component={CoordinatorDashboard} />
       <Route path="/patients" component={PatientsPage} />
+      <Route path="/inactive-patients" component={InactivePatientsPage} />
+      <Route path="/declined-patients" component={DeclinedPatientsPage} />
       <Route path="/patients/import" component={BulkImportPage} />
       <Route path="/patients/:id" component={PatientDetailPage} />
       <Route path="/audit" component={AuditLogPage} />

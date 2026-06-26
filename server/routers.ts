@@ -674,6 +674,14 @@ export const appRouter = router({
           const task = await getCCMTaskById(input.id);
           if (task?.patientId) await db.update(patients).set({ lastCalledAt: now, updatedAt: now }).where(eq(patients.id, task.patientId));
         }
+        // Marking Inactive / Declined CCM moves the patient off the worklist onto its
+        // own tab by syncing the patient's enrollment status.
+        if (input.status === "inactive" || input.status === "declined_ccm") {
+          const t = await getCCMTaskById(input.id);
+          if (t?.patientId) {
+            await db.update(patients).set({ ccmEnrollmentStatus: input.status === "inactive" ? "inactive" : "declined", updatedAt: now }).where(eq(patients.id, t.patientId));
+          }
+        }
         await recomputeBilling(input.id, currentMonth());
         return getCCMTaskById(input.id);
       }),
@@ -691,6 +699,10 @@ export const appRouter = router({
           if (contacted) {
             const task = await getCCMTaskById(id);
             if (task?.patientId) await db.update(patients).set({ lastCalledAt: now, updatedAt: now }).where(eq(patients.id, task.patientId));
+          }
+          if (input.status === "inactive" || input.status === "declined_ccm") {
+            const t = await getCCMTaskById(id);
+            if (t?.patientId) await db.update(patients).set({ ccmEnrollmentStatus: input.status === "inactive" ? "inactive" : "declined", updatedAt: now }).where(eq(patients.id, t.patientId));
           }
           await recomputeBilling(id, currentMonth());
         }
