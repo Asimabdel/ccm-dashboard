@@ -3,9 +3,10 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import {
-  LogOut, Menu, X, Bell, ChevronDown, Check, Clock, Search,
+  LogOut, Menu, X, Bell, ChevronDown, Check, Clock, Search, Sun, Moon,
 } from "lucide-react";
 import { NAV, ROLES } from "@/lib/nav";
+import { useTheme } from "@/contexts/ThemeContext";
 import { CommandPalette } from "@/components/CommandPalette";
 import { useIdleLogout } from "@/hooks/useIdleLogout";
 import {
@@ -23,6 +24,7 @@ const KBD_HINT =
 
 export function CCMDashboardLayout({ children, title }: { children: React.ReactNode; title?: string }) {
   const { user, logout, refresh } = useAuth();
+  const { theme, toggleTheme, switchable } = useTheme();
   const [location, setLocation] = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const utils = trpc.useUtils();
@@ -128,6 +130,18 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Light / dark theme toggle */}
+            {switchable && (
+              <button
+                onClick={toggleTheme}
+                aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+                title={theme === "dark" ? "Light mode" : "Dark mode"}
+                className="p-2.5 rounded-xl bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-200 transition-colors"
+              >
+                {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+              </button>
+            )}
+
             {/* ⌘K command palette trigger */}
             <button
               onClick={() => window.dispatchEvent(new Event("open-command-palette"))}
