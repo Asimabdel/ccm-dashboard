@@ -19,7 +19,11 @@ export function EnrollmentPatients({ status, title, emptyText, reactivateLabel, 
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
-  const list = trpc.patients.list.useQuery({ enrollmentStatus: status }, { enabled: !!user });
+  // Coordinators see only their own patients; admins see everyone's.
+  const list = trpc.patients.list.useQuery(
+    { enrollmentStatus: status, ...(user && user.role === "staff" ? { assignedStaffId: user.id } : {}) },
+    { enabled: !!user },
+  );
   const update = trpc.patients.update.useMutation({
     onSuccess: () => {
       utils.patients.list.invalidate();

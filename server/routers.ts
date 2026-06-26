@@ -353,6 +353,7 @@ export const appRouter = router({
           clinicId: z.number().optional(),
           providerId: z.number().optional(),
           enrollmentStatus: z.string().optional(),
+          assignedStaffId: z.number().optional(),
           search: z.string().optional(),
         }).optional()
       )

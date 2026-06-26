@@ -488,6 +488,7 @@ export async function getEnrichedPatients(filters?: {
   providerId?: number;
   riskLevel?: "high" | "medium" | "low";
   enrollmentStatus?: string;
+  assignedStaffId?: number;
   search?: string;
 }) {
   const db = await getDb();
@@ -499,6 +500,7 @@ export async function getEnrichedPatients(filters?: {
   if (filters?.providerId) conditions.push(eq(patients.providerId, filters.providerId));
   if (filters?.riskLevel) conditions.push(eq(patients.riskLevel, filters.riskLevel));
   if (filters?.enrollmentStatus) conditions.push(eq(patients.ccmEnrollmentStatus, filters.enrollmentStatus as any));
+  if (filters?.assignedStaffId) conditions.push(eq(patients.assignedStaffId, filters.assignedStaffId));
 
   const rows = await db
     .select({
