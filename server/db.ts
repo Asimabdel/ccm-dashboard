@@ -685,7 +685,16 @@ export async function getCoordinatorDashboard(staffId: number, month: string) {
   const isPast = y < now.getFullYear() || (y === now.getFullYear() && m < now.getMonth() + 1);
   const daysElapsed = isCurrent ? now.getDate() : isPast ? daysInMonth : 0;
   const daysRemaining = Math.max(0, daysInMonth - daysElapsed);
-  const avgPerDay = daysElapsed > 0 ? Math.round((completed / daysElapsed) * 10) / 10 : 0;
+
+  // Scale by the coordinator's working days per week so per-day metrics reflect
+  // their actual schedule (e.g. 4 days/week) instead of raw calendar days.
+  const u = await db.select({ wd: users.workDaysPerWeek }).from(users).where(eq(users.id, staffId)).limit(1);
+  const workDaysPerWeek = Math.min(7, Math.max(1, u[0]?.wd ?? 5));
+  const workFraction = workDaysPerWeek / 7;
+  const workElapsed = daysElapsed * workFraction;
+  const workRemaining = daysRemaining * workFraction;
+  const workInMonth = daysInMonth * workFraction;
+  const avgPerDay = workElapsed >= 1 ? Math.round((completed / workElapsed) * 10) / 10 : completed;
 
   const todayStr = now.toISOString().slice(0, 10);
   const completedToday = tasks.filter(
@@ -693,13 +702,25 @@ export async function getCoordinatorDashboard(staffId: number, month: string) {
   ).length;
 
   const goal = await getMonthlyGoal(staffId, month);
-  const neededPerDay = goal > completed && daysRemaining > 0 ? Math.ceil((goal - completed) / daysRemaining) : 0;
-  const projectedEom = Math.round(avgPerDay * daysInMonth);
+  const neededPerDay = goal > completed ? (workRemaining >= 1 ? Math.ceil((goal - completed) / workRemaining) : goal - completed) : 0;
+  const projectedEom = workElapsed >= 1 ? Math.round((completed / workElapsed) * workInMonth) : completed;
 
   return {
     month, assigned, completed, remaining, avgPerDay, completedToday,
-    daysElapsed, daysInMonth, daysRemaining, goal, neededPerDay, projectedEom, statusCounts,
+    daysElapsed, daysInMonth, daysRemaining,
+    workDaysPerWeek, workDaysElapsed: Math.round(workElapsed), workDaysRemaining: Math.round(workRemaining),
+    goal, neededPerDay, projectedEom, statusCounts,
   };
+}
+
+/** Admin sets a coordinator's working days per week (1-7). */
+export async function setWorkDays(userId: number, workDaysPerWeek: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(users)
+    .set({ workDaysPerWeek: Math.min(7, Math.max(1, Math.round(workDaysPerWeek))), updatedAt: new Date() })
+    .where(eq(users.id, userId));
 }
 
 /** Admin overview: every coordinator with their goal + completed/assigned for a month. */
@@ -714,6 +735,7 @@ export async function getCoordinatorGoalsOverview(month: string) {
     userId: s.id,
     name: s.name || s.email || `User ${s.id}`,
     goal: goalMap.get(s.id) ?? 0,
+    workDaysPerWeek: s.workDaysPerWeek ?? 5,
     completed: perfMap.get(s.id)?.completed ?? 0,
     assigned: perfMap.get(s.id)?.assigned ?? 0,
   }));

@@ -35,6 +35,7 @@ type Dash = {
   staffName?: string; assigned?: number; completed?: number; remaining?: number;
   avgPerDay?: number; completedToday?: number; daysElapsed?: number; daysInMonth?: number;
   daysRemaining?: number; goal?: number; neededPerDay?: number; projectedEom?: number;
+  workDaysPerWeek?: number; workDaysElapsed?: number; workDaysRemaining?: number;
   statusCounts?: Record<string, number>;
 };
 
@@ -48,7 +49,7 @@ function DashboardView({ d, month }: { d: Dash; month: string }) {
       <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2 text-slate-700"><Target size={18} className="text-sky-500" /><h3 className="font-bold">Monthly goal</h3></div>
-          <span className="text-sm text-slate-500">{month}</span>
+          <span className="text-sm text-slate-500">{month}{d.workDaysPerWeek ? ` · ${d.workDaysPerWeek} days/wk` : ""}</span>
         </div>
         {goal > 0 ? (
           <>
@@ -61,11 +62,11 @@ function DashboardView({ d, month }: { d: Dash; month: string }) {
             </div>
             <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm text-slate-500">
               <span><b className="text-slate-700">{Math.max(0, goal - completed)}</b> to go</span>
-              {goal > completed && (d.daysRemaining ?? 0) > 0 ? (
-                <span>Need ~<b className="text-slate-700">{d.neededPerDay}/day</b> for the remaining {d.daysRemaining} day(s)</span>
-              ) : goal <= completed ? (
+              {goal > completed ? (
+                <span>Need ~<b className="text-slate-700">{d.neededPerDay}/work day</b>{(d.workDaysRemaining ?? 0) > 0 ? ` for the remaining ${d.workDaysRemaining} work day(s)` : ""}</span>
+              ) : (
                 <span className="text-emerald-600 font-medium">Goal reached 🎉</span>
-              ) : null}
+              )}
               <span>Projected month-end: <b className="text-slate-700">{d.projectedEom ?? 0}</b></span>
             </div>
           </>
@@ -77,8 +78,8 @@ function DashboardView({ d, month }: { d: Dash; month: string }) {
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard icon={CheckCircle2} tone="good" label="Completed this month" value={completed} sub={`${d.completedToday ?? 0} today`} />
         <StatCard icon={ListTodo} tone="warn" label="Remaining" value={d.remaining ?? 0} sub={`of ${d.assigned ?? 0} assigned`} />
-        <StatCard icon={TrendingUp} tone="accent" label="Avg / day" value={d.avgPerDay ?? 0} sub={`over ${d.daysElapsed ?? 0} day(s) so far`} />
-        <StatCard icon={Phone} label="My patients" value={d.assigned ?? 0} sub={`${d.daysRemaining ?? 0} day(s) left in month`} />
+        <StatCard icon={TrendingUp} tone="accent" label="Avg / work day" value={d.avgPerDay ?? 0} sub={`over ${d.workDaysElapsed ?? 0} work day(s) so far`} />
+        <StatCard icon={Phone} label="My patients" value={d.assigned ?? 0} sub={`${d.workDaysRemaining ?? 0} work day(s) left this month`} />
       </div>
 
       {d.statusCounts && Object.keys(d.statusCounts).length > 0 && (
@@ -103,6 +104,7 @@ export default function CoordinatorDashboard() {
 
   const [selectedStaff, setSelectedStaff] = useState<number>(0);
   const [goalInputs, setGoalInputs] = useState<Record<number, string>>({});
+  const [workInputs, setWorkInputs] = useState<Record<number, string>>({});
 
   const staffList = trpc.staff.all.useQuery(undefined, { enabled: !!user && isAdmin });
   const dash = trpc.coordinator.dashboard.useQuery(
@@ -111,7 +113,11 @@ export default function CoordinatorDashboard() {
   );
   const goalsOverview = trpc.coordinator.goalsOverview.useQuery({ month }, { enabled: !!user && isAdmin });
   const setGoal = trpc.coordinator.setGoal.useMutation({
-    onSuccess: () => { utils.coordinator.goalsOverview.invalidate(); utils.coordinator.dashboard.invalidate(); toast.success("Goal saved."); },
+    onSuccess: () => { utils.coordinator.goalsOverview.invalidate(); utils.coordinator.dashboard.invalidate(); toast.success("Saved."); },
+    onError: (e) => toast.error(e.message),
+  });
+  const setWorkDays = trpc.coordinator.setWorkDays.useMutation({
+    onSuccess: () => { utils.coordinator.goalsOverview.invalidate(); utils.coordinator.dashboard.invalidate(); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -120,6 +126,12 @@ export default function CoordinatorDashboard() {
   }
 
   const valFor = (r: { userId: number; goal: number }) => goalInputs[r.userId] ?? String(r.goal);
+  const workValFor = (r: { userId: number; workDaysPerWeek: number }) => workInputs[r.userId] ?? String(r.workDaysPerWeek);
+  const saveRow = (r: { userId: number; goal: number; workDaysPerWeek: number }) => {
+    setGoal.mutate({ userId: r.userId, month, goal: Math.max(0, parseInt(valFor(r), 10) || 0) });
+    const wd = Math.min(7, Math.max(1, parseInt(workValFor(r), 10) || 5));
+    if (wd !== r.workDaysPerWeek) setWorkDays.mutate({ userId: r.userId, workDaysPerWeek: wd });
+  };
 
   // --- Staff: just their own dashboard ---
   if (!isAdmin) {
@@ -155,6 +167,7 @@ export default function CoordinatorDashboard() {
                 <th className="px-5 py-3 font-medium">Coordinator</th>
                 <th className="px-5 py-3 font-medium">Completed</th>
                 <th className="px-5 py-3 font-medium">Assigned</th>
+                <th className="px-5 py-3 font-medium">Days/wk</th>
                 <th className="px-5 py-3 font-medium">Goal</th>
                 <th className="px-5 py-3 font-medium text-right">Actions</th>
               </tr>
@@ -167,6 +180,14 @@ export default function CoordinatorDashboard() {
                   <td className="px-5 py-3 text-slate-500">{r.assigned}</td>
                   <td className="px-5 py-3">
                     <input
+                      type="number" min={1} max={7}
+                      className="w-16 px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
+                      value={workValFor(r)}
+                      onChange={(e) => setWorkInputs((w) => ({ ...w, [r.userId]: e.target.value }))}
+                    />
+                  </td>
+                  <td className="px-5 py-3">
+                    <input
                       type="number" min={0}
                       className="w-24 px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
                       value={valFor(r)}
@@ -176,8 +197,8 @@ export default function CoordinatorDashboard() {
                   <td className="px-5 py-3 text-right">
                     <div className="inline-flex items-center gap-2">
                       <button
-                        onClick={() => setGoal.mutate({ userId: r.userId, month, goal: Math.max(0, parseInt(valFor(r), 10) || 0) })}
-                        disabled={setGoal.isPending}
+                        onClick={() => saveRow(r)}
+                        disabled={setGoal.isPending || setWorkDays.isPending}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 disabled:opacity-50"
                       >
                         <Save size={13} /> Save

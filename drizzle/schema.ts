@@ -26,6 +26,9 @@ export const users = mysqlTable("users", {
   passwordSetAt: timestamp("passwordSetAt"),
   mustChangePassword: boolean("mustChangePassword").default(false).notNull(),
   role: mysqlEnum("role", ["admin", "staff", "provider", "billing", "front_desk", "user"]).default("user").notNull(),
+  // How many days per week this coordinator works — used to compute per-work-day
+  // CCM averages and goal pacing on their dashboard.
+  workDaysPerWeek: int("workDaysPerWeek").default(5),
   clinicLocation: varchar("clinicLocation", { length: 255 }),
   languagesSpoken: json("languagesSpoken").$type<string[]>().default([]),
   createdAt: timestamp("createdAt").defaultNow().notNull(),

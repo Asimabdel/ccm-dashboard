@@ -26,6 +26,7 @@ import {
   getCoordinatorDashboard,
   getCoordinatorGoalsOverview,
   setMonthlyGoal,
+  setWorkDays,
   getEnrichedEscalations,
   getEnrichedBilling,
   getEnrichedFollowUps,
@@ -1118,6 +1119,15 @@ export const appRouter = router({
         requireRole(ctx, ["admin"]);
         await setMonthlyGoal(input.userId, input.month, input.goal);
         void logAudit(ctx, "manage_access", { entityType: "user", entityId: input.userId, description: `Set ${input.month} CCM goal to ${input.goal} for user #${input.userId}` });
+        return { success: true };
+      }),
+    // Admin sets a coordinator's working days per week (1-7).
+    setWorkDays: protectedProcedure
+      .input(z.object({ userId: z.number(), workDaysPerWeek: z.number().int().min(1).max(7) }))
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin"]);
+        await setWorkDays(input.userId, input.workDaysPerWeek);
+        void logAudit(ctx, "manage_access", { entityType: "user", entityId: input.userId, description: `Set work days/week to ${input.workDaysPerWeek} for user #${input.userId}` });
         return { success: true };
       }),
   }),
