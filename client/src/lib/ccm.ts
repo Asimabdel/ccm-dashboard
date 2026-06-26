@@ -22,6 +22,53 @@ export const STATUS_LABELS: Record<string, string> = {
 
 export const STATUS_OPTIONS = Object.keys(STATUS_LABELS);
 
+/**
+ * The only five statuses coordinators set from the worklist. "assigned" means
+ * the call hasn't been started yet. Any other underlying status is collapsed into
+ * one of these for display via worklistStatusValue() — the raw data is untouched.
+ */
+export const WORKLIST_STATUS_OPTIONS = [
+  "assigned",
+  "called_no_answer",
+  "completed",
+  "declined_ccm",
+  "inactive",
+] as const;
+
+export const WORKLIST_STATUS_LABELS: Record<string, string> = {
+  assigned: "Assigned (Not Started)",
+  called_no_answer: "Called – No Answer",
+  completed: "Completed",
+  declined_ccm: "Declined CCM",
+  inactive: "Inactive",
+};
+
+/** Collapse any task status into one of the five worklist buckets. */
+export function worklistStatusValue(status?: string | null): string {
+  switch (status) {
+    case "completed":
+    case "ready_for_billing":
+    case "billed":
+    case "needs_provider_review":
+    case "needs_appointment":
+    case "documentation_incomplete":
+      return "completed";
+    case "called_no_answer":
+    case "voicemail_left":
+    case "wrong_number":
+    case "needs_callback":
+    case "unable_to_reach":
+      return "called_no_answer";
+    case "declined_ccm":
+      return "declined_ccm";
+    case "inactive":
+    case "cancelled":
+      return "inactive";
+    default: // not_started, assigned, in_progress, etc. → not yet started
+      return "assigned";
+  }
+}
+
 export const PRIORITY_LABELS: Record<string, string> = {
   high: "High",
   medium: "Medium",

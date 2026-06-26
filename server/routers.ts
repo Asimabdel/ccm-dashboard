@@ -710,6 +710,28 @@ export const appRouter = router({
         return { success: true, count: input.ids.length };
       }),
 
+    // Log one no-answer attempt: bump the monthly counter, set the status, and
+    // stamp the patient's Last Called date. Each call = one logged attempt.
+    logNoAnswer: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "staff"]);
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const now = new Date();
+        const task = await getCCMTaskById(input.id);
+        if (!task) throw new TRPCError({ code: "NOT_FOUND", message: "Task not found." });
+        await db.update(ccmTasks).set({
+          status: "called_no_answer",
+          noAnswerCount: (task.noAnswerCount ?? 0) + 1,
+          dateContacted: now,
+          updatedAt: now,
+        }).where(eq(ccmTasks.id, input.id));
+        if (task.patientId) await db.update(patients).set({ lastCalledAt: now, updatedAt: now }).where(eq(patients.id, task.patientId));
+        await recomputeBilling(input.id, currentMonth());
+        return getCCMTaskById(input.id);
+      }),
+
     // Assignment: manual single, bulk, and rule-based
     assign: protectedProcedure
       .input(z.object({ taskIds: z.array(z.number()), staffId: z.number() }))

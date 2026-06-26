@@ -156,6 +156,8 @@ export const ccmTasks = mysqlTable("ccmTasks", {
   ]).default("not_started"),
   dateContacted: datetime("dateContacted"),
   timeSpentMinutes: int("timeSpentMinutes").default(0),
+  // How many times the patient was called this month and didn't answer.
+  noAnswerCount: int("noAnswerCount").default(0),
   ccmNoteCompleted: boolean("ccmNoteCompleted").default(false),
   completedAt: datetime("completedAt"),
   completedByStaffId: int("completedByStaffId").references(() => users.id),
