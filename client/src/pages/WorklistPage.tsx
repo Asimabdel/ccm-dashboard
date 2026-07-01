@@ -4,7 +4,7 @@ import { trpc } from "@/lib/trpc";
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
-import { Loader2, Phone, PhoneOff, X, CheckCircle2, ListChecks, ChevronUp, ChevronDown, ChevronsUpDown, Minus } from "lucide-react";
+import { Loader2, Phone, PhoneOff, X, CheckCircle2, ListChecks, ChevronUp, ChevronDown, ChevronsUpDown, Minus, Search } from "lucide-react";
 import {
   WORKLIST_STATUS_OPTIONS, WORKLIST_STATUS_LABELS, worklistStatusValue,
   statusBadgeClass, currentMonthStr, fmtDate,
@@ -15,6 +15,7 @@ export default function WorklistPage() {
   const [, setLocation] = useLocation();
   const [month] = useState(currentMonthStr());
   const [statusFilter, setStatusFilter] = useState("");
+  const [search, setSearch] = useState("");
   const [clinicFilter, setClinicFilter] = useState(0);
   const [selected, setSelected] = useState<number[]>([]);
   const [bulkStatus, setBulkStatus] = useState("");
@@ -68,7 +69,16 @@ export default function WorklistPage() {
     return <div className="min-h-screen flex items-center justify-center bg-white"><Loader2 className="animate-spin text-slate-400" /></div>;
   }
 
-  const rows = statusFilter ? sortedRows.filter((r) => worklistStatusValue(r.task.status) === statusFilter) : sortedRows;
+  const q = search.trim().toLowerCase();
+  const rows = sortedRows.filter((r) => {
+    if (statusFilter && worklistStatusValue(r.task.status) !== statusFilter) return false;
+    if (q) {
+      const hay = `${r.patient.name} ${r.patient.phoneNumber ?? ""} ${r.providerName ?? ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  const filtersActive = !!(statusFilter || clinicFilter || q);
   const field = "px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]";
   const toggle = (id: number) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
 
@@ -76,6 +86,18 @@ export default function WorklistPage() {
     <CCMDashboardLayout title={`Monthly Worklist - ${month}`}>
       <div className="flex items-center justify-between flex-wrap gap-3 mb-5">
         <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search name, phone, provider…"
+              className="w-64 pl-9 pr-8 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
+            />
+            {search && (
+              <button onClick={() => setSearch("")} title="Clear search" className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><X size={14} /></button>
+            )}
+          </div>
           <select className={field} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
             <option value="">All Statuses</option>
             {WORKLIST_STATUS_OPTIONS.map((s) => <option key={s} value={s}>{WORKLIST_STATUS_LABELS[s]}</option>)}
@@ -84,8 +106,8 @@ export default function WorklistPage() {
             <option value={0}>All Clinics</option>
             {(clinics.data || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          {(statusFilter || clinicFilter) && (
-            <button onClick={() => { setStatusFilter(""); setClinicFilter(0); }} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl text-sm text-slate-500 hover:bg-slate-100"><X size={14} /> Clear</button>
+          {filtersActive && (
+            <button onClick={() => { setStatusFilter(""); setClinicFilter(0); setSearch(""); }} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl text-sm text-slate-500 hover:bg-slate-100"><X size={14} /> Clear</button>
           )}
           {user?.role === "staff" && (
             <button onClick={() => setMineOnly((m) => !m)}
@@ -132,7 +154,7 @@ export default function WorklistPage() {
             </thead>
             <tbody>
               {worklist.isLoading && <tr><td colSpan={8} className="px-5 py-12 text-center"><Loader2 className="animate-spin text-slate-300 mx-auto" /></td></tr>}
-              {!worklist.isLoading && rows.length === 0 && <tr><td colSpan={8} className="px-5 py-12 text-center text-slate-400 font-light">No tasks for this month. An admin can generate the worklist from the Admin Dashboard.</td></tr>}
+              {!worklist.isLoading && rows.length === 0 && <tr><td colSpan={8} className="px-5 py-12 text-center text-slate-400 font-light">{filtersActive ? "No patients match your search or filters." : "No tasks for this month. An admin can generate the worklist from the Admin Dashboard."}</td></tr>}
               {rows.map((r) => (
                 <tr key={r.task.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60">
                   {isStaff && (
