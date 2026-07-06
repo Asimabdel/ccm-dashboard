@@ -379,7 +379,7 @@ export default function AdminDashboard() {
                     <td className="py-3">
                       <div className="flex items-center gap-2">
                         <div className="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
-                          <div className="h-full bg-[hsl(200_100%_50%)] rounded-full" style={{ width: `${pct}%` }} />
+                          <div className="h-full bg-[hsl(17_66%_52%)] rounded-full" style={{ width: `${pct}%` }} />
                         </div>
                         <span className="text-xs text-slate-400 w-9 text-right">{pct}%</span>
                       </div>

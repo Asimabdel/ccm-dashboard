@@ -85,7 +85,7 @@ function EnrollDialog({ onDone }: { onDone: () => void }) {
     });
   };
 
-  const field = "w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]";
+  const field = "w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]";
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -152,7 +152,7 @@ function EnrollDialog({ onDone }: { onDone: () => void }) {
                 return (
                   <button key={c} type="button"
                     onClick={() => setForm({ ...form, conditions: on ? form.conditions.filter((x) => x !== c) : [...form.conditions, c] })}
-                    className={`px-2.5 py-1 rounded-full text-xs font-medium border ${on ? "bg-[hsl(200_100%_50%)] text-white border-transparent" : "border-slate-200 text-slate-600 hover:border-slate-300"}`}>
+                    className={`px-2.5 py-1 rounded-full text-xs font-medium border ${on ? "bg-[hsl(17_66%_52%)] text-white border-transparent" : "border-slate-200 text-slate-600 hover:border-slate-300"}`}>
                     {c}
                   </button>
                 );
@@ -245,7 +245,7 @@ export default function PatientsPage() {
     return <div className="min-h-screen flex items-center justify-center bg-white"><Loader2 className="animate-spin text-slate-400" /></div>;
   }
 
-  const field = "px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]";
+  const field = "px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]";
 
   return (
     <CCMDashboardLayout title="Patient Database">
@@ -255,7 +255,7 @@ export default function PatientsPage() {
           <input
             value={search} onChange={(e) => setSearch(e.target.value)}
             placeholder="Search by name or phone…"
-            className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
+            className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]"
           />
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -341,14 +341,14 @@ export default function PatientsPage() {
                   <td className="px-5 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                     {canEnroll ? (
                       <input type="date" defaultValue={toDateInput(r.patient.lastCalledAt)}
-                        className="px-2 py-1 rounded-lg border border-slate-200 text-xs bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
+                        className="px-2 py-1 rounded-lg border border-slate-200 text-xs bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]"
                         onChange={(e) => updateDates.mutate({ id: r.patient.id, lastCalledAt: e.target.value ? new Date(e.target.value + "T00:00:00") : null })} />
                     ) : <span className="text-slate-600 text-sm">{fmtDate(r.patient.lastCalledAt)}</span>}
                   </td>
                   <td className="px-5 py-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                     {canEnroll ? (
                       <input type="date" defaultValue={toDateInput(r.patient.nextAppointment)}
-                        className="px-2 py-1 rounded-lg border border-slate-200 text-xs bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
+                        className="px-2 py-1 rounded-lg border border-slate-200 text-xs bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]"
                         onChange={(e) => updateDates.mutate({ id: r.patient.id, nextAppointment: e.target.value ? new Date(e.target.value + "T00:00:00") : null })} />
                     ) : <span className="text-slate-600 text-sm">{fmtDate(r.patient.nextAppointment)}</span>}
                   </td>

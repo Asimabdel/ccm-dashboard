@@ -70,7 +70,7 @@ export default function ReportsPage() {
       <>
       <div className="flex items-center gap-2 mb-6">
         <input type="month" value={month} onChange={(e) => setMonth(e.target.value || currentMonthStr())}
-          className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]" />
+          className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]" />
       </div>
 
       {report.isLoading && <div className="py-12 text-center"><Loader2 className="animate-spin text-slate-300 mx-auto" /></div>}
@@ -228,7 +228,7 @@ function CustomReport({ enabled }: { enabled: boolean }) {
   return (
     <div>
       <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_28px_-18px_rgba(15,23,42,0.18)] p-6 mb-6">
-        <div className="flex items-center gap-2 mb-4"><BarChart3 size={17} className="text-[hsl(200_100%_45%)]" /><h3 className="font-bold text-slate-900">Completed CCMs — group by</h3></div>
+        <div className="flex items-center gap-2 mb-4"><BarChart3 size={17} className="text-[hsl(17_68%_47%)]" /><h3 className="font-bold text-slate-900">Completed CCMs — group by</h3></div>
         <div className="flex flex-wrap gap-2 mb-5">
           {DIM_META.map(({ key, label, icon: Icon }) => {
             const active = dims.includes(key);
@@ -244,12 +244,12 @@ function CustomReport({ enabled }: { enabled: boolean }) {
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1.5">From</label>
             <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
-              className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]" />
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]" />
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1.5">To</label>
             <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
-              className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]" />
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]" />
           </div>
           {(from || to) && (
             <button onClick={() => { setFrom(""); setTo(""); }} className="text-xs font-semibold text-slate-400 hover:text-slate-600 px-2 py-2">Clear dates</button>

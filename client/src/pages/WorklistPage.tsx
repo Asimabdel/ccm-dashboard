@@ -79,7 +79,7 @@ export default function WorklistPage() {
     return true;
   });
   const filtersActive = !!(statusFilter || clinicFilter || q);
-  const field = "px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]";
+  const field = "px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]";
   const toggle = (id: number) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
 
   return (
@@ -92,7 +92,7 @@ export default function WorklistPage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search name, phone, provider…"
-              className="w-64 pl-9 pr-8 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
+              className="w-64 pl-9 pr-8 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]"
             />
             {search && (
               <button onClick={() => setSearch("")} title="Clear search" className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><X size={14} /></button>
@@ -131,15 +131,15 @@ export default function WorklistPage() {
 
       <div className="bg-white rounded-3xl border border-slate-100 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-[13px]">
             <thead>
               <tr className="text-left text-xs uppercase tracking-wider text-slate-400 border-b border-slate-100 bg-slate-50/50">
-                {isStaff && <th className="px-4 py-3 w-10"></th>}
-                <th className="px-5 py-3 font-medium">Patient</th>
-                <th className="px-5 py-3 font-medium">Provider</th>
+                {isStaff && <th className="px-3 py-2.5 w-10"></th>}
+                <th className="px-4 py-2.5 font-medium">Patient</th>
+                <th className="px-4 py-2.5 font-medium">Provider</th>
                 <th
                   onClick={() => setLastCalledSort((d) => (d === "none" ? "asc" : d === "asc" ? "desc" : "none"))}
-                  className="px-5 py-3 font-medium cursor-pointer select-none hover:text-slate-600 transition-colors"
+                  className="px-4 py-2.5 font-medium cursor-pointer select-none hover:text-slate-600 transition-colors"
                   title="Sort by date last called"
                 >
                   <span className="inline-flex items-center gap-1">
@@ -147,9 +147,9 @@ export default function WorklistPage() {
                     {lastCalledSort === "asc" ? <ChevronUp size={12} /> : lastCalledSort === "desc" ? <ChevronDown size={12} /> : <ChevronsUpDown size={12} className="text-slate-300" />}
                   </span>
                 </th>
-                <th className="px-5 py-3 font-medium" title="Times called this month with no answer">Attempts</th>
-                <th className="px-5 py-3 font-medium">Status</th>
-                <th className="px-5 py-3 font-medium text-right">Action</th>
+                <th className="px-4 py-2.5 font-medium" title="Times called this month with no answer">Attempts</th>
+                <th className="px-4 py-2.5 font-medium">Status</th>
+                <th className="px-4 py-2.5 font-medium text-right">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -158,18 +158,18 @@ export default function WorklistPage() {
               {rows.map((r) => (
                 <tr key={r.task.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60">
                   {isStaff && (
-                    <td className="px-4 py-3"><input type="checkbox" checked={selected.includes(r.task.id)} onChange={() => toggle(r.task.id)} className="accent-slate-900" /></td>
+                    <td className="px-3 py-2"><input type="checkbox" checked={selected.includes(r.task.id)} onChange={() => toggle(r.task.id)} className="accent-slate-900" /></td>
                   )}
-                  <td className="px-5 py-3">
+                  <td className="px-4 py-2">
                     <p className="font-semibold text-slate-800">{r.patient.name}</p>
                     <p className="text-xs text-slate-400">{r.clinicName} - {r.staffName || "Unassigned"}</p>
                   </td>
-                  <td className="px-5 py-3 text-slate-600">{r.providerName || "-"}</td>
-                  <td className="px-5 py-3 text-slate-600 whitespace-nowrap">{fmtDate(r.patient.lastCalledAt)}</td>
-                  <td className="px-5 py-3">
+                  <td className="px-4 py-2 text-slate-600">{r.providerName || "-"}</td>
+                  <td className="px-4 py-2 text-slate-600 whitespace-nowrap font-mono text-xs tabular-nums">{fmtDate(r.patient.lastCalledAt)}</td>
+                  <td className="px-4 py-2">
                     {(r.task.noAnswerCount ?? 0) > 0 ? (
                       <span className="inline-flex items-center gap-1.5">
-                        <span className="inline-flex items-center gap-1 text-amber-700 font-semibold" title="No-answer attempts this month"><PhoneOff size={13} /> {r.task.noAnswerCount}×</span>
+                        <span className="inline-flex items-center gap-1 text-amber-700 font-semibold font-mono tabular-nums" title="No-answer attempts this month"><PhoneOff size={13} /> {r.task.noAnswerCount}×</span>
                         {isStaff && (
                           <button onClick={() => unlogNoAnswer.mutate({ id: r.task.id })} disabled={unlogNoAnswer.isPending}
                             title="Remove a no-answer attempt (logged by mistake)"
@@ -180,7 +180,7 @@ export default function WorklistPage() {
                       </span>
                     ) : <span className="text-slate-300">—</span>}
                   </td>
-                  <td className="px-5 py-3">
+                  <td className="px-4 py-2">
                     {(() => {
                       const bucket = worklistStatusValue(r.task.status);
                       return isStaff ? (
@@ -193,7 +193,7 @@ export default function WorklistPage() {
                       );
                     })()}
                   </td>
-                  <td className="px-5 py-3">
+                  <td className="px-4 py-2">
                     {isStaff && (
                       <div className="flex items-center justify-end gap-2">
                         <button onClick={() => logNoAnswer.mutate({ id: r.task.id })} disabled={logNoAnswer.isPending}
@@ -201,7 +201,7 @@ export default function WorklistPage() {
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-amber-200 text-amber-700 text-xs font-semibold hover:bg-amber-50 active:scale-[0.97] disabled:opacity-50 transition">
                           <PhoneOff size={13} /> No answer
                         </button>
-                        <button onClick={() => setLocation(`/workflow/${r.task.id}`)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[hsl(200_100%_50%)] text-white text-xs font-semibold hover:brightness-95">
+                        <button onClick={() => setLocation(`/workflow/${r.task.id}`)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[hsl(17_66%_52%)] text-white text-xs font-semibold hover:brightness-95">
                           {worklistStatusValue(r.task.status) === "completed" ? <CheckCircle2 size={13} /> : <Phone size={13} />}
                           {worklistStatusValue(r.task.status) === "completed" ? "Review" : "Start Call"}
                         </button>

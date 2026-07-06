@@ -108,7 +108,7 @@ export default function PatientDetailPage() {
                 <p className="text-xs text-slate-400 flex items-center gap-1.5"><Phone size={12} /> Last Called</p>
                 {canEdit ? (
                   <input type="date" defaultValue={toDateInput(d.patient.lastCalledAt)}
-                    className="mt-1.5 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
+                    className="mt-1.5 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]"
                     onChange={(e) => updateDates.mutate({ id, lastCalledAt: e.target.value ? new Date(e.target.value + "T00:00:00") : null })} />
                 ) : <p className="mt-1.5 font-semibold text-slate-800">{fmtDate(d.patient.lastCalledAt)}</p>}
                 <p className="text-[11px] text-slate-400 mt-1.5">Auto-updates when a CCM call is completed.</p>
@@ -117,7 +117,7 @@ export default function PatientDetailPage() {
                 <p className="text-xs text-slate-400 flex items-center gap-1.5"><Calendar size={12} /> Next Appointment</p>
                 {canEdit ? (
                   <input type="date" defaultValue={toDateInput(d.patient.nextAppointment)}
-                    className="mt-1.5 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
+                    className="mt-1.5 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]"
                     onChange={(e) => updateDates.mutate({ id, nextAppointment: e.target.value ? new Date(e.target.value + "T00:00:00") : null })} />
                 ) : <p className="mt-1.5 font-semibold text-slate-800">{fmtDate(d.patient.nextAppointment)}</p>}
                 <p className="text-[11px] text-slate-400 mt-1.5">Appears on the dashboard's Upcoming Appointments.</p>
@@ -173,7 +173,7 @@ export default function PatientDetailPage() {
                           </div>
                           {note?.generatedNote && (
                             <details className="mt-3">
-                              <summary className="text-xs font-semibold text-[hsl(200_100%_40%)] cursor-pointer select-none flex items-center gap-1">
+                              <summary className="text-xs font-semibold text-[hsl(17_70%_42%)] cursor-pointer select-none flex items-center gap-1">
                                 <FileText size={12} /> View call note
                               </summary>
                               <p className="mt-2 text-sm text-slate-700 whitespace-pre-wrap rounded-xl bg-slate-50 p-3">{note.generatedNote}</p>

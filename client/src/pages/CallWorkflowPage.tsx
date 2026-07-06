@@ -109,7 +109,7 @@ export default function CallWorkflowPage() {
             <h2 className="text-2xl font-bold text-slate-900">{p?.name || <Loader2 className="animate-spin inline" />}</h2>
             <p className="text-sm text-slate-500 mt-0.5">{p?.dateOfBirth ? `DOB ${new Date(p.dateOfBirth).toLocaleDateString()}` : ""} {p?.phoneNumber ? `· ${p.phoneNumber}` : ""}</p>
             <div className="mt-4 flex flex-wrap gap-1.5">
-              {conditions.map((c) => <span key={c} className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-[hsl(200_60%_94%)] text-[hsl(200_80%_30%)]">{c}</span>)}
+              {conditions.map((c) => <span key={c} className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-[hsl(22_64%_93%)] text-[hsl(17_66%_34%)]">{c}</span>)}
             </div>
             {p?.insurance && <p className="mt-4 text-sm text-slate-500">Insurance: <span className="text-slate-700">{p.insurance}</span></p>}
           </div>
@@ -124,7 +124,7 @@ export default function CallWorkflowPage() {
 
           {conditions.length > 0 && (
             <div className="bg-white rounded-3xl border border-slate-100 p-6">
-              <div className="flex items-center gap-2 mb-3 text-slate-700"><Activity size={15} className="text-[hsl(200_100%_45%)]" /><span className="text-sm font-semibold">Care focus</span></div>
+              <div className="flex items-center gap-2 mb-3 text-slate-700"><Activity size={15} className="text-[hsl(17_68%_47%)]" /><span className="text-sm font-semibold">Care focus</span></div>
               <p className="text-xs text-slate-500 leading-relaxed">Review adherence and symptoms for each chronic condition, and confirm the care plan is current.</p>
             </div>
           )}
@@ -133,13 +133,13 @@ export default function CallWorkflowPage() {
         {/* Right: script + form */}
         <div className="lg:col-span-2 space-y-5">
           <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_28px_-18px_rgba(15,23,42,0.18)] p-6">
-            <div className="flex items-center gap-2 mb-5"><Phone size={16} className="text-[hsl(200_100%_45%)]" /><h3 className="font-bold text-slate-900">Call Script & Documentation</h3></div>
+            <div className="flex items-center gap-2 mb-5"><Phone size={16} className="text-[hsl(17_68%_47%)]" /><h3 className="font-bold text-slate-900">Call Script & Documentation</h3></div>
             <div className="space-y-5">
               {SCRIPT.map((q, i) => (
                 <div key={q.key}>
                   <label className="block text-sm font-medium text-slate-700 mb-1.5"><span className="text-slate-300 mr-1.5">{i + 1}.</span>{q.question}</label>
                   <textarea value={responses[q.key]} onChange={(e) => set(q.key, e.target.value)} placeholder={q.placeholder} rows={2}
-                    className="w-full px-3.5 py-2.5 rounded-2xl border border-slate-200 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)] focus:border-transparent transition" />
+                    className="w-full px-3.5 py-2.5 rounded-2xl border border-slate-200 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)] focus:border-transparent transition" />
                 </div>
               ))}
             </div>

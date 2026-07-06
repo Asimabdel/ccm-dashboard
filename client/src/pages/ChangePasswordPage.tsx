@@ -76,7 +76,7 @@ export default function ChangePasswordPage() {
     <div className="min-h-screen bg-white flex items-center justify-center px-4">
       <div className="w-full max-w-md">
         <div className="flex items-center gap-2.5 mb-6">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[hsl(200_100%_55%)] to-[hsl(210_100%_45%)] flex items-center justify-center shadow-glow-primary">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[hsl(17_70%_56%)] to-[hsl(24_76%_42%)] flex items-center justify-center shadow-glow-primary">
             <ShieldCheck size={20} className="text-white" />
           </div>
           <div className="leading-tight">
@@ -106,7 +106,7 @@ export default function ChangePasswordPage() {
                     value={currentPassword}
                     onChange={(e) => setCurrentPassword(e.target.value)}
                     autoComplete="current-password"
-                    className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[hsl(205_100%_47%)] focus:border-transparent"
+                    className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[hsl(20_72%_46%)] focus:border-transparent"
                     placeholder="Your current password"
                   />
                 </div>
@@ -122,7 +122,7 @@ export default function ChangePasswordPage() {
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   autoComplete="new-password"
-                  className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[hsl(205_100%_47%)] focus:border-transparent"
+                  className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[hsl(20_72%_46%)] focus:border-transparent"
                   placeholder="At least 8 chars, with a letter and number"
                 />
               </div>
@@ -140,7 +140,7 @@ export default function ChangePasswordPage() {
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   autoComplete="new-password"
-                  className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[hsl(205_100%_47%)] focus:border-transparent"
+                  className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[hsl(20_72%_46%)] focus:border-transparent"
                   placeholder="Re-enter new password"
                 />
               </div>

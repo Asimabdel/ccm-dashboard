@@ -29,7 +29,7 @@ export default function EscalationsPage() {
   }
 
   const rows = list.data || [];
-  const field = "px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]";
+  const field = "px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]";
 
   return (
     <CCMDashboardLayout title="Provider Escalations">
@@ -81,12 +81,12 @@ export default function EscalationsPage() {
                     <div>
                       <label className="block text-xs uppercase tracking-wider text-slate-400 mb-1.5">Recommended Action</label>
                       <textarea rows={3} value={d.recommendedAction} onChange={(e) => setDraft((p) => ({ ...p, [r.escalation.id]: { ...d, recommendedAction: e.target.value } }))}
-                        className="w-full px-3 py-2 rounded-2xl border border-slate-200 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]" placeholder="e.g. Order labs, adjust medication, schedule visit…" />
+                        className="w-full px-3 py-2 rounded-2xl border border-slate-200 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]" placeholder="e.g. Order labs, adjust medication, schedule visit…" />
                     </div>
                     <div>
                       <label className="block text-xs uppercase tracking-wider text-slate-400 mb-1.5">Provider Notes</label>
                       <textarea rows={3} value={d.providerNotes} onChange={(e) => setDraft((p) => ({ ...p, [r.escalation.id]: { ...d, providerNotes: e.target.value } }))}
-                        className="w-full px-3 py-2 rounded-2xl border border-slate-200 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]" placeholder="Clinical notes…" />
+                        className="w-full px-3 py-2 rounded-2xl border border-slate-200 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]" placeholder="Clinical notes…" />
                     </div>
                   </div>
                   <div className="flex items-center justify-end gap-2 flex-wrap">

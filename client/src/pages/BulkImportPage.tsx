@@ -71,7 +71,7 @@ export default function BulkImportPage() {
     );
   }
 
-  const field = "px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_45%)]";
+  const field = "px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-[hsl(17_68%_47%)]";
 
   return (
     <CCMDashboardLayout title="Bulk Import Patients">
@@ -92,7 +92,7 @@ export default function BulkImportPage() {
             <textarea
               value={csv} onChange={(e) => setCsv(e.target.value)}
               placeholder="Paste CSV here…"
-              className="w-full h-52 px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_45%)]"
+              className="w-full h-52 px-3 py-2 rounded-xl border border-slate-300 text-xs font-mono bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-[hsl(17_68%_47%)]"
             />
             <div className="flex items-center gap-2 mt-3 flex-wrap">
               <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
@@ -142,7 +142,7 @@ export default function BulkImportPage() {
               <button
                 disabled={commit.isPending || validCount === 0}
                 onClick={() => commit.mutate({ csv, defaultClinicId: defaultClinicId || undefined, defaultProviderId: defaultProviderId || undefined, defaultStaffId: defaultStaffId || undefined, skipExistingDuplicates: skipExisting })}
-                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[hsl(200_100%_45%)] text-white text-sm font-semibold hover:brightness-95 disabled:opacity-50 active:scale-[0.98] transition-transform">
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[hsl(17_68%_47%)] text-white text-sm font-semibold hover:brightness-95 disabled:opacity-50 active:scale-[0.98] transition-transform">
                 {commit.isPending ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
                 Import {validCount} valid {validCount === 1 ? "patient" : "patients"}
               </button>

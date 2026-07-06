@@ -47,7 +47,7 @@ export default function ProvidersPage() {
     if (form.id) update.mutate({ id: form.id, ...payload }); else create.mutate(payload);
   };
 
-  const field = "w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)] transition";
+  const field = "w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)] transition";
   const rows = list.data || [];
 
   return (

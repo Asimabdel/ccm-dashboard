@@ -16,14 +16,14 @@ function StatCard({ icon: Icon, label, value, sub, tone = "default" }: {
     default: "bg-slate-100 text-slate-600",
     good: "bg-emerald-100 text-emerald-600",
     warn: "bg-amber-100 text-amber-600",
-    accent: "bg-sky-100 text-sky-600",
+    accent: "bg-orange-100 text-orange-700",
   }[tone];
   return (
     <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-sm">
       <div className="flex items-start justify-between">
         <div className="min-w-0">
           <p className="text-xs font-medium uppercase tracking-wider text-slate-400">{label}</p>
-          <p className="mt-2 text-3xl font-extrabold tracking-tight text-slate-900">{value}</p>
+          <p className="mt-2 text-3xl font-bold tracking-tight text-slate-900 font-mono tabular-nums">{value}</p>
           {sub && <p className="mt-1 text-xs text-slate-400">{sub}</p>}
         </div>
         <span className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${iconBg}`}><Icon size={18} /></span>
@@ -64,7 +64,7 @@ function QueueCard({ title, icon: Icon, items, total, emptyText }: {
                 <p className="font-medium text-slate-800 truncate">{it.name}</p>
                 <p className="text-xs text-slate-400 truncate">{STATUS_LABELS[it.status] ?? it.status} · {it.lastCalledAt ? `last called ${fmtDate(it.lastCalledAt)}` : "never called"}</p>
               </div>
-              <span className="inline-flex items-center gap-1 text-xs font-semibold text-[hsl(200_100%_45%)] shrink-0"><Phone size={12} /> Call</span>
+              <span className="inline-flex items-center gap-1 text-xs font-semibold text-[hsl(17_68%_47%)] shrink-0"><Phone size={12} /> Call</span>
             </button>
           ))}
           {total > items.length && <p className="pt-2 text-xs text-slate-400 text-center">+{total - items.length} more — see your worklist</p>}
@@ -83,13 +83,13 @@ function DashboardView({ d, month }: { d: Dash; month: string }) {
     <div className="space-y-5">
       <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm">
         <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2 text-slate-700"><Target size={18} className="text-sky-500" /><h3 className="font-bold">Monthly goal</h3></div>
+          <div className="flex items-center gap-2 text-slate-700"><Target size={18} className="text-[hsl(17_66%_52%)]" /><h3 className="font-bold">Monthly goal</h3></div>
           <span className="text-sm text-slate-500">{month}{d.workDaysPerWeek ? ` · ${d.workDaysPerWeek} days/wk` : ""}</span>
         </div>
         {goal > 0 ? (
           <>
             <div className="flex items-end justify-between mb-2 gap-3 flex-wrap">
-              <p className="text-3xl font-extrabold text-slate-900">{completed} <span className="text-lg font-medium text-slate-400">/ {goal}</span></p>
+              <p className="text-3xl font-bold text-slate-900 font-mono tabular-nums">{completed} <span className="text-lg font-medium text-slate-400">/ {goal}</span></p>
               <p className={`text-sm font-semibold ${onPace ? "text-emerald-600" : "text-amber-600"}`}>{pct}% — {onPace ? "on pace" : "behind pace"}</p>
             </div>
             <div className="h-3 w-full rounded-full bg-slate-100 overflow-hidden">
@@ -193,7 +193,7 @@ export default function CoordinatorDashboard() {
       {/* Monthly goals management */}
       <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden mb-6">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
-          <Target size={16} className="text-sky-500" />
+          <Target size={16} className="text-[hsl(17_66%_52%)]" />
           <h3 className="font-bold text-slate-800">Set monthly goals — {month}</h3>
         </div>
         {goalsOverview.isLoading ? (
@@ -221,7 +221,7 @@ export default function CoordinatorDashboard() {
                   <td className="px-5 py-3">
                     <input
                       type="number" min={1} max={7}
-                      className="w-16 px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
+                      className="w-16 px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]"
                       value={workValFor(r)}
                       onChange={(e) => setWorkInputs((w) => ({ ...w, [r.userId]: e.target.value }))}
                     />
@@ -229,7 +229,7 @@ export default function CoordinatorDashboard() {
                   <td className="px-5 py-3">
                     <input
                       type="number" min={0}
-                      className="w-24 px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
+                      className="w-24 px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]"
                       value={valFor(r)}
                       onChange={(e) => setGoalInputs((g) => ({ ...g, [r.userId]: e.target.value }))}
                     />
@@ -263,7 +263,7 @@ export default function CoordinatorDashboard() {
         <Users size={16} className="text-slate-400" />
         <span className="text-sm text-slate-500">View a coordinator:</span>
         <select
-          className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]"
+          className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]"
           value={selectedStaff}
           onChange={(e) => setSelectedStaff(Number(e.target.value))}
         >

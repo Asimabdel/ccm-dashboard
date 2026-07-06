@@ -100,7 +100,7 @@ export function PatientFormDialog({ mode, patient, open, onOpenChange, onDone }:
     }
   };
 
-  const field = "w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]";
+  const field = "w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -174,7 +174,7 @@ export function PatientFormDialog({ mode, patient, open, onOpenChange, onDone }:
                 return (
                   <button key={c} type="button"
                     onClick={() => setForm({ ...form, conditions: on ? form.conditions.filter((x) => x !== c) : [...form.conditions, c] })}
-                    className={`px-2.5 py-1 rounded-full text-xs font-medium border ${on ? "bg-[hsl(200_100%_50%)] text-white border-transparent" : "border-slate-200 text-slate-600 hover:border-slate-300"}`}>
+                    className={`px-2.5 py-1 rounded-full text-xs font-medium border ${on ? "bg-[hsl(17_66%_52%)] text-white border-transparent" : "border-slate-200 text-slate-600 hover:border-slate-300"}`}>
                     {c}
                   </button>
                 );

@@ -45,7 +45,7 @@ export default function ClinicsPage() {
     if (form.id) update.mutate({ id: form.id, ...payload }); else create.mutate(payload);
   };
 
-  const field = "w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)] transition";
+  const field = "w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)] transition";
   const rows = list.data || [];
 
   return (
@@ -67,7 +67,7 @@ export default function ClinicsPage() {
         {rows.map((c) => (
           <div key={c.id} className="bg-white rounded-3xl border border-slate-100 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_28px_-18px_rgba(15,23,42,0.18)] p-5 group">
             <div className="flex items-start justify-between">
-              <div className="w-10 h-10 rounded-2xl bg-[hsl(200_60%_94%)] flex items-center justify-center"><Building2 size={18} className="text-[hsl(200_80%_35%)]" /></div>
+              <div className="w-10 h-10 rounded-2xl bg-[hsl(22_64%_93%)] flex items-center justify-center"><Building2 size={18} className="text-[hsl(17_66%_38%)]" /></div>
               <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
                 <button onClick={() => openEdit({ id: c.id, name: c.name, location: c.location, address: c.address || "", phone: c.phone || "" })} className="p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"><Pencil size={15} /></button>
                 <button onClick={() => setRemoveTarget({ id: c.id, name: c.name })} className="p-2 rounded-lg text-rose-400 hover:text-rose-600 hover:bg-rose-50 transition"><Trash2 size={15} /></button>

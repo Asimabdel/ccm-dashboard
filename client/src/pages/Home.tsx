@@ -62,7 +62,7 @@ export default function Home() {
     <div className="min-h-screen bg-white relative overflow-hidden">
       {/* Subtle grid texture + abstract geometric accents */}
       <div className="pointer-events-none absolute inset-0 bg-grid opacity-[0.4] [mask-image:radial-gradient(ellipse_at_top,black,transparent_70%)]" />
-      <div className="pointer-events-none absolute -top-24 -right-24 w-96 h-96 rounded-full bg-[hsl(200_85%_88%)] blur-3xl opacity-60" />
+      <div className="pointer-events-none absolute -top-24 -right-24 w-96 h-96 rounded-full bg-[hsl(22_80%_88%)] blur-3xl opacity-60" />
       <div className="pointer-events-none absolute top-1/3 -left-32 w-80 h-80 rounded-full bg-[hsl(345_80%_92%)] blur-3xl opacity-60" />
 
       <div className="relative z-10 max-w-6xl mx-auto px-6 pt-24 pb-20 grid lg:grid-cols-2 gap-12 items-center">
@@ -91,7 +91,7 @@ export default function Home() {
                 className="group bg-white rounded-3xl p-5 border border-slate-100 shadow-soft hover:shadow-soft-lg hover:-translate-y-1 transition-all duration-300 animate-fade-in-up"
                 style={{ animationDelay: `${150 + i * 80}ms` }}
               >
-                <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[hsl(200_100%_55%)] to-[hsl(210_100%_45%)] flex items-center justify-center mb-3 shadow-glow-primary transition-transform duration-300 group-hover:scale-110">
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[hsl(17_70%_56%)] to-[hsl(24_76%_42%)] flex items-center justify-center mb-3 shadow-glow-primary transition-transform duration-300 group-hover:scale-110">
                   <f.icon size={18} className="text-white" />
                 </div>
                 <h3 className="font-bold text-slate-900 tracking-tight text-sm">{f.title}</h3>
@@ -117,7 +117,7 @@ export default function Home() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     autoComplete="email"
-                    className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[hsl(205_100%_47%)] focus:border-transparent"
+                    className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[hsl(20_72%_46%)] focus:border-transparent"
                     placeholder="nurse@clinic.com"
                   />
                 </div>
@@ -131,7 +131,7 @@ export default function Home() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     autoComplete="current-password"
-                    className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[hsl(205_100%_47%)] focus:border-transparent"
+                    className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[hsl(20_72%_46%)] focus:border-transparent"
                     placeholder="Your password"
                   />
                 </div>

@@ -39,7 +39,7 @@ export default function BillingPage() {
 
   const rows = list.data || [];
   const billedCount = rows.filter((r) => r.billing.billingStatus === "billed").length;
-  const field = "px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]";
+  const field = "px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]";
 
   return (
     <CCMDashboardLayout title="Billing Readiness">

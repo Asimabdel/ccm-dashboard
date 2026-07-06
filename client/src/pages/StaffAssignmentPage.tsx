@@ -41,7 +41,7 @@ export default function StaffAssignmentPage() {
   const wl = worklist.data || [];
   const staffOptions = (staffAll.data || []).filter((s) => s.role === "staff");
   const chartData = (workload.data || []).map((w) => ({ name: w.name, open: w.openTasks, completed: w.completed, total: w.totalAssigned }));
-  const field = "px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]";
+  const field = "px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]";
 
   const toggle = (id: number) => setSelected((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]);
 
@@ -66,7 +66,7 @@ export default function StaffAssignmentPage() {
         </div>
 
         <div className="bg-white rounded-3xl border border-slate-100 p-6 flex flex-col">
-          <h3 className="font-semibold text-slate-900 mb-1 flex items-center gap-2"><Wand2 size={16} className="text-[hsl(200_70%_55%)]" /> Rule-Based Assignment</h3>
+          <h3 className="font-semibold text-slate-900 mb-1 flex items-center gap-2"><Wand2 size={16} className="text-[hsl(17_60%_55%)]" /> Rule-Based Assignment</h3>
           <p className="text-sm text-slate-500 mb-4">Distribute all unassigned tasks evenly, preferring staff at the matching clinic location.</p>
           <button disabled={autoBalance.isPending} onClick={() => autoBalance.mutate({ month })}
             className="self-start px-4 py-2.5 rounded-xl text-sm font-semibold bg-slate-900 text-white hover:bg-slate-700 disabled:bg-slate-300 transition inline-flex items-center gap-2">

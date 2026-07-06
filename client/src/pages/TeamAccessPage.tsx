@@ -94,7 +94,7 @@ export default function TeamAccessPage() {
     );
   }
 
-  const field = "px-3 py-2.5 rounded-xl border border-slate-300 text-sm bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)] transition";
+  const field = "px-3 py-2.5 rounded-xl border border-slate-300 text-sm bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)] transition";
   const allUsers = usersQuery.data || [];
   const pendingCount = allUsers.filter((u) => (u as { pending?: boolean }).pending).length;
 
@@ -110,7 +110,7 @@ export default function TeamAccessPage() {
 
       {/* Create login form */}
       <div className="bg-white rounded-3xl border border-slate-200 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_28px_-18px_rgba(15,23,42,0.18)] p-6 mb-6">
-        <div className="flex items-center gap-2 mb-4"><UserPlus size={17} className="text-[hsl(200_100%_45%)]" /><h3 className="font-bold text-slate-900">Create a worker login</h3></div>
+        <div className="flex items-center gap-2 mb-4"><UserPlus size={17} className="text-[hsl(17_68%_47%)]" /><h3 className="font-bold text-slate-900">Create a worker login</h3></div>
         <form
           className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 items-end"
           onSubmit={(e) => {
@@ -215,7 +215,7 @@ export default function TeamAccessPage() {
                     <td className="px-5 py-3"><span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${roleBadge(u.role)}`}>{u.role.replace("_", " ")}</span></td>
                     <td className="px-5 py-3">
                       <select
-                        className="px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)] disabled:opacity-50"
+                        className="px-3 py-2 rounded-xl border border-slate-300 text-sm bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)] disabled:opacity-50"
                         value={u.role}
                         disabled={isSelf || setRole.isPending}
                         title={isSelf ? "You cannot change your own role" : undefined}
@@ -292,7 +292,7 @@ export default function TeamAccessPage() {
                 value={resetPassword}
                 onChange={(e) => setResetPassword(e.target.value)}
                 placeholder="At least 8 chars, with a letter and number"
-                className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[hsl(205_100%_47%)] focus:border-transparent"
+                className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[hsl(20_72%_46%)] focus:border-transparent"
                 autoComplete="new-password"
               />
             </div>

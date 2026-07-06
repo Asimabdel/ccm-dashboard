@@ -28,7 +28,7 @@ export default function FollowUpsPage() {
   }
 
   const rows = list.data || [];
-  const field = "px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(200_100%_60%)]";
+  const field = "px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]";
 
   return (
     <CCMDashboardLayout title="Follow-Up Tracking">
@@ -58,7 +58,7 @@ export default function FollowUpsPage() {
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <p className="font-semibold text-slate-900">{r.patient.name}</p>
-                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-[hsl(210_60%_94%)] text-slate-700">{FOLLOWUP_TYPE_LABELS[r.followUp.type] || r.followUp.type}</span>
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-[hsl(26_60%_93%)] text-slate-700">{FOLLOWUP_TYPE_LABELS[r.followUp.type] || r.followUp.type}</span>
                   <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${followupBadgeClass(r.followUp.status || "pending")}`}>{FOLLOWUP_STATUS_LABELS[r.followUp.status || "pending"]}</span>
                 </div>
                 <p className="text-sm text-slate-500 mt-1">{r.clinicName || "—"}</p>

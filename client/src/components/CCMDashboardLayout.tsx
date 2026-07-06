@@ -72,7 +72,7 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
       >
         <div className="p-4 flex items-center justify-between border-b border-slate-100 dark:border-slate-700">
           <div className={cn(!sidebarOpen && "hidden", "flex items-center gap-2.5")}>
-            <div className="w-9 h-9 bg-gradient-to-br from-[hsl(200_100%_55%)] to-[hsl(210_100%_45%)] rounded-xl flex items-center justify-center shadow-glow-primary">
+            <div className="w-9 h-9 bg-gradient-to-br from-[hsl(17_70%_56%)] to-[hsl(24_76%_42%)] rounded-xl flex items-center justify-center shadow-glow-primary">
               <span className="text-white font-bold text-xs">CCM</span>
             </div>
             <div className="leading-tight">
@@ -96,7 +96,7 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
                 className={cn(
                   "group w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 active:scale-[0.98] relative",
                   active
-                    ? "bg-gradient-to-r from-[hsl(200_100%_50%)] to-[hsl(205_100%_47%)] text-white shadow-glow-primary"
+                    ? "bg-gradient-to-r from-[hsl(17_66%_52%)] to-[hsl(20_72%_46%)] text-white shadow-glow-primary"
                     : "text-slate-500 dark:text-slate-300 hover:bg-slate-100/80 dark:hover:bg-slate-700 hover:text-slate-900"
                 )}
                 title={item.label}
@@ -214,7 +214,7 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
                       )}
                     >
                       <div className="flex items-start gap-2">
-                        {!n.read && <span className="mt-1.5 w-2 h-2 rounded-full bg-[hsl(200_100%_50%)] shrink-0" />}
+                        {!n.read && <span className="mt-1.5 w-2 h-2 rounded-full bg-[hsl(17_66%_52%)] shrink-0" />}
                         <div className={cn(n.read && "pl-4")}>
                           <p className="text-sm font-medium text-slate-800 dark:text-slate-100">{n.title}</p>
                           {n.content && <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{n.content}</p>}
