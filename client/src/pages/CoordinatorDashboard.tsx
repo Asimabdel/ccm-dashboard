@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { useLocation } from "wouter";
 import { Loader2, CheckCircle2, ListTodo, TrendingUp, Target, Phone, Save, Users, PhoneMissed, Clock } from "lucide-react";
 import { STATUS_LABELS, statusBadgeClass, currentMonthStr, fmtDate } from "@/lib/ccm";
+import { DailyEncouragement } from "@/components/DailyEncouragement";
 
 type Tone = "default" | "good" | "warn" | "accent";
 function StatCard({ icon: Icon, label, value, sub, tone = "default" }: {
@@ -175,12 +176,16 @@ export default function CoordinatorDashboard() {
 
   // --- Staff: just their own dashboard ---
   if (!isAdmin) {
+    const d = (dash.data as Dash) || {};
     return (
       <CCMDashboardLayout title="My Dashboard">
         {dash.isLoading ? (
           <div className="py-16 text-center"><Loader2 className="animate-spin text-slate-300 mx-auto" /></div>
         ) : (
-          <DashboardView d={(dash.data as Dash) || {}} month={month} />
+          <div className="space-y-5">
+            <DailyEncouragement userId={user.id} name={user.name} completedToday={d.completedToday} completedMonth={d.completed} />
+            <DashboardView d={d} month={month} />
+          </div>
         )}
       </CCMDashboardLayout>
     );
