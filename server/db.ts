@@ -869,10 +869,12 @@ export async function getEnrichedBilling(month: string, status?: string) {
       billing: billingRecords,
       patient: patients,
       task: ccmTasks,
+      providerName: providers.name,
     })
     .from(billingRecords)
     .innerJoin(patients, eq(billingRecords.patientId, patients.id))
     .leftJoin(ccmTasks, eq(billingRecords.ccmTaskId, ccmTasks.id))
+    .leftJoin(providers, eq(patients.providerId, providers.id))
     .where(and(...conditions))
     .orderBy(desc(billingRecords.updatedAt));
 }
@@ -1076,7 +1078,8 @@ export async function recomputeBilling(taskId: number, month: string) {
     ccmTaskId: taskId,
     patientId: task.patientId,
     month,
-    timeThresholdMet: true,
+    // CCM 99490 requires >=20 min of documented clinical staff time in the month.
+    timeThresholdMet: (task.timeSpentMinutes ?? 0) >= 20,
     documentationComplete: docComplete,
     providerAssociated: true,
     carePlanReviewed: docComplete,

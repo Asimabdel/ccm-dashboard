@@ -1,11 +1,12 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { trpc } from "@/lib/trpc";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useRoute } from "wouter";
 import { toast } from "sonner";
 import {
   Loader2, Sparkles, AlertTriangle, Save, ArrowLeft, Phone, ShieldCheck, Activity,
+  Timer, Pause, Play,
 } from "lucide-react";
 
 type Responses = {
@@ -52,6 +53,28 @@ export default function CallWorkflowPage() {
   const [escalate, setEscalate] = useState(false);
   const [escalationReason, setEscalationReason] = useState("");
   const [hydrated, setHydrated] = useState(false);
+
+  // Call timer: counts clinical time this session; the minutes are logged onto
+  // the monthly task when the note is saved (CCM 99490 = 20 min/month).
+  const [elapsedSec, setElapsedSec] = useState(0);
+  const [timerRunning, setTimerRunning] = useState(true);
+  const [manualMins, setManualMins] = useState<string | null>(null); // null = follow timer
+  const timerInit = useRef(false);
+  useEffect(() => {
+    if (!timerRunning) return;
+    const t = setInterval(() => setElapsedSec((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [timerRunning]);
+  // Reviewing an already-completed call shouldn't keep accruing time by default.
+  useEffect(() => {
+    if (!timerInit.current && task.data) {
+      timerInit.current = true;
+      if (["completed", "ready_for_billing", "billed"].includes(task.data.status as string)) setTimerRunning(false);
+    }
+  }, [task.data]);
+  const timerMins = Math.ceil(elapsedSec / 60);
+  const sessionMinutes = manualMins === null ? timerMins : Math.max(0, Math.min(480, parseInt(manualMins, 10) || 0));
+  const monthMins = task.data?.timeSpentMinutes ?? 0;
 
   // hydrate from existing note (review mode)
   useEffect(() => {
@@ -122,6 +145,38 @@ export default function CallWorkflowPage() {
             </div>
           </div>
 
+          {/* CCM time tracker */}
+          <div className="bg-white rounded-3xl border border-slate-100 p-6">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2 text-slate-700"><Timer size={15} className="text-[hsl(17_68%_47%)]" /><span className="text-sm font-semibold">Time this call</span></div>
+              <button onClick={() => setTimerRunning((r) => !r)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition">
+                {timerRunning ? <><Pause size={12} /> Pause</> : <><Play size={12} /> Resume</>}
+              </button>
+            </div>
+            <p className="text-3xl font-bold text-slate-900 font-mono tabular-nums">
+              {String(Math.floor(elapsedSec / 60)).padStart(2, "0")}:{String(elapsedSec % 60).padStart(2, "0")}
+            </p>
+            <div className="mt-3 flex items-center gap-2">
+              <label className="text-xs text-slate-500">Minutes to log when saving:</label>
+              <input type="number" min={0} max={480} value={manualMins === null ? String(timerMins) : manualMins}
+                onChange={(e) => setManualMins(e.target.value)}
+                className="w-16 px-2 py-1 rounded-lg border border-slate-200 text-sm font-mono tabular-nums text-slate-800 focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]" />
+            </div>
+            <div className="mt-4">
+              <div className="flex items-center justify-between text-xs mb-1">
+                <span className="text-slate-500">This month: <b className="text-slate-700 font-mono tabular-nums">{monthMins + sessionMinutes}</b> / 20 min</span>
+                {monthMins + sessionMinutes >= 20
+                  ? <span className="font-semibold text-emerald-600">Billing threshold met</span>
+                  : <span className="font-semibold text-amber-600">{20 - monthMins - sessionMinutes} min to go</span>}
+              </div>
+              <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                <div className={`h-full rounded-full transition-all ${monthMins + sessionMinutes >= 20 ? "bg-emerald-500" : "bg-amber-500"}`}
+                  style={{ width: `${Math.min(100, ((monthMins + sessionMinutes) / 20) * 100)}%` }} />
+              </div>
+            </div>
+          </div>
+
           {conditions.length > 0 && (
             <div className="bg-white rounded-3xl border border-slate-100 p-6">
               <div className="flex items-center gap-2 mb-3 text-slate-700"><Activity size={15} className="text-[hsl(17_68%_47%)]" /><span className="text-sm font-semibold">Care focus</span></div>
@@ -182,6 +237,7 @@ export default function CallWorkflowPage() {
               ccmTaskId: taskId, patientId: patientId!, ...responses, generatedNote,
               aiGeneratedAt: aiGeneratedAt ?? undefined,
               escalationFlag: escalate, escalationReason: escalate ? escalationReason : undefined,
+              sessionMinutes,
               markCompleted: false,
             })} className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-2xl border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50 active:scale-[0.97] disabled:opacity-50 transition">
               <Save size={15} /> Save Draft
@@ -190,6 +246,7 @@ export default function CallWorkflowPage() {
               ccmTaskId: taskId, patientId: patientId!, ...responses, generatedNote,
               aiGeneratedAt: aiGeneratedAt ?? undefined,
               escalationFlag: escalate, escalationReason: escalate ? escalationReason : undefined,
+              sessionMinutes,
               markCompleted: true,
             })} className="inline-flex items-center gap-1.5 px-6 py-2.5 rounded-2xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 active:scale-[0.97] transition disabled:opacity-50">
               {saveNote.isPending ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Complete & Save

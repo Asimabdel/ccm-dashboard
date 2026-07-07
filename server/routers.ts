@@ -6,7 +6,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import {
   getPatientById,
   getCCMTaskById,
@@ -812,6 +812,9 @@ export const appRouter = router({
           escalationFlag: z.boolean().optional(),
           escalationReason: z.string().optional(),
           followUpActions: z.array(z.string()).optional(),
+          // Clinical staff minutes spent during THIS session — accrued onto the
+          // monthly task's total (CCM 99490 requires >=20 documented min/month).
+          sessionMinutes: z.number().int().min(0).max(480).optional(),
           markCompleted: z.boolean().optional(),
         })
       )
@@ -854,6 +857,11 @@ export const appRouter = router({
 
         // Update task time + completion
         const taskUpdate: any = { updatedAt: new Date() };
+        const mins = input.sessionMinutes ?? 0;
+        if (mins > 0) {
+          taskUpdate.timeSpentMinutes = sql`${ccmTasks.timeSpentMinutes} + ${mins}`;
+          await db.update(ccmNotes).set({ timeSpentMinutes: sql`${ccmNotes.timeSpentMinutes} + ${mins}` }).where(eq(ccmNotes.id, noteId));
+        }
         if (input.markCompleted) {
           taskUpdate.ccmNoteCompleted = true;
           taskUpdate.status = input.escalationFlag ? "needs_provider_review" : "completed";
