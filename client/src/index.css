@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+/* Dark styling is driven ONLY by the app's `.dark` class (the header toggle),
+   never by the OS setting directly — otherwise an OS-dark user with the app in
+   light mode gets dark: utilities on top of light text colors (unreadable). */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* ----------------------------------------------------------------------------
    Tailwind v4 theme — Scandinavian minimalist palette
    Pale cool gray bg, bold black sans typography, soft pastel blue & blush pink
