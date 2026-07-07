@@ -2,6 +2,7 @@ import express, { type Express } from "express";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
+import { registerIntegrationRoutes } from "../integration";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 
@@ -22,6 +23,8 @@ export function createApp(): Express {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   registerStorageProxy(app);
   registerOAuthRoutes(app);
+  // Read-only CCM/RPM integration API for the separate Clinic Command Center app.
+  registerIntegrationRoutes(app);
   // tRPC API
   app.use(
     "/api/trpc",

@@ -30,6 +30,7 @@ Configuration → Environment variables on the `ccm-app` function:
 - `JWT_SECRET` — long random string used to sign session cookies
 - `OWNER_OPEN_ID` — openId of the owner/admin account
 - `BEDROCK_MODEL_ID` — e.g. `us.anthropic.claude-haiku-4-5-20251001-v1:0` (omit to fall back to the Forge endpoint)
+- `INTEGRATION_API_KEY` — shared secret for the read-only `/api/integration/*` endpoints consumed by the separate Clinic Command Center app (must match its `CCM_API_KEY`). Omit to disable the integration.
 - `NODE_ENV=production`
 
 The Lambda's IAM role supplies AWS credentials — no AWS keys go in env. The role
