@@ -4,9 +4,9 @@ import { trpc } from "@/lib/trpc";
 import { useMemo, useState } from "react";
 import { Loader2, Download, BarChart3, Calendar, Stethoscope, User, Building2, CalendarRange } from "lucide-react";
 import {
-  ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell,
+  ResponsiveContainer, AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
 } from "recharts";
-import { STATUS_LABELS, currentMonthStr } from "@/lib/ccm";
+import { STATUS_LABELS, statusBadgeClass, currentMonthStr } from "@/lib/ccm";
 import { toast } from "sonner";
 
 type Dim = "date" | "week" | "provider" | "employee" | "clinic";
@@ -18,18 +18,25 @@ const DIM_META: { key: Dim; label: string; icon: any }[] = [
   { key: "clinic", label: "Clinic", icon: Building2 },
 ];
 
-const ACCENT = "hsl(200 80% 62%)";
-const PINK = "hsl(345 80% 80%)";
+const CORAL = "hsl(17 66% 52%)";
+const CORAL_SOFT = "hsl(17 72% 68%)";
+const EMERALD = "#059669";
 
-function Stat({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
+function Stat({ label, value, sub, tone = "default" }: { label: string; value: string | number; sub?: string; tone?: "default" | "good" | "warn" }) {
+  const valueColor = tone === "good" ? "text-emerald-600" : tone === "warn" ? "text-amber-600" : "text-slate-900";
   return (
     <div className="bg-white rounded-3xl border border-slate-100 p-5">
       <p className="text-xs uppercase tracking-wider text-slate-400">{label}</p>
-      <p className="text-3xl font-bold text-slate-900 mt-1">{value}</p>
+      <p className={`text-3xl font-bold mt-1 font-mono tabular-nums ${valueColor}`}>{value}</p>
       {sub && <p className="text-xs text-slate-400 mt-1">{sub}</p>}
     </div>
   );
 }
+
+const MONTH_LABEL = (ym: string) => {
+  const [y, m] = ym.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: "short" }) + (m === 1 ? ` '${String(y).slice(2)}` : "");
+};
 
 export default function ReportsPage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
@@ -45,12 +52,13 @@ export default function ReportsPage() {
 
   const data = report.data;
   const stats = data?.stats;
-  const staffData = (data?.staffPerformance || []).map((s) => ({
-    name: s.staffName, completed: s.completed, assigned: s.assigned,
+  const staffData = (data?.staffPerformance || []).map((s: any) => ({
+    name: s.staffName, completed: s.completed, assigned: s.assigned, billable: s.billable ?? 0,
     pct: s.assigned ? Math.round((s.completed / s.assigned) * 100) : 0,
   }));
   const trendData = (data?.dailyTrend || []) as { day?: string; date?: string; count: number }[];
   const trend = trendData.map((t: any) => ({ day: (t.day || t.date || "").slice(5), count: t.count }));
+  const monthlyTrend = ((data as any)?.monthlyTrend || []).map((m: any) => ({ label: MONTH_LABEL(m.month), count: m.count, current: m.month === month }));
 
   return (
     <CCMDashboardLayout title="Reports & Analytics">
@@ -77,96 +85,117 @@ export default function ReportsPage() {
 
       {stats && (
         <>
+          {/* Key metrics — scoped to actively-enrolled patients */}
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            <Stat label="Active Patients" value={stats.totalActivePatients} />
-            <Stat label="Completion Rate" value={`${stats.completionPct}%`} sub={`${stats.completed} of ${stats.totalTasks} tasks`} />
-            <Stat label="Not Reached" value={stats.notReached} />
-            <Stat label="Pending Escalations" value={stats.pendingEscalations} />
+            <Stat label="Completed CCMs" value={stats.completed} sub={`~${stats.avgPerDay}/day · of ${stats.totalTasks} active`} tone="good" />
+            <Stat label="Completion rate" value={`${stats.completionPct}%`} sub={`${stats.daysElapsed} of ${stats.daysInMonth} days elapsed`} />
+            <Stat label="Billable (≥20 min)" value={stats.billable ?? 0} sub={`of ${stats.completed} completed · ${Math.round((stats.totalMinutes || 0) / 60)}h logged`} tone={(stats.billable ?? 0) < stats.completed ? "warn" : "good"} />
+            <Stat label="Not reached" value={stats.notReached} sub={`${stats.pendingEscalations} escalation(s) open`} tone={stats.notReached ? "warn" : "default"} />
           </div>
 
-          <div className="grid lg:grid-cols-2 gap-5 mb-6">
-            <div className="bg-white rounded-3xl border border-slate-100 p-6">
-              <h3 className="font-semibold text-slate-900 mb-4">Daily Completion Trend</h3>
+          {/* Month-over-month production */}
+          <div className="bg-white rounded-3xl border border-slate-100 p-6 mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-slate-900">Completed CCMs — last 6 months</h3>
+              <span className="text-xs text-slate-400">by completion date</span>
+            </div>
+            {monthlyTrend.length === 0 ? <p className="text-sm text-slate-400 py-12 text-center">No completions yet.</p> : (
+              <ResponsiveContainer width="100%" height={220}>
+                <AreaChart data={monthlyTrend} margin={{ left: 4, right: 8 }}>
+                  <defs><linearGradient id="ccmGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={CORAL} stopOpacity={0.35} /><stop offset="100%" stopColor={CORAL} stopOpacity={0.02} /></linearGradient></defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0e6d6" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 12, fill: "#a98b70" }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 12, fill: "#a98b70" }} allowDecimals={false} axisLine={false} tickLine={false} width={44} />
+                  <Tooltip formatter={(v: number) => [`${v} completed`, ""]} />
+                  <Area type="monotone" dataKey="count" stroke={CORAL} strokeWidth={2.5} fill="url(#ccmGrad)" dot={{ r: 3, fill: CORAL }} activeDot={{ r: 5 }} />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+
+          <div className="grid lg:grid-cols-5 gap-5 mb-6">
+            {/* Daily completions this month */}
+            <div className="bg-white rounded-3xl border border-slate-100 p-6 lg:col-span-2">
+              <h3 className="font-semibold text-slate-900 mb-4">Daily completions — {month}</h3>
               {trend.length === 0 ? <p className="text-sm text-slate-400 py-12 text-center">No completions recorded.</p> : (
                 <ResponsiveContainer width="100%" height={240}>
-                  <LineChart data={trend}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#eef0f3" />
-                    <XAxis dataKey="day" tick={{ fontSize: 12, fill: "#94a3b8" }} />
-                    <YAxis tick={{ fontSize: 12, fill: "#94a3b8" }} allowDecimals={false} />
-                    <Tooltip />
-                    <Line type="monotone" dataKey="count" stroke={ACCENT} strokeWidth={2.5} dot={{ r: 3 }} />
-                  </LineChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-
-            <div className="bg-white rounded-3xl border border-slate-100 p-6">
-              <h3 className="font-semibold text-slate-900 mb-4">Staff Completion %</h3>
-              {staffData.length === 0 ? <p className="text-sm text-slate-400 py-12 text-center">No staff activity.</p> : (
-                <ResponsiveContainer width="100%" height={240}>
-                  <BarChart data={staffData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#eef0f3" />
-                    <XAxis dataKey="name" tick={{ fontSize: 11, fill: "#94a3b8" }} />
-                    <YAxis tick={{ fontSize: 12, fill: "#94a3b8" }} domain={[0, 100]} />
-                    <Tooltip />
-                    <Bar dataKey="pct" radius={[6, 6, 0, 0]}>
-                      {staffData.map((_, i) => <Cell key={i} fill={i % 2 === 0 ? ACCENT : PINK} />)}
-                    </Bar>
+                  <BarChart data={trend}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0e6d6" vertical={false} />
+                    <XAxis dataKey="day" tick={{ fontSize: 11, fill: "#a98b70" }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fontSize: 12, fill: "#a98b70" }} allowDecimals={false} axisLine={false} tickLine={false} width={28} />
+                    <Tooltip formatter={(v: number) => [`${v} completed`, ""]} />
+                    <Bar dataKey="count" fill={CORAL} radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               )}
             </div>
+
+            {/* Coordinator leaderboard */}
+            <div className="bg-white rounded-3xl border border-slate-100 p-6 lg:col-span-3">
+              <h3 className="font-semibold text-slate-900 mb-4">Coordinator leaderboard</h3>
+              {staffData.length === 0 ? <p className="text-sm text-slate-400 py-12 text-center">No coordinator activity.</p> : (
+                <div className="space-y-3">
+                  {staffData.map((s) => (
+                    <div key={s.name} className="flex items-center gap-3">
+                      <span className="w-28 shrink-0 text-sm font-medium text-slate-700 truncate">{s.name}</span>
+                      <div className="flex-1 h-2.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full transition-all" style={{ width: `${s.pct}%`, background: CORAL }} />
+                      </div>
+                      <span className="w-28 shrink-0 text-right text-xs text-slate-500 tabular-nums font-mono"><b className="text-slate-800">{s.completed}</b>/{s.assigned} · {s.pct}%</span>
+                    </div>
+                  ))}
+                  <p className="text-[11px] text-slate-400 pt-1">Bar = completion rate. <b className="text-slate-600">{staffData.reduce((a: number, s: any) => a + s.billable, 0)}</b> of {stats.completed} completed are billable (≥20 min logged).</p>
+                </div>
+              )}
+            </div>
           </div>
 
+          {/* Provider performance */}
           <div className="bg-white rounded-3xl border border-slate-100 p-6 mb-6">
-            <h3 className="font-semibold text-slate-900 mb-4">Clinic Performance</h3>
+            <h3 className="font-semibold text-slate-900 mb-4">Provider performance</h3>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-slate-500 text-xs uppercase tracking-wider border-b border-slate-100">
-                    <th className="text-left font-medium py-2">Clinic</th>
-                    <th className="text-left font-medium py-2">Location</th>
+                    <th className="text-left font-medium py-2">Provider</th>
                     <th className="text-right font-medium py-2">Completed</th>
-                    <th className="text-right font-medium py-2">Total</th>
-                    <th className="text-left font-medium py-2 pl-6 w-1/3">Progress</th>
+                    <th className="text-right font-medium py-2">Assigned</th>
+                    <th className="text-left font-medium py-2 pl-6 w-1/2">Completion</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(data?.clinicPerformance || []).map((c) => {
+                  {((data as any)?.providerPerformance || []).map((c: any) => {
                     const pct = c.total ? Math.round((c.completed / c.total) * 100) : 0;
                     return (
-                      <tr key={c.clinicId} className="border-b border-slate-50">
-                        <td className="py-3 font-medium text-slate-800">{c.clinicName}</td>
-                        <td className="py-3 text-slate-500">{c.location}</td>
-                        <td className="py-3 text-right text-slate-700">{c.completed}</td>
-                        <td className="py-3 text-right text-slate-700">{c.total}</td>
+                      <tr key={c.providerId} className="border-b border-slate-50">
+                        <td className="py-3 font-medium text-slate-800">{c.providerName || "Unassigned"}</td>
+                        <td className="py-3 text-right text-slate-700 font-mono tabular-nums">{c.completed}</td>
+                        <td className="py-3 text-right text-slate-700 font-mono tabular-nums">{c.total}</td>
                         <td className="py-3 pl-6">
                           <div className="flex items-center gap-2">
                             <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
-                              <div className="h-full rounded-full" style={{ width: `${pct}%`, background: ACCENT }} />
+                              <div className="h-full rounded-full" style={{ width: `${pct}%`, background: CORAL }} />
                             </div>
-                            <span className="text-xs text-slate-500 w-10 text-right">{pct}%</span>
+                            <span className="text-xs text-slate-500 w-10 text-right tabular-nums">{pct}%</span>
                           </div>
                         </td>
                       </tr>
                     );
                   })}
-                  {(data?.clinicPerformance || []).length === 0 && (
-                    <tr><td colSpan={5} className="py-8 text-center text-slate-400">No clinic data.</td></tr>
+                  {((data as any)?.providerPerformance || []).length === 0 && (
+                    <tr><td colSpan={4} className="py-8 text-center text-slate-400">No provider data.</td></tr>
                   )}
                 </tbody>
               </table>
             </div>
           </div>
 
+          {/* Status breakdown of the active worklist */}
           <div className="bg-white rounded-3xl border border-slate-100 p-6">
-            <h3 className="font-semibold text-slate-900 mb-4">Status Breakdown</h3>
-            <div className="flex flex-wrap gap-3">
-              {Object.entries(stats.statusDistribution).map(([k, v]) => (
-                <div key={k} className="px-4 py-3 rounded-2xl bg-slate-50 min-w-[120px]">
-                  <p className="text-2xl font-bold text-slate-900">{v as number}</p>
-                  <p className="text-xs text-slate-500 mt-0.5">{STATUS_LABELS[k] || k}</p>
-                </div>
+            <h3 className="font-semibold text-slate-900 mb-4">Status breakdown <span className="text-xs font-normal text-slate-400">— active worklist</span></h3>
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(stats.statusDistribution).sort((a, b) => (b[1] as number) - (a[1] as number)).map(([k, v]) => (
+                <span key={k} className={`px-3 py-1.5 rounded-full text-xs font-semibold ${statusBadgeClass(k)}`}>{STATUS_LABELS[k] || k}: {v as number}</span>
               ))}
             </div>
           </div>

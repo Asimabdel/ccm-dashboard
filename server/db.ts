@@ -562,35 +562,52 @@ export async function getAdminStats(month: string) {
   const db = await getDb();
   if (!db) return null;
 
-  const tasks = await db.select().from(ccmTasks).where(eq(ccmTasks.month, month));
-  const activePats = await db.select().from(patients).where(eq(patients.ccmEnrollmentStatus, "active"));
+  // Scope to actively-enrolled patients so the numbers match the worklist and the
+  // coordinator dashboards (inactive/declined patients live on their own tabs and
+  // must not drag down the month's completion rate).
+  const tasks = await db
+    .select({
+      status: ccmTasks.status,
+      priorityLevel: ccmTasks.priorityLevel,
+      providerReviewNeeded: ccmTasks.providerReviewNeeded,
+      timeSpentMinutes: ccmTasks.timeSpentMinutes,
+    })
+    .from(ccmTasks)
+    .innerJoin(patients, eq(ccmTasks.patientId, patients.id))
+    .where(and(eq(ccmTasks.month, month), eq(patients.ccmEnrollmentStatus, "active")));
+
+  const [activeRow] = await db.select({ c: sql<number>`COUNT(*)` }).from(patients).where(eq(patients.ccmEnrollmentStatus, "active"));
 
   const completedStatuses = ["completed", "ready_for_billing", "billed"];
   const total = tasks.length;
   const completed = tasks.filter((t) => completedStatuses.includes(t.status as string)).length;
   const inProgress = tasks.filter((t) => t.status === "in_progress").length;
-  const notReached = tasks.filter((t) => ["called_no_answer", "voicemail_left", "wrong_number"].includes(t.status as string)).length;
+  const notReached = tasks.filter((t) => ["called_no_answer", "voicemail_left", "wrong_number", "needs_callback", "unable_to_reach"].includes(t.status as string)).length;
   const notStarted = tasks.filter((t) => ["not_started", "assigned"].includes(t.status as string)).length;
   const readyForBilling = tasks.filter((t) => t.status === "ready_for_billing").length;
   const needsReview = tasks.filter((t) => t.providerReviewNeeded).length;
+  // Billable = a completed CCM with the CMS ≥20-min clinical-time threshold met.
+  const billable = tasks.filter((t) => completedStatuses.includes(t.status as string) && (t.timeSpentMinutes ?? 0) >= 20).length;
+  const totalMinutes = tasks.reduce((s, t) => s + (t.timeSpentMinutes ?? 0), 0);
 
   const pendingEsc = await db.select({ c: sql<number>`COUNT(*)` }).from(providerEscalations).where(eq(providerEscalations.escalationStatus, "pending"));
 
-  // status distribution
-  const statusDistribution: Record<string, number> = {};
-  tasks.forEach((t) => {
-    statusDistribution[t.status as string] = (statusDistribution[t.status as string] || 0) + 1;
-  });
+  // Calendar pacing: average completions per elapsed day (days-so-far for the
+  // current month, full month otherwise).
+  const [yy, mm] = month.split("-").map(Number);
+  const nowMonth = new Date().toISOString().slice(0, 7);
+  const daysInMonth = new Date(Date.UTC(yy, mm, 0)).getUTCDate();
+  const daysElapsed = month === nowMonth ? new Date().getUTCDate() : (month > nowMonth ? 0 : daysInMonth);
+  const avgPerDay = daysElapsed ? Math.round((completed / daysElapsed) * 10) / 10 : 0;
 
-  // priority distribution
+  const statusDistribution: Record<string, number> = {};
+  tasks.forEach((t) => { statusDistribution[t.status as string] = (statusDistribution[t.status as string] || 0) + 1; });
+
   const priorityDistribution: Record<string, number> = { high: 0, medium: 0, low: 0 };
-  tasks.forEach((t) => {
-    const p = (t.priorityLevel || "medium") as string;
-    priorityDistribution[p] = (priorityDistribution[p] || 0) + 1;
-  });
+  tasks.forEach((t) => { const p = (t.priorityLevel || "medium") as string; priorityDistribution[p] = (priorityDistribution[p] || 0) + 1; });
 
   return {
-    totalActivePatients: activePats.length,
+    totalActivePatients: Number(activeRow?.c ?? 0),
     totalTasks: total,
     completed,
     inProgress,
@@ -598,6 +615,11 @@ export async function getAdminStats(month: string) {
     notStarted,
     readyForBilling,
     needsReview,
+    billable,
+    totalMinutes,
+    avgPerDay,
+    daysElapsed,
+    daysInMonth,
     pendingEscalations: pendingEsc[0]?.c ?? 0,
     completionPct: total ? Math.round((completed / total) * 100) : 0,
     statusDistribution,
@@ -616,22 +638,26 @@ export async function getStaffPerformance(month: string) {
       staffId: ccmTasks.assignedStaffId,
       staffName: staffAlias.name,
       status: ccmTasks.status,
-      ccmNoteCompleted: ccmTasks.ccmNoteCompleted,
+      timeSpentMinutes: ccmTasks.timeSpentMinutes,
     })
     .from(ccmTasks)
+    .innerJoin(patients, eq(ccmTasks.patientId, patients.id))
     .leftJoin(staffAlias, eq(ccmTasks.assignedStaffId, staffAlias.id))
-    .where(eq(ccmTasks.month, month));
+    .where(and(eq(ccmTasks.month, month), eq(patients.ccmEnrollmentStatus, "active")));
 
-  const map = new Map<number, { staffId: number; staffName: string; assigned: number; completed: number }>();
+  const map = new Map<number, { staffId: number; staffName: string; assigned: number; completed: number; billable: number }>();
   const completedStatuses = ["completed", "ready_for_billing", "billed"];
   for (const r of rows) {
     if (!r.staffId) continue;
-    const cur = map.get(r.staffId) || { staffId: r.staffId, staffName: r.staffName || "Unassigned", assigned: 0, completed: 0 };
+    const cur = map.get(r.staffId) || { staffId: r.staffId, staffName: r.staffName || "Unassigned", assigned: 0, completed: 0, billable: 0 };
     cur.assigned += 1;
-    if (completedStatuses.includes(r.status as string)) cur.completed += 1;
+    if (completedStatuses.includes(r.status as string)) {
+      cur.completed += 1;
+      if ((r.timeSpentMinutes ?? 0) >= 20) cur.billable += 1;
+    }
     map.set(r.staffId, cur);
   }
-  return Array.from(map.values());
+  return Array.from(map.values()).sort((a, b) => b.completed - a.completed);
 }
 
 const COMPLETED_TASK_STATUSES = ["completed", "ready_for_billing", "billed"];
@@ -782,7 +808,7 @@ export async function getClinicPerformance(month: string) {
     .from(ccmTasks)
     .innerJoin(patients, eq(ccmTasks.patientId, patients.id))
     .innerJoin(clinics, eq(patients.clinicId, clinics.id))
-    .where(eq(ccmTasks.month, month));
+    .where(and(eq(ccmTasks.month, month), eq(patients.ccmEnrollmentStatus, "active")));
 
   const map = new Map<number, { clinicId: number; clinicName: string; location: string; total: number; completed: number }>();
   const completedStatuses = ["completed", "ready_for_billing", "billed"];
@@ -795,22 +821,79 @@ export async function getClinicPerformance(month: string) {
   return Array.from(map.values());
 }
 
-/** Daily completion trend for a month (based on dateContacted of completed tasks) */
+/** Per-provider performance for a month (active patients). */
+export async function getProviderPerformance(month: string) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ providerId: providers.id, providerName: providers.name, status: ccmTasks.status })
+    .from(ccmTasks)
+    .innerJoin(patients, eq(ccmTasks.patientId, patients.id))
+    .innerJoin(providers, eq(patients.providerId, providers.id))
+    .where(and(eq(ccmTasks.month, month), eq(patients.ccmEnrollmentStatus, "active")));
+  const map = new Map<number, { providerId: number; providerName: string; total: number; completed: number }>();
+  const completedStatuses = ["completed", "ready_for_billing", "billed"];
+  for (const r of rows) {
+    const cur = map.get(r.providerId) || { providerId: r.providerId, providerName: r.providerName, total: 0, completed: 0 };
+    cur.total += 1;
+    if (completedStatuses.includes(r.status as string)) cur.completed += 1;
+    map.set(r.providerId, cur);
+  }
+  return Array.from(map.values()).sort((a, b) => b.completed - a.completed);
+}
+
+/** Daily completion trend for a month — bucketed by completedAt (the actual
+ *  completion), scoped to active patients, matching the completion report. */
 export async function getDailyCompletionTrend(month: string) {
   const db = await getDb();
   if (!db) return [];
-  const completedStatuses = ["completed", "ready_for_billing", "billed"];
-  const tasks = await db.select().from(ccmTasks).where(eq(ccmTasks.month, month));
+  const rows = await db
+    .select({ completedAt: ccmTasks.completedAt })
+    .from(ccmTasks)
+    .innerJoin(patients, eq(ccmTasks.patientId, patients.id))
+    .where(and(
+      eq(ccmTasks.month, month),
+      eq(patients.ccmEnrollmentStatus, "active"),
+      inArray(ccmTasks.status, ["completed", "ready_for_billing", "billed"]),
+      sql`${ccmTasks.completedAt} IS NOT NULL`,
+    ));
   const byDay: Record<string, number> = {};
-  tasks.forEach((t) => {
-    if (completedStatuses.includes(t.status as string) && t.dateContacted) {
-      const day = new Date(t.dateContacted).toISOString().slice(0, 10);
-      byDay[day] = (byDay[day] || 0) + 1;
-    }
-  });
-  return Object.entries(byDay)
-    .map(([date, count]) => ({ date, count }))
-    .sort((a, b) => a.date.localeCompare(b.date));
+  for (const r of rows) {
+    if (!r.completedAt) continue;
+    const day = new Date(r.completedAt).toISOString().slice(0, 10);
+    byDay[day] = (byDay[day] || 0) + 1;
+  }
+  return Object.entries(byDay).map(([date, count]) => ({ date, count })).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/** Completions per calendar month over the last N months, by completedAt (a true
+ *  month-over-month CCM production trend across all task months). Active patients. */
+export async function getMonthlyCompletionTrend(months = 6) {
+  const db = await getDb();
+  if (!db) return [] as { month: string; count: number }[];
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (months - 1), 1));
+  const rows = await db
+    .select({ completedAt: ccmTasks.completedAt })
+    .from(ccmTasks)
+    .innerJoin(patients, eq(ccmTasks.patientId, patients.id))
+    .where(and(
+      eq(patients.ccmEnrollmentStatus, "active"),
+      inArray(ccmTasks.status, ["completed", "ready_for_billing", "billed"]),
+      sql`${ccmTasks.completedAt} IS NOT NULL`,
+      gte(ccmTasks.completedAt, start),
+    ));
+  const byMonth: Record<string, number> = {};
+  for (let i = 0; i < months; i++) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (months - 1) + i, 1));
+    byMonth[d.toISOString().slice(0, 7)] = 0;
+  }
+  for (const r of rows) {
+    if (!r.completedAt) continue;
+    const k = new Date(r.completedAt).toISOString().slice(0, 7);
+    byMonth[k] = (byMonth[k] || 0) + 1;
+  }
+  return Object.entries(byMonth).sort((a, b) => a[0].localeCompare(b[0])).map(([month, count]) => ({ month, count }));
 }
 
 /** Active patients with an upcoming appointment (soonest first) — for the dashboard widget. */

@@ -23,6 +23,8 @@ import {
   getStaffPerformance,
   getClinicPerformance,
   getDailyCompletionTrend,
+  getMonthlyCompletionTrend,
+  getProviderPerformance,
   getCoordinatorDashboard,
   getCoordinatorGoalsOverview,
   setMonthlyGoal,
@@ -1128,13 +1130,15 @@ export const appRouter = router({
       .query(async ({ input, ctx }) => {
         requireRole(ctx, ["admin", "billing"]);
         const month = input?.month || currentMonth();
-        const [stats, staffPerf, clinicPerf, trend] = await Promise.all([
+        const [stats, staffPerf, clinicPerf, providerPerf, trend, monthlyTrend] = await Promise.all([
           getAdminStats(month),
           getStaffPerformance(month),
           getClinicPerformance(month),
+          getProviderPerformance(month),
           getDailyCompletionTrend(month),
+          getMonthlyCompletionTrend(6),
         ]);
-        return { month, stats, staffPerformance: staffPerf, clinicPerformance: clinicPerf, dailyTrend: trend };
+        return { month, stats, staffPerformance: staffPerf, clinicPerformance: clinicPerf, providerPerformance: providerPerf, dailyTrend: trend, monthlyTrend };
       }),
 
     // Flexible completion report: group by any combination of date/week/provider/employee/clinic
