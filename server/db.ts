@@ -17,10 +17,13 @@ import {
   auditLogs,
   teamInvites,
   monthlyGoals,
+  refillRequests,
+  reachOutContacts,
   type InsertAuditLog,
   type User,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
+import { buildStandardApcmCarePlan } from "../shared/carePlan";
 
 let _db: MySql2Database<Record<string, never>> | null = null;
 
@@ -265,14 +268,14 @@ export async function getCCMTaskById(taskId: number) {
   return result.length > 0 ? result[0] : undefined;
 }
 
-export async function getCCMTaskByPatientAndMonth(patientId: number, month: string) {
+export async function getCCMTaskByPatientAndMonth(patientId: number, month: string, program: "ccm" | "bhi" | "apcm" = "ccm") {
   const db = await getDb();
   if (!db) return undefined;
 
   const result = await db
     .select()
     .from(ccmTasks)
-    .where(and(eq(ccmTasks.patientId, patientId), eq(ccmTasks.month, month)))
+    .where(and(eq(ccmTasks.patientId, patientId), eq(ccmTasks.month, month), eq(ccmTasks.program, program)))
     .limit(1);
 
   return result.length > 0 ? result[0] : undefined;
@@ -412,7 +415,7 @@ export async function getProviderById(providerId: number) {
 }
 
 // Staff queries
-export async function getStaffByRole(role: "admin" | "staff" | "provider" | "billing" | "front_desk" | "user") {
+export async function getStaffByRole(role: "admin" | "staff" | "provider" | "billing" | "front_desk" | "medical_assistant" | "user") {
   const db = await getDb();
   if (!db) return [];
 
@@ -446,16 +449,19 @@ export async function getWorklistForMonth(month: string, filters?: {
   assignedStaffId?: number;
   clinicId?: number;
   providerId?: number;
+  program?: "ccm" | "bhi" | "apcm";
 }) {
   const db = await getDb();
   if (!db) return [];
 
   const staffAlias = alias(users, "staff");
 
-  const conditions = [eq(ccmTasks.month, month)];
-  // The worklist only shows actively-enrolled patients — inactive and declined
-  // patients live on their own tabs.
-  conditions.push(eq(patients.ccmEnrollmentStatus, "active"));
+  const program = filters?.program ?? "ccm";
+  const conditions = [eq(ccmTasks.month, month), eq(ccmTasks.program, program)];
+  // The worklist only shows patients actively enrolled in THIS program — inactive
+  // and declined patients live on their own tabs. BHI and CCM enrollment are
+  // independent, so gate on the matching enrollment column.
+  conditions.push(program === "bhi" ? eq(patients.bhiEnrollmentStatus, "active") : eq(patients.ccmEnrollmentStatus, "active"));
   if (filters?.status) conditions.push(eq(ccmTasks.status, filters.status as any));
   if (filters?.priorityLevel) conditions.push(eq(ccmTasks.priorityLevel, filters.priorityLevel));
   if (filters?.assignedStaffId) conditions.push(eq(ccmTasks.assignedStaffId, filters.assignedStaffId));
@@ -557,10 +563,12 @@ export async function getPatientDetail(patientId: number) {
   };
 }
 
-/** Admin dashboard aggregate stats for a month */
-export async function getAdminStats(month: string) {
+/** Admin dashboard aggregate stats for a month (defaults to the CCM program). */
+export async function getAdminStats(month: string, program: "ccm" | "bhi" | "apcm" = "ccm") {
   const db = await getDb();
   if (!db) return null;
+
+  const enrollmentActive = program === "bhi" ? eq(patients.bhiEnrollmentStatus, "active") : eq(patients.ccmEnrollmentStatus, "active");
 
   // Scope to actively-enrolled patients so the numbers match the worklist and the
   // coordinator dashboards (inactive/declined patients live on their own tabs and
@@ -574,9 +582,9 @@ export async function getAdminStats(month: string) {
     })
     .from(ccmTasks)
     .innerJoin(patients, eq(ccmTasks.patientId, patients.id))
-    .where(and(eq(ccmTasks.month, month), eq(patients.ccmEnrollmentStatus, "active")));
+    .where(and(eq(ccmTasks.month, month), eq(ccmTasks.program, program), enrollmentActive));
 
-  const [activeRow] = await db.select({ c: sql<number>`COUNT(*)` }).from(patients).where(eq(patients.ccmEnrollmentStatus, "active"));
+  const [activeRow] = await db.select({ c: sql<number>`COUNT(*)` }).from(patients).where(enrollmentActive);
 
   const completedStatuses = ["completed", "ready_for_billing", "billed"];
   const total = tasks.length;
@@ -628,10 +636,11 @@ export async function getAdminStats(month: string) {
 }
 
 /** Per-staff performance for a month (with names) */
-export async function getStaffPerformance(month: string) {
+export async function getStaffPerformance(month: string, program: "ccm" | "bhi" | "apcm" = "ccm") {
   const db = await getDb();
   if (!db) return [];
 
+  const enrollmentActive = program === "bhi" ? eq(patients.bhiEnrollmentStatus, "active") : eq(patients.ccmEnrollmentStatus, "active");
   const staffAlias = alias(users, "staff");
   const rows = await db
     .select({
@@ -643,7 +652,7 @@ export async function getStaffPerformance(month: string) {
     .from(ccmTasks)
     .innerJoin(patients, eq(ccmTasks.patientId, patients.id))
     .leftJoin(staffAlias, eq(ccmTasks.assignedStaffId, staffAlias.id))
-    .where(and(eq(ccmTasks.month, month), eq(patients.ccmEnrollmentStatus, "active")));
+    .where(and(eq(ccmTasks.month, month), eq(ccmTasks.program, program), enrollmentActive));
 
   const map = new Map<number, { staffId: number; staffName: string; assigned: number; completed: number; billable: number }>();
   const completedStatuses = ["completed", "ready_for_billing", "billed"];
@@ -794,10 +803,11 @@ export async function getCoordinatorGoalsOverview(month: string) {
 }
 
 /** Per-clinic performance for a month */
-export async function getClinicPerformance(month: string) {
+export async function getClinicPerformance(month: string, program: "ccm" | "bhi" | "apcm" = "ccm") {
   const db = await getDb();
   if (!db) return [];
 
+  const enrollmentActive = program === "bhi" ? eq(patients.bhiEnrollmentStatus, "active") : eq(patients.ccmEnrollmentStatus, "active");
   const rows = await db
     .select({
       clinicId: clinics.id,
@@ -808,7 +818,7 @@ export async function getClinicPerformance(month: string) {
     .from(ccmTasks)
     .innerJoin(patients, eq(ccmTasks.patientId, patients.id))
     .innerJoin(clinics, eq(patients.clinicId, clinics.id))
-    .where(and(eq(ccmTasks.month, month), eq(patients.ccmEnrollmentStatus, "active")));
+    .where(and(eq(ccmTasks.month, month), eq(ccmTasks.program, program), enrollmentActive));
 
   const map = new Map<number, { clinicId: number; clinicName: string; location: string; total: number; completed: number }>();
   const completedStatuses = ["completed", "ready_for_billing", "billed"];
@@ -822,15 +832,16 @@ export async function getClinicPerformance(month: string) {
 }
 
 /** Per-provider performance for a month (active patients). */
-export async function getProviderPerformance(month: string) {
+export async function getProviderPerformance(month: string, program: "ccm" | "bhi" | "apcm" = "ccm") {
   const db = await getDb();
   if (!db) return [];
+  const enrollmentActive = program === "bhi" ? eq(patients.bhiEnrollmentStatus, "active") : eq(patients.ccmEnrollmentStatus, "active");
   const rows = await db
     .select({ providerId: providers.id, providerName: providers.name, status: ccmTasks.status })
     .from(ccmTasks)
     .innerJoin(patients, eq(ccmTasks.patientId, patients.id))
     .innerJoin(providers, eq(patients.providerId, providers.id))
-    .where(and(eq(ccmTasks.month, month), eq(patients.ccmEnrollmentStatus, "active")));
+    .where(and(eq(ccmTasks.month, month), eq(ccmTasks.program, program), enrollmentActive));
   const map = new Map<number, { providerId: number; providerName: string; total: number; completed: number }>();
   const completedStatuses = ["completed", "ready_for_billing", "billed"];
   for (const r of rows) {
@@ -844,16 +855,18 @@ export async function getProviderPerformance(month: string) {
 
 /** Daily completion trend for a month — bucketed by completedAt (the actual
  *  completion), scoped to active patients, matching the completion report. */
-export async function getDailyCompletionTrend(month: string) {
+export async function getDailyCompletionTrend(month: string, program: "ccm" | "bhi" | "apcm" = "ccm") {
   const db = await getDb();
   if (!db) return [];
+  const enrollmentActive = program === "bhi" ? eq(patients.bhiEnrollmentStatus, "active") : eq(patients.ccmEnrollmentStatus, "active");
   const rows = await db
     .select({ completedAt: ccmTasks.completedAt })
     .from(ccmTasks)
     .innerJoin(patients, eq(ccmTasks.patientId, patients.id))
     .where(and(
       eq(ccmTasks.month, month),
-      eq(patients.ccmEnrollmentStatus, "active"),
+      eq(ccmTasks.program, program),
+      enrollmentActive,
       inArray(ccmTasks.status, ["completed", "ready_for_billing", "billed"]),
       sql`${ccmTasks.completedAt} IS NOT NULL`,
     ));
@@ -868,9 +881,10 @@ export async function getDailyCompletionTrend(month: string) {
 
 /** Completions per calendar month over the last N months, by completedAt (a true
  *  month-over-month CCM production trend across all task months). Active patients. */
-export async function getMonthlyCompletionTrend(months = 6) {
+export async function getMonthlyCompletionTrend(months = 6, program: "ccm" | "bhi" | "apcm" = "ccm") {
   const db = await getDb();
   if (!db) return [] as { month: string; count: number }[];
+  const enrollmentActive = program === "bhi" ? eq(patients.bhiEnrollmentStatus, "active") : eq(patients.ccmEnrollmentStatus, "active");
   const now = new Date();
   const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (months - 1), 1));
   const rows = await db
@@ -878,7 +892,8 @@ export async function getMonthlyCompletionTrend(months = 6) {
     .from(ccmTasks)
     .innerJoin(patients, eq(ccmTasks.patientId, patients.id))
     .where(and(
-      eq(patients.ccmEnrollmentStatus, "active"),
+      eq(ccmTasks.program, program),
+      enrollmentActive,
       inArray(ccmTasks.status, ["completed", "ready_for_billing", "billed"]),
       sql`${ccmTasks.completedAt} IS NOT NULL`,
       gte(ccmTasks.completedAt, start),
@@ -942,11 +957,12 @@ export async function getEnrichedEscalations(filters?: { providerId?: number; st
 }
 
 /** Enriched billing records with patient info */
-export async function getEnrichedBilling(month: string, status?: string) {
+export async function getEnrichedBilling(month: string, status?: string, program?: "ccm" | "bhi" | "apcm") {
   const db = await getDb();
   if (!db) return [];
   const conditions = [eq(billingRecords.month, month)];
   if (status) conditions.push(eq(billingRecords.billingStatus, status as any));
+  if (program) conditions.push(eq(billingRecords.program, program));
   return db
     .select({
       billing: billingRecords,
@@ -1031,23 +1047,35 @@ export async function generateMonthlyWorklist(month: string) {
   const db = await getDb();
   if (!db) return { created: 0 };
 
-  const activePats = await db.select().from(patients).where(eq(patients.ccmEnrollmentStatus, "active"));
-  const existing = await db.select().from(ccmTasks).where(eq(ccmTasks.month, month));
-  const existingPatientIds = new Set(existing.map((t) => t.patientId));
+  // One task per (patient, month, program). Generate CCM tasks for CCM-active
+  // patients and BHI tasks for BHI-active patients — a dual-enrolled patient gets
+  // both, tracked independently.
+  const existing = await db.select({ patientId: ccmTasks.patientId, program: ccmTasks.program }).from(ccmTasks).where(eq(ccmTasks.month, month));
+  const has = new Set(existing.map((t) => `${t.patientId}:${t.program}`));
 
-  const toCreate = activePats.filter((p) => !existingPatientIds.has(p.id));
-  if (!toCreate.length) return { created: 0 };
+  const ccmPats = await db.select().from(patients).where(eq(patients.ccmEnrollmentStatus, "active"));
+  const bhiPats = await db.select().from(patients).where(eq(patients.bhiEnrollmentStatus, "active"));
+  // APCM covers the SAME active patients as CCM (mirror). A completed CCM later
+  // suppresses that month's APCM task (handled in recomputeBilling).
+  const apcmPats = ccmPats;
 
-  await db.insert(ccmTasks).values(
-    toCreate.map((p) => ({
-      patientId: p.id,
-      month,
-      assignedStaffId: p.assignedStaffId,
-      priorityLevel: p.priorityLevel || p.riskLevel || "medium",
-      status: p.assignedStaffId ? ("assigned" as const) : ("not_started" as const),
-    }))
-  );
-  return { created: toCreate.length };
+  const rows: (typeof ccmTasks.$inferInsert)[] = [];
+  for (const p of ccmPats) {
+    if (has.has(`${p.id}:ccm`)) continue;
+    rows.push({ patientId: p.id, month, program: "ccm", assignedStaffId: p.assignedStaffId, priorityLevel: p.priorityLevel || p.riskLevel || "medium", status: p.assignedStaffId ? "assigned" : "not_started" });
+  }
+  for (const p of bhiPats) {
+    if (has.has(`${p.id}:bhi`)) continue;
+    rows.push({ patientId: p.id, month, program: "bhi", assignedStaffId: p.assignedStaffId, priorityLevel: p.priorityLevel || p.riskLevel || "medium", status: p.assignedStaffId ? "assigned" : "not_started" });
+  }
+  for (const p of apcmPats) {
+    if (has.has(`${p.id}:apcm`)) continue;
+    rows.push({ patientId: p.id, month, program: "apcm", assignedStaffId: p.assignedStaffId, priorityLevel: p.priorityLevel || p.riskLevel || "medium", status: p.assignedStaffId ? "assigned" : "not_started" });
+  }
+  if (!rows.length) return { created: 0 };
+
+  await db.insert(ccmTasks).values(rows);
+  return { created: rows.length };
 }
 
 // Tracks which months this warm Lambda instance has already generated, so the
@@ -1080,17 +1108,20 @@ export async function ensureMonthlyWorklistGenerated(month: string) {
  * worklist — and on the assigned employee's worklist — immediately, instead of
  * only after the monthly batch (generateMonthlyWorklist) is run.
  */
-export async function ensureMonthlyTask(patientId: number, month: string) {
+export async function ensureMonthlyTask(patientId: number, month: string, program: "ccm" | "bhi" | "apcm" = "ccm") {
   const db = await getDb();
   if (!db) return;
   const patient = await getPatientById(patientId);
   if (!patient) return;
 
-  const existing = await getCCMTaskByPatientAndMonth(patientId, month);
+  // APCM mirrors CCM enrollment (same active patient set), so both gate on CCM.
+  const enrolled = program === "bhi" ? patient.bhiEnrollmentStatus === "active" : patient.ccmEnrollmentStatus === "active";
+
+  const existing = await getCCMTaskByPatientAndMonth(patientId, month, program);
   if (existing) {
     // Reactivated patient: clear a stuck inactive/declined task so they return to
     // the worklist with a fresh status.
-    if (patient.ccmEnrollmentStatus === "active" && (existing.status === "inactive" || existing.status === "declined_ccm")) {
+    if (enrolled && (existing.status === "inactive" || existing.status === "declined_ccm")) {
       await db
         .update(ccmTasks)
         .set({ status: patient.assignedStaffId ? "assigned" : "not_started", assignedStaffId: patient.assignedStaffId ?? null, updatedAt: new Date() })
@@ -1109,15 +1140,22 @@ export async function ensureMonthlyTask(patientId: number, month: string) {
     return;
   }
 
-  // Only auto-create tasks for actively enrolled patients.
-  if (patient.ccmEnrollmentStatus !== "active") return;
+  // Only auto-create tasks for patients actively enrolled in this program.
+  if (!enrolled) return;
   await db.insert(ccmTasks).values({
     patientId,
     month,
+    program,
     assignedStaffId: patient.assignedStaffId ?? null,
     priorityLevel: (patient.priorityLevel || patient.riskLevel || "medium") as "high" | "medium" | "low",
     status: patient.assignedStaffId ? "assigned" : "not_started",
   });
+}
+
+/** Ensure this month's tasks exist for whichever programs the patient is enrolled in. */
+export async function ensureMonthlyTasksForPatient(patientId: number, month: string) {
+  await ensureMonthlyTask(patientId, month, "ccm");
+  await ensureMonthlyTask(patientId, month, "bhi");
 }
 
 /** Permanently delete a patient and all of their dependent CCM records (FK-safe order). */
@@ -1136,6 +1174,26 @@ export async function deletePatient(patientId: number) {
   await db.delete(patients).where(eq(patients.id, patientId));
 }
 
+/** APCM complexity level → HCPCS G-code. */
+export function apcmCptFor(level?: string | null): string {
+  return level === "level_3" ? "G0558" : level === "level_2" ? "G0557" : "G0556";
+}
+
+/**
+ * APCM complexity from chronic-condition count + QMB status:
+ *   level_1 (G0556) = 1 chronic condition
+ *   level_2 (G0557) = 2+ chronic conditions
+ *   level_3 (G0558) = 2+ chronic conditions AND Qualified Medicare Beneficiary
+ */
+export function computeApcmLevel(_conditionCount: number, isQMB: boolean): "level_1" | "level_2" | "level_3" {
+  // APCM here mirrors the CCM panel, and CCM eligibility REQUIRES 2+ chronic
+  // conditions — so every APCM patient is at least Level 2 (G0557). QMB raises them
+  // to Level 3 (G0558). Level 1 (a single chronic condition) cannot occur in the
+  // CCM-mirrored population, so we don't rely on the (often under-populated)
+  // chronicConditions list for the floor.
+  return isQMB ? "level_3" : "level_2";
+}
+
 /** Recompute billing readiness for a task and upsert billing record */
 export async function recomputeBilling(taskId: number, month: string) {
   const db = await getDb();
@@ -1143,15 +1201,54 @@ export async function recomputeBilling(taskId: number, month: string) {
   const task = await getCCMTaskById(taskId);
   if (!task) return;
 
+  const isBhi = task.program === "bhi";
+  const isApcm = task.program === "apcm";
   const docComplete = !!task.ccmNoteCompleted;
   const providerReviewDone = !task.providerReviewNeeded;
   const contacted = !!task.dateContacted || ["in_progress", "completed", "ready_for_billing", "billed"].includes(task.status as string);
+  const timeMet = (task.timeSpentMinutes ?? 0) >= 20;
+
+  // BHI (99484) and APCM (G0556-8) carry patient-level prerequisites beyond a
+  // completed note. Load the patient to check them. Key difference: APCM is NOT
+  // time-based (no 20-min rule) — it's a bundled service billed by complexity.
+  const patient = (isBhi || isApcm) ? await getPatientById(task.patientId) : undefined;
+  const lastVisit = patient?.lastOfficeVisit ? new Date(patient.lastOfficeVisit) : null;
+  const twelveMonthsAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+  const threeYearsAgo = new Date(Date.now() - 3 * 365 * 24 * 60 * 60 * 1000);
+  let consentObtained = true, initiatingVisitOnFile = true, carePlanDocumented = docComplete;
+  if (isBhi) {
+    consentObtained = patient?.bhiConsentStatus === "consented";
+    initiatingVisitOnFile = !!(patient?.bhiInitiatingVisitDate || (lastVisit && lastVisit >= twelveMonthsAgo));
+    carePlanDocumented = !!(patient?.bhiCarePlan && String(patient.bhiCarePlan).trim().length > 0);
+  } else if (isApcm) {
+    consentObtained = patient?.apcmConsentStatus === "consented";
+    // APCM initiating visit: within 3 years (vs 12 months for BHI).
+    initiatingVisitOnFile = !!(patient?.apcmInitiatingVisitDate || (lastVisit && lastVisit >= threeYearsAgo));
+    carePlanDocumented = !!(patient?.apcmCarePlan && String(patient.apcmCarePlan).trim().length > 0);
+  }
+
   let billingStatus:
     | "not_started" | "in_progress" | "documentation_incomplete"
     | "provider_review_pending" | "ready_for_billing" | "billed"
     | "denied" | "needs_correction" = "not_started";
+  // APCM is SUPPRESSED for the month once the patient's CCM is completed — its task
+  // is retired to "inactive" (see the CCM reconciliation below) and must not bill.
+  const apcmSuppressed = isApcm && ["inactive", "cancelled", "declined_ccm"].includes(task.status as string);
+  // Program readiness:
+  //  • CCM  — completed note + provider review (+ the ≥20-min time gate above)
+  //  • BHI  — every 99484 gate incl. the 20-min threshold
+  //  • APCM — NON-time-based & AUTO-billing: consent + initiating visit + care plan
+  //           on file, and NOT suppressed by a completed CCM this month. No note/
+  //           time required — APCM is a monthly bundle, not a per-call service.
+  const ready =
+    isBhi ? (docComplete && providerReviewDone && timeMet && consentObtained && initiatingVisitOnFile && carePlanDocumented)
+    : isApcm ? (!apcmSuppressed && consentObtained && initiatingVisitOnFile && carePlanDocumented)
+    : (docComplete && providerReviewDone);
   if (task.status === "billed") billingStatus = "billed";
-  else if (docComplete && providerReviewDone) billingStatus = "ready_for_billing";
+  else if (isApcm && apcmSuppressed) billingStatus = "not_started"; // CCM billed this month → no APCM
+  else if (ready) billingStatus = "ready_for_billing";
+  else if (isApcm) billingStatus = "documentation_incomplete"; // needs consent / initiating visit / care plan
+  else if (isBhi && docComplete && providerReviewDone) billingStatus = "documentation_incomplete";
   else if (task.status === "documentation_incomplete") billingStatus = "documentation_incomplete";
   else if (task.providerReviewNeeded) billingStatus = "provider_review_pending";
   else if (contacted) billingStatus = "in_progress";
@@ -1161,13 +1258,18 @@ export async function recomputeBilling(taskId: number, month: string) {
     ccmTaskId: taskId,
     patientId: task.patientId,
     month,
-    // CCM 99490 requires >=20 min of documented clinical staff time in the month.
-    timeThresholdMet: (task.timeSpentMinutes ?? 0) >= 20,
+    program: task.program as "ccm" | "bhi" | "apcm",
+    // CCM bills 99490, BHI 99484, APCM a complexity G-code (G0556/57/58).
+    cptCode: isBhi ? "99484" : isApcm ? apcmCptFor(patient?.apcmLevel) : "99490",
+    // APCM is not time-based, so the time gate never blocks it.
+    timeThresholdMet: isApcm ? true : timeMet,
     documentationComplete: docComplete,
     providerAssociated: true,
-    carePlanReviewed: docComplete,
+    carePlanReviewed: carePlanDocumented,
     noMissingFields: docComplete,
     providerReviewCompleted: providerReviewDone,
+    consentObtained,
+    initiatingVisitOnFile,
     billingStatus,
   };
   if (existing.length) {
@@ -1178,12 +1280,32 @@ export async function recomputeBilling(taskId: number, month: string) {
 
   // keep task.billingReady in sync
   await db.update(ccmTasks).set({ billingReady: billingStatus === "ready_for_billing" }).where(eq(ccmTasks.id, taskId));
+
+  // CCM-first / APCM-fallback reconciliation: a patient can never bill both CCM and
+  // APCM in the same month. When their CCM is completed for the month, drop them off
+  // APCM (retire the APCM task to "inactive"); if the CCM is reopened, restore APCM.
+  if (task.program === "ccm") {
+    const ccmDone = ["completed", "ready_for_billing", "billed"].includes(task.status as string);
+    const apcmTask = await getCCMTaskByPatientAndMonth(task.patientId, month, "apcm");
+    if (apcmTask) {
+      if (ccmDone && !["inactive", "billed"].includes(apcmTask.status as string)) {
+        await db.update(ccmTasks).set({ status: "inactive", updatedAt: new Date() }).where(eq(ccmTasks.id, apcmTask.id));
+        await recomputeBilling(apcmTask.id, month);
+      } else if (!ccmDone && apcmTask.status === "inactive") {
+        const p = await getPatientById(task.patientId);
+        if (p?.ccmEnrollmentStatus === "active") {
+          await db.update(ccmTasks).set({ status: p.assignedStaffId ? "assigned" : "not_started", updatedAt: new Date() }).where(eq(ccmTasks.id, apcmTask.id));
+          await recomputeBilling(apcmTask.id, month);
+        }
+      }
+    }
+  }
 }
 
 /** Create a notification */
 export async function createNotification(n: {
   userId: number;
-  type: "urgent_symptom" | "escalation" | "missing_documentation" | "not_reached" | "billing_ready";
+  type: "urgent_symptom" | "escalation" | "missing_documentation" | "not_reached" | "billing_ready" | "refill_request" | "refill_decision";
   title: string;
   content?: string;
   relatedPatientId?: number | null;
@@ -1225,7 +1347,7 @@ export async function getFirstUserByRole(role: string) {
 }
 
 /** Update a user's role (admin-managed access control). */
-export async function setUserRole(userId: number, role: "admin" | "staff" | "provider" | "billing" | "front_desk" | "user") {
+export async function setUserRole(userId: number, role: "admin" | "staff" | "provider" | "billing" | "front_desk" | "medical_assistant" | "user") {
   const db = await getDb();
   if (!db) return;
   await db.update(users).set({ role }).where(eq(users.id, userId));
@@ -1274,7 +1396,7 @@ const LOCAL_PREFIX = "local:";
 export async function createMember(input: {
   email: string;
   name?: string | null;
-  role: "admin" | "staff" | "provider" | "billing" | "front_desk" | "user";
+  role: "admin" | "staff" | "provider" | "billing" | "front_desk" | "medical_assistant" | "user";
   clinicLocation?: string | null;
   passwordHash?: string | null;
 }): Promise<{ created: boolean; pending: boolean }> {
@@ -1321,6 +1443,40 @@ export async function createMember(input: {
     mustChangePassword: hasPassword ? true : false,
   });
   return { created: true, pending: !hasPassword };
+}
+
+/**
+ * Give a provider (providers row) their own secure login: creates or updates a users
+ * row with role=provider + a password, and links providers.userId so the provider
+ * portal can resolve the logged-in user back to their provider record + patients.
+ */
+export async function createProviderLogin(providerId: number, email: string, passwordHash: string): Promise<{ success: boolean; userId?: number; error?: string }> {
+  const db = await getDb();
+  if (!db) return { success: false, error: "Database not available" };
+  const normEmail = email.trim().toLowerCase();
+  const prov = await getProviderById(providerId);
+  if (!prov) return { success: false, error: "Provider not found" };
+
+  let userId: number;
+  const existing = await db.select().from(users).where(eq(users.email, normEmail)).limit(1);
+  if (existing.length) {
+    const row = existing[0];
+    const set: Record<string, unknown> = {
+      role: "provider", name: prov.name, passwordHash, passwordSetAt: new Date(),
+      mustChangePassword: true, loginMethod: "password", updatedAt: new Date(),
+    };
+    if (row.openId.startsWith(PENDING_PREFIX)) set.openId = `${LOCAL_PREFIX}${normEmail}`;
+    await db.update(users).set(set as any).where(eq(users.id, row.id));
+    userId = row.id;
+  } else {
+    const res: any = await db.insert(users).values({
+      openId: `${LOCAL_PREFIX}${normEmail}`, email: normEmail, name: prov.name, role: "provider",
+      loginMethod: "password", passwordHash, passwordSetAt: new Date(), mustChangePassword: true,
+    });
+    userId = res?.[0]?.insertId as number;
+  }
+  await db.update(providers).set({ userId }).where(eq(providers.id, providerId));
+  return { success: true, userId };
 }
 
 /** Look up a worker by email (case-insensitive). Used for password login. */
@@ -1504,6 +1660,10 @@ export type BulkPatientRow = {
   /** Canonical worklist status (from matchWorklistStatus) for this month's task. */
   worklistStatus?: string | null;
   ccmEnrollmentStatus?: "active" | "inactive" | "declined" | "transferred";
+  /** Behavioral Health Integration (BHI 99484) enrollment for this import row. */
+  bhiEnroll?: boolean;
+  bhiConditions?: string[];
+  bhiConsentStatus?: "consented" | "pending" | "declined";
 };
 
 /**
@@ -1537,6 +1697,9 @@ export async function bulkInsertPatients(rows: BulkPatientRow[], month?: string)
     nextAppointment: r.nextAppointment ?? null,
     lastCCMDate: r.lastCCMDate ?? null,
     assignedStaffId: r.assignedStaffId ?? null,
+    bhiEnrollmentStatus: (r.bhiEnroll ? "active" : "not_enrolled") as "active" | "not_enrolled",
+    bhiConditions: r.bhiConditions || [],
+    bhiConsentStatus: r.bhiConsentStatus || "pending",
   }));
   const res: any = await db.insert(patients).values(values);
   // A single multi-row INSERT yields consecutive auto-increment ids beginning at
@@ -1564,6 +1727,21 @@ export async function bulkInsertPatients(rows: BulkPatientRow[], month?: string)
         };
       });
     if (taskValues.length) await db.insert(ccmTasks).values(taskValues);
+
+    // Separately create BHI (99484) tasks for rows enrolled in BHI — independent of
+    // the CCM enrollment above, so a patient can be imported into BHI, CCM, or both.
+    const bhiTaskValues = rows
+      .map((r, i) => ({ r, i }))
+      .filter(({ r }) => r.bhiEnroll)
+      .map(({ r, i }) => ({
+        patientId: firstId + i,
+        month,
+        program: "bhi" as const,
+        assignedStaffId: r.assignedStaffId ?? null,
+        priorityLevel: "medium" as const,
+        status: (r.assignedStaffId ? "assigned" : "not_started") as "assigned" | "not_started",
+      }));
+    if (bhiTaskValues.length) await db.insert(ccmTasks).values(bhiTaskValues);
   }
   return values.length;
 }
@@ -1597,6 +1775,251 @@ export async function updatePatientRPM(
   if (!db) return undefined;
   await db.update(patients).set(data as any).where(eq(patients.id, patientId));
   return getPatientById(patientId);
+}
+
+/**
+ * Enroll / update a patient's Behavioral Health Integration (BHI, CPT 99484)
+ * status. Independent of CCM. Setting it active spins up this month's BHI worklist
+ * task; setting it non-active retires the current BHI task off the worklist.
+ */
+export async function updatePatientBHI(
+  patientId: number,
+  data: {
+    bhiEnrollmentStatus?: "not_enrolled" | "active" | "inactive" | "declined" | "transferred";
+    bhiConditions?: string[];
+    bhiConsentStatus?: "consented" | "pending" | "declined";
+    bhiConsentDate?: Date | null;
+    bhiInitiatingVisitDate?: Date | null;
+    bhiCarePlan?: string | null;
+    assignedStaffId?: number | null;
+  },
+  month: string
+) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const patch: Record<string, unknown> = { updatedAt: new Date() };
+  if (data.bhiEnrollmentStatus !== undefined) patch.bhiEnrollmentStatus = data.bhiEnrollmentStatus;
+  if (data.bhiConditions !== undefined) patch.bhiConditions = data.bhiConditions;
+  if (data.bhiConsentStatus !== undefined) patch.bhiConsentStatus = data.bhiConsentStatus;
+  if (data.bhiConsentDate !== undefined) patch.bhiConsentDate = data.bhiConsentDate;
+  if (data.bhiInitiatingVisitDate !== undefined) patch.bhiInitiatingVisitDate = data.bhiInitiatingVisitDate;
+  if (data.bhiCarePlan !== undefined) patch.bhiCarePlan = data.bhiCarePlan;
+  // Allow assigning a coordinator at enrollment time (used by the BHI panel).
+  if (data.assignedStaffId !== undefined) patch.assignedStaffId = data.assignedStaffId;
+  await db.update(patients).set(patch as any).where(eq(patients.id, patientId));
+
+  if (data.bhiEnrollmentStatus === "active") {
+    // Create (or reactivate) this month's BHI task.
+    await ensureMonthlyTask(patientId, month, "bhi");
+  } else if (data.bhiEnrollmentStatus) {
+    // Any non-active status: retire the current BHI task off the worklist.
+    const task = await getCCMTaskByPatientAndMonth(patientId, month, "bhi");
+    if (task && !["completed", "ready_for_billing", "billed"].includes(task.status as string)) {
+      await db.update(ccmTasks)
+        .set({ status: data.bhiEnrollmentStatus === "declined" ? "declined_ccm" : "inactive", updatedAt: new Date() })
+        .where(eq(ccmTasks.id, task.id));
+    }
+  }
+  // Consent / initiating-visit / care-plan changes affect 99484 billing eligibility,
+  // so recompute this month's BHI billing record to reflect the new compliance state.
+  const bhiTask = await getCCMTaskByPatientAndMonth(patientId, month, "bhi");
+  if (bhiTask) await recomputeBilling(bhiTask.id, month);
+  return getPatientById(patientId);
+}
+
+/**
+ * Bulk-enroll existing patients in BHI (99484). Sets each to active, optionally
+ * applies a shared set of behavioral conditions + consent, and creates this
+ * month's BHI worklist task for each. Returns how many were enrolled.
+ */
+export async function bulkEnrollPatientsBHI(
+  ids: number[],
+  opts: { bhiConditions?: string[]; bhiConsentStatus?: "consented" | "pending" | "declined" },
+  month: string
+): Promise<number> {
+  const db = await getDb();
+  if (!db || ids.length === 0) return 0;
+  const patch: Record<string, unknown> = { bhiEnrollmentStatus: "active", updatedAt: new Date() };
+  if (opts.bhiConditions !== undefined) patch.bhiConditions = opts.bhiConditions;
+  if (opts.bhiConsentStatus !== undefined) patch.bhiConsentStatus = opts.bhiConsentStatus;
+  await db.update(patients).set(patch as any).where(inArray(patients.id, ids));
+  // Create each patient's BHI task for the month (skips any that already have one).
+  for (const id of ids) await ensureMonthlyTask(id, month, "bhi");
+  return ids.length;
+}
+
+/**
+ * Update a patient's APCM setup (QMB, consent, initiating visit, care plan). APCM
+ * covers the SAME active patients as CCM automatically, so this does NOT toggle a
+ * separate enrollment — it recomputes the complexity level and this month's APCM
+ * billing readiness. A completed CCM suppresses APCM for the month (see
+ * recomputeBilling), so the two never bill together.
+ */
+export async function updatePatientAPCM(
+  patientId: number,
+  data: {
+    apcmEnrollmentStatus?: "not_enrolled" | "active" | "inactive" | "declined" | "transferred";
+    isQMB?: boolean;
+    apcmConsentStatus?: "consented" | "pending" | "declined";
+    apcmConsentDate?: Date | null;
+    apcmInitiatingVisitDate?: Date | null;
+    apcmCarePlan?: string | null;
+    assignedStaffId?: number | null;
+  },
+  month: string
+) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const current = await getPatientById(patientId);
+  if (!current) return undefined;
+
+  const patch: Record<string, unknown> = { updatedAt: new Date() };
+  if (data.apcmEnrollmentStatus !== undefined) patch.apcmEnrollmentStatus = data.apcmEnrollmentStatus;
+  if (data.isQMB !== undefined) patch.isQMB = data.isQMB;
+  if (data.apcmConsentStatus !== undefined) patch.apcmConsentStatus = data.apcmConsentStatus;
+  if (data.apcmConsentDate !== undefined) patch.apcmConsentDate = data.apcmConsentDate;
+  if (data.apcmInitiatingVisitDate !== undefined) patch.apcmInitiatingVisitDate = data.apcmInitiatingVisitDate;
+  if (data.apcmCarePlan !== undefined) patch.apcmCarePlan = data.apcmCarePlan;
+  if (data.assignedStaffId !== undefined) patch.assignedStaffId = data.assignedStaffId;
+
+  // Recompute complexity level from conditions + (possibly new) QMB status.
+  const qmb = data.isQMB ?? (current.isQMB ?? false);
+  const conditionCount = ((current.chronicConditions as string[]) || []).length;
+  patch.apcmLevel = computeApcmLevel(conditionCount, !!qmb);
+
+  await db.update(patients).set(patch as any).where(eq(patients.id, patientId));
+
+  // APCM covers active CCM patients automatically (mirror). Ensure this month's APCM
+  // task exists so its billing readiness tracks — but DON'T reactivate one that a
+  // completed CCM suppressed (only the CCM reconciliation restores it).
+  let apcmTask = await getCCMTaskByPatientAndMonth(patientId, month, "apcm");
+  if (!apcmTask && current.ccmEnrollmentStatus === "active") {
+    await db.insert(ccmTasks).values({
+      patientId, month, program: "apcm",
+      assignedStaffId: current.assignedStaffId ?? null,
+      priorityLevel: (current.priorityLevel || current.riskLevel || "medium") as "high" | "medium" | "low",
+      status: current.assignedStaffId ? "assigned" : "not_started",
+    });
+    apcmTask = await getCCMTaskByPatientAndMonth(patientId, month, "apcm");
+  }
+  if (apcmTask) await recomputeBilling(apcmTask.id, month);
+  return getPatientById(patientId);
+}
+
+/**
+ * Bulk APCM setup for a set of patients (e.g. capture consent across a cohort).
+ * Each is re-stratified from its own conditions/QMB. Returns how many were touched.
+ */
+export async function bulkEnrollAPCM(
+  ids: number[],
+  opts: { apcmConsentStatus?: "consented" | "pending" | "declined" },
+  month: string
+): Promise<number> {
+  if (!ids.length) return 0;
+  for (const id of ids) {
+    await updatePatientAPCM(id, { apcmEnrollmentStatus: "active", apcmConsentStatus: opts.apcmConsentStatus }, month);
+  }
+  return ids.length;
+}
+
+/**
+ * Bulk-apply the standard APCM care plan (personalized with each patient's name,
+ * conditions, and provider) to active-CCM patients who don't have one yet. Bounded
+ * per call to stay under the API-gateway timeout — returns how many were filled and
+ * how many still remain, so the UI can apply the rest in another click.
+ */
+export async function applyStandardApcmCarePlan(opts: { limit?: number } = {}): Promise<{ applied: number; remaining: number }> {
+  const db = await getDb();
+  if (!db) return { applied: 0, remaining: 0 };
+  const limit = Math.min(opts.limit ?? 400, 800);
+  const missing = and(eq(patients.ccmEnrollmentStatus, "active"), sql`CHAR_LENGTH(COALESCE(${patients.apcmCarePlan}, '')) = 0`);
+  const rows = await db
+    .select({ id: patients.id, name: patients.name, chronicConditions: patients.chronicConditions, providerName: providers.name })
+    .from(patients)
+    .leftJoin(providers, eq(patients.providerId, providers.id))
+    .where(missing)
+    .limit(limit);
+  for (const r of rows) {
+    const plan = buildStandardApcmCarePlan({ name: r.name, conditions: (r.chronicConditions as string[]) || [], providerName: r.providerName });
+    await db.update(patients).set({ apcmCarePlan: plan, updatedAt: new Date() }).where(eq(patients.id, r.id));
+  }
+  const [cnt] = await db.select({ c: sql<number>`COUNT(*)` }).from(patients).where(missing);
+  return { applied: rows.length, remaining: Number(cnt?.c ?? 0) };
+}
+
+/**
+ * APCM management overview for a month: every active-CCM patient (the APCM-covered
+ * set) with their complexity level, consent/care-plan/visit setup, this-month APCM
+ * task + billing state, and whether they're suppressed by a completed CCM. Returns
+ * a filtered/paginated page plus whole-panel stats so the APCM tab can show the
+ * fallback list, the "needs setup" gaps, and what's ready to bill.
+ */
+export async function getApcmOverview(
+  month: string,
+  filters: { category?: "ready" | "needs_setup" | "ccm_done"; assignedStaffId?: number; search?: string; limit?: number; offset?: number } = {}
+) {
+  const db = await getDb();
+  if (!db) return { rows: [], total: 0, stats: { total: 0, ready: 0, needsSetup: 0, ccmDone: 0, consented: 0, withCarePlan: 0 } };
+  const staffAlias = alias(users, "apcmStaff");
+  const apcmT = alias(ccmTasks, "apcmOT");
+  const ccmT = alias(ccmTasks, "apcmCT");
+  const bill = alias(billingRecords, "apcmOB");
+  const conds: any[] = [eq(patients.ccmEnrollmentStatus, "active")];
+  if (filters.assignedStaffId) conds.push(eq(patients.assignedStaffId, filters.assignedStaffId));
+
+  const all = await db
+    .select({
+      id: patients.id,
+      name: patients.name,
+      dateOfBirth: patients.dateOfBirth,
+      chronicConditions: patients.chronicConditions,
+      isQMB: patients.isQMB,
+      apcmLevel: patients.apcmLevel,
+      apcmConsentStatus: patients.apcmConsentStatus,
+      apcmInitiatingVisitDate: patients.apcmInitiatingVisitDate,
+      lastOfficeVisit: patients.lastOfficeVisit,
+      carePlanLen: sql<number>`CHAR_LENGTH(COALESCE(${patients.apcmCarePlan}, ''))`,
+      staffName: staffAlias.name,
+      apcmStatus: apcmT.status,
+      ccmStatus: ccmT.status,
+      billingStatus: bill.billingStatus,
+      cptCode: bill.cptCode,
+    })
+    .from(patients)
+    .leftJoin(apcmT, and(eq(apcmT.patientId, patients.id), eq(apcmT.month, month), eq(apcmT.program, "apcm")))
+    .leftJoin(ccmT, and(eq(ccmT.patientId, patients.id), eq(ccmT.month, month), eq(ccmT.program, "ccm")))
+    .leftJoin(bill, and(eq(bill.patientId, patients.id), eq(bill.month, month), eq(bill.program, "apcm")))
+    .leftJoin(staffAlias, eq(patients.assignedStaffId, staffAlias.id))
+    .where(and(...conds))
+    .orderBy(patients.name);
+
+  const threeYrs = Date.now() - 3 * 365 * 24 * 60 * 60 * 1000;
+  const enrich = all.map((r) => {
+    const hasCarePlan = (r.carePlanLen ?? 0) > 0;
+    const consented = r.apcmConsentStatus === "consented";
+    const hasVisit = !!(r.apcmInitiatingVisitDate || (r.lastOfficeVisit && new Date(r.lastOfficeVisit).getTime() >= threeYrs));
+    const ccmDone = r.apcmStatus === "inactive"; // CCM completed → APCM suppressed
+    const ready = r.billingStatus === "ready_for_billing";
+    const category: "ready" | "needs_setup" | "ccm_done" = ccmDone ? "ccm_done" : ready ? "ready" : "needs_setup";
+    return { ...r, hasCarePlan, consented, hasVisit, category };
+  });
+
+  const stats = {
+    total: enrich.length,
+    ready: enrich.filter((r) => r.category === "ready").length,
+    needsSetup: enrich.filter((r) => r.category === "needs_setup").length,
+    ccmDone: enrich.filter((r) => r.category === "ccm_done").length,
+    consented: enrich.filter((r) => r.consented).length,
+    withCarePlan: enrich.filter((r) => r.hasCarePlan).length,
+  };
+
+  let filtered = enrich;
+  if (filters.category) filtered = filtered.filter((r) => r.category === filters.category);
+  if (filters.search) { const s = filters.search.toLowerCase(); filtered = filtered.filter((r) => r.name.toLowerCase().includes(s)); }
+  const total = filtered.length;
+  const offset = filters.offset ?? 0;
+  const limit = Math.min(filters.limit ?? 100, 500);
+  return { rows: filtered.slice(offset, offset + limit), total, stats };
 }
 
 // ---------------------------------------------------------------------------
@@ -1736,4 +2159,265 @@ function isoYearWeek(d: Date): string {
   const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
   const weekNo = Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
   return `${date.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+}
+
+// ---------------------------------------------------------------------------
+// Medication refill requests (coordinator -> provider)
+// ---------------------------------------------------------------------------
+
+/** The provider row linked to a given user login (provider portal), if any. */
+export async function getProviderByUserId(userId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(providers).where(eq(providers.userId, userId)).limit(1);
+  return rows[0];
+}
+
+/** Create a refill request and notify the target provider's login (if they have one). */
+export async function createRefillRequest(input: {
+  patientId: number;
+  providerId: number | null;
+  requestedByUserId: number;
+  ccmTaskId?: number | null;
+  medications: { name: string; note?: string }[];
+  note?: string;
+}) {
+  const db = await getDb();
+  if (!db) return { id: 0 };
+  const res: any = await db.insert(refillRequests).values({
+    patientId: input.patientId,
+    providerId: input.providerId ?? null,
+    requestedByUserId: input.requestedByUserId,
+    ccmTaskId: input.ccmTaskId ?? null,
+    medications: input.medications,
+    note: input.note ?? null,
+    status: "pending",
+  });
+  const id = res?.[0]?.insertId as number | undefined;
+
+  // Notify the provider's login, if the provider is linked to a user account.
+  if (input.providerId) {
+    const prov = await getProviderById(input.providerId);
+    const patient = await getPatientById(input.patientId);
+    if (prov?.userId) {
+      const medNames = input.medications.map((m) => m.name).join(", ");
+      await createNotification({
+        userId: prov.userId,
+        type: "refill_request",
+        title: "New refill request",
+        content: `${patient?.name ?? "A patient"} — ${medNames || "medication refill"}`,
+        relatedPatientId: input.patientId,
+      });
+    }
+  }
+  return { id: id ?? 0 };
+}
+
+/** Refill requests routed to a provider (enriched), optionally filtered by status. */
+export async function getRefillRequestsForProvider(providerId: number, status?: string) {
+  const db = await getDb();
+  if (!db) return [];
+  const staffAlias = alias(users, "requester");
+  const conditions = [eq(refillRequests.providerId, providerId)];
+  if (status) conditions.push(eq(refillRequests.status, status as any));
+  return db
+    .select({ req: refillRequests, patient: patients, requesterName: staffAlias.name })
+    .from(refillRequests)
+    .innerJoin(patients, eq(refillRequests.patientId, patients.id))
+    .leftJoin(staffAlias, eq(refillRequests.requestedByUserId, staffAlias.id))
+    .where(and(...conditions))
+    .orderBy(desc(refillRequests.createdAt));
+}
+
+/** All refill requests for a patient (for the patient page history). */
+export async function getRefillRequestsForPatient(patientId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const reqAlias = alias(users, "requester2");
+  const decAlias = alias(users, "decider");
+  return db
+    .select({ req: refillRequests, requesterName: reqAlias.name, deciderName: decAlias.name })
+    .from(refillRequests)
+    .leftJoin(reqAlias, eq(refillRequests.requestedByUserId, reqAlias.id))
+    .leftJoin(decAlias, eq(refillRequests.decidedByUserId, decAlias.id))
+    .where(eq(refillRequests.patientId, patientId))
+    .orderBy(desc(refillRequests.createdAt));
+}
+
+/** Count of a provider's pending refill requests (portal badge). */
+export async function getPendingRefillCountForProvider(providerId: number) {
+  const db = await getDb();
+  if (!db) return 0;
+  const r = await db.select({ c: sql<number>`COUNT(*)` }).from(refillRequests)
+    .where(and(eq(refillRequests.providerId, providerId), eq(refillRequests.status, "pending")));
+  return Number(r[0]?.c ?? 0);
+}
+
+/** Provider decides a refill request; notifies the coordinator who sent it.
+ *  When mustBelongToProviderId is given, the request must be routed to that provider. */
+export async function decideRefillRequest(id: number, decidedByUserId: number, status: "approved" | "schedule_visit" | "denied", providerNote?: string, mustBelongToProviderId?: number) {
+  const db = await getDb();
+  if (!db) return { success: false };
+  const existing = await db.select().from(refillRequests).where(eq(refillRequests.id, id)).limit(1);
+  const req = existing[0];
+  if (!req) return { success: false };
+  if (mustBelongToProviderId !== undefined && req.providerId !== mustBelongToProviderId) return { success: false };
+  await db.update(refillRequests).set({
+    status, providerNote: providerNote ?? null, decidedByUserId, decidedAt: new Date(), updatedAt: new Date(),
+  }).where(eq(refillRequests.id, id));
+
+  // Notify the coordinator who sent it.
+  if (req.requestedByUserId) {
+    const patient = await getPatientById(req.patientId);
+    const label = status === "approved" ? "approved" : status === "schedule_visit" ? "marked for a visit" : "declined";
+    await createNotification({
+      userId: req.requestedByUserId,
+      type: "refill_decision",
+      title: `Refill ${label}`,
+      content: `${patient?.name ?? "Patient"}: refill ${label}${providerNote ? ` — ${providerNote}` : ""}`,
+      relatedPatientId: req.patientId,
+    });
+  }
+  return { success: true };
+}
+
+// ============================================================================
+// Reach Out — outbound appointment-scheduling call campaign (shared pool)
+// ============================================================================
+
+/** Paginated, filtered contact list. Un-called (and callback-requested) surface first
+ *  so a coordinator working the shared pool always gets the next person to call. */
+export async function getReachOutContacts(filters: {
+  callStatus?: string; outcome?: string; search?: string; uncontactedOnly?: boolean; limit?: number; offset?: number;
+} = {}) {
+  const db = await getDb();
+  if (!db) return { rows: [], total: 0 };
+  const caller = alias(users, "roCaller");
+  const conds: any[] = [];
+  if (filters.uncontactedOnly) conds.push(eq(reachOutContacts.callStatus, "not_called"));
+  else if (filters.callStatus) conds.push(eq(reachOutContacts.callStatus, filters.callStatus as any));
+  if (filters.outcome) conds.push(eq(reachOutContacts.outcome, filters.outcome as any));
+  if (filters.search) {
+    const q = `%${filters.search}%`;
+    conds.push(sql`(${reachOutContacts.name} LIKE ${q} OR ${reachOutContacts.phoneNumber} LIKE ${q})`);
+  }
+  const where = conds.length ? and(...conds) : undefined;
+  const limit = Math.min(filters.limit ?? 100, 500);
+  const offset = filters.offset ?? 0;
+
+  const rows = await db
+    .select({ c: reachOutContacts, callerName: caller.name })
+    .from(reachOutContacts)
+    .leftJoin(caller, eq(reachOutContacts.lastCalledByStaffId, caller.id))
+    .where(where)
+    .orderBy(
+      // Callable contacts first: anyone WITH a phone before the phone-less (who can't
+      // be dialed), then un-called before callbacks before already-worked, then id.
+      sql`(${reachOutContacts.phoneNumber} = '' OR ${reachOutContacts.phoneNumber} IS NULL)`,
+      sql`CASE ${reachOutContacts.callStatus} WHEN 'not_called' THEN 0 WHEN 'callback' THEN 1 ELSE 2 END`,
+      reachOutContacts.id,
+    )
+    .limit(limit)
+    .offset(offset);
+
+  const [cnt] = await db.select({ n: sql<number>`count(*)` }).from(reachOutContacts).where(where);
+  return { rows, total: Number(cnt?.n ?? 0) };
+}
+
+/** Campaign dashboard: totals, call-result & outcome breakdowns, per-caller productivity. */
+export async function getReachOutStats() {
+  const db = await getDb();
+  if (!db) return null;
+  const caller = alias(users, "roCaller2");
+  const [agg] = await db
+    .select({
+      total: sql<number>`count(*)`,
+      called: sql<number>`sum(${reachOutContacts.callStatus} <> 'not_called')`,
+      reached: sql<number>`sum(${reachOutContacts.callStatus} = 'reached')`,
+      noAnswer: sql<number>`sum(${reachOutContacts.callStatus} = 'no_answer')`,
+      voicemail: sql<number>`sum(${reachOutContacts.callStatus} = 'voicemail')`,
+      wrongNumber: sql<number>`sum(${reachOutContacts.callStatus} = 'wrong_number')`,
+      callback: sql<number>`sum(${reachOutContacts.callStatus} = 'callback')`,
+      doNotCall: sql<number>`sum(${reachOutContacts.callStatus} = 'do_not_call')`,
+      wantsAppt: sql<number>`sum(${reachOutContacts.outcome} = 'wants_appointment')`,
+      scheduled: sql<number>`sum(${reachOutContacts.outcome} = 'appointment_scheduled')`,
+      alreadyScheduled: sql<number>`sum(${reachOutContacts.outcome} = 'already_scheduled')`,
+      notInterested: sql<number>`sum(${reachOutContacts.outcome} = 'not_interested')`,
+      declined: sql<number>`sum(${reachOutContacts.outcome} = 'declined')`,
+    })
+    .from(reachOutContacts);
+
+  const byCaller = await db
+    .select({
+      name: caller.name,
+      calls: sql<number>`count(*)`,
+      reached: sql<number>`sum(${reachOutContacts.callStatus} = 'reached')`,
+      scheduled: sql<number>`sum(${reachOutContacts.outcome} = 'appointment_scheduled')`,
+    })
+    .from(reachOutContacts)
+    .innerJoin(caller, eq(reachOutContacts.lastCalledByStaffId, caller.id))
+    .groupBy(caller.name)
+    .orderBy(sql`count(*) DESC`);
+
+  const num = (v: any) => Number(v ?? 0);
+  return {
+    total: num(agg?.total), called: num(agg?.called), reached: num(agg?.reached),
+    noAnswer: num(agg?.noAnswer), voicemail: num(agg?.voicemail), wrongNumber: num(agg?.wrongNumber),
+    callback: num(agg?.callback), doNotCall: num(agg?.doNotCall), wantsAppt: num(agg?.wantsAppt),
+    scheduled: num(agg?.scheduled), alreadyScheduled: num(agg?.alreadyScheduled),
+    notInterested: num(agg?.notInterested), declined: num(agg?.declined),
+    byCaller: byCaller.map((r) => ({ name: r.name, calls: num(r.calls), reached: num(r.reached), scheduled: num(r.scheduled) })),
+  };
+}
+
+/** Log a call attempt: set result + outcome, append a timestamped note, stamp caller, bump attempts. */
+export async function logReachOutCall(input: {
+  id: number; callStatus: string; outcome?: string; note?: string; staffId: number; staffName?: string | null;
+}) {
+  const db = await getDb();
+  if (!db) return { success: false };
+  const rows = await db.select().from(reachOutContacts).where(eq(reachOutContacts.id, input.id)).limit(1);
+  const c = rows[0];
+  if (!c) return { success: false };
+  let notes = c.notes ?? "";
+  if (input.note && input.note.trim()) {
+    const stamp = `${new Date().toISOString().slice(0, 10)}${input.staffName ? " · " + input.staffName : ""}`;
+    notes = `${notes ? notes + "\n" : ""}[${stamp}] ${input.note.trim()}`;
+  }
+  await db.update(reachOutContacts).set({
+    callStatus: input.callStatus as any,
+    outcome: (input.outcome ?? c.outcome) as any,
+    notes,
+    attempts: (c.attempts ?? 0) + 1,
+    lastCalledAt: new Date(),
+    lastCalledByStaffId: input.staffId,
+    updatedAt: new Date(),
+  }).where(eq(reachOutContacts.id, input.id));
+  return { success: true };
+}
+
+/** Bulk import the campaign list (chunked). */
+export async function bulkInsertReachOut(
+  rows: { name: string; phoneNumber: string; dateOfBirth?: Date | null; insurance?: string | null; language?: string | null }[],
+  campaign = "insurance-outreach",
+): Promise<number> {
+  const db = await getDb();
+  if (!db || !rows.length) return 0;
+  let n = 0;
+  const chunk = 200;
+  for (let i = 0; i < rows.length; i += chunk) {
+    const slice = rows.slice(i, i + chunk).map((r) => ({
+      name: r.name, phoneNumber: r.phoneNumber || "", dateOfBirth: r.dateOfBirth ?? null,
+      insurance: r.insurance ?? null, language: r.language ?? null, campaign,
+    }));
+    await db.insert(reachOutContacts).values(slice);
+    n += slice.length;
+  }
+  return n;
+}
+
+export async function deleteReachOutContact(id: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(reachOutContacts).where(eq(reachOutContacts.id, id));
 }

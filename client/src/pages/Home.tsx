@@ -9,9 +9,10 @@ import { toast } from "sonner";
 const ROLE_HOME: Record<string, string> = {
   admin: "/admin",
   staff: "/worklist",
-  provider: "/escalations",
+  provider: "/refill-requests",
   billing: "/billing",
   front_desk: "/follow-ups",
+  medical_assistant: "/my-day",
   user: "/admin",
 };
 

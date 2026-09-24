@@ -12,6 +12,7 @@ const ROLE_HOME: Record<string, string> = {
   provider: "/escalations",
   billing: "/billing",
   front_desk: "/follow-ups",
+  medical_assistant: "/my-day",
   user: "/admin",
 };
 

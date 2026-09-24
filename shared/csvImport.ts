@@ -36,6 +36,9 @@ export type ParsedPatientRow = {
   completed?: boolean; // whether this row represents a completed CCM
   enrollmentStatus?: "active" | "inactive"; // from an Active/Inactive column
   notes?: string;
+  // Behavioral Health Integration (BHI 99484) columns, if present in the file.
+  bhiEnroll?: boolean;
+  bhiConditions?: string[];
   errors: string[];
 };
 
@@ -304,6 +307,13 @@ export function parsePatientCsv(
       row.wellnessCallStatus = statusRaw || undefined;
       row.completed = statusRaw ? isCompletedStatus(statusRaw) : undefined;
     }
+
+    // Optional BHI (99484) columns, recognized in any header-based template:
+    // "BHI" / "BHI Enrolled" (yes/no) and "BHI Conditions" (;- or |-separated).
+    const bhiRaw = getAny(cols, ["bhi", "bhienrolled", "behavioralhealth", "bhieligible"]);
+    row.bhiEnroll = parseBool(bhiRaw);
+    const bhiCondRaw = getAny(cols, ["bhiconditions", "behavioralconditions", "bhicondition"]);
+    row.bhiConditions = bhiCondRaw ? bhiCondRaw.split(/[;|]/).map((c) => c.trim()).filter(Boolean) : undefined;
 
     // Only the patient name is required — all other info is optional and can be
     // completed manually after import.

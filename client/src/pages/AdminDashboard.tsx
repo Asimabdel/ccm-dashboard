@@ -6,7 +6,7 @@ import { useLocation } from "wouter";
 import { toast } from "sonner";
 import {
   Users, ClipboardCheck, PhoneOff, AlertTriangle, TrendingUp, Database, Loader2,
-  ArrowUpRight, ArrowDownRight, Receipt, ArrowRight, CheckCircle2, ClipboardList, CalendarClock,
+  ArrowUpRight, ArrowDownRight, Receipt, ArrowRight, CheckCircle2, ClipboardList, CalendarClock, Brain, Activity,
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
@@ -106,6 +106,8 @@ export default function AdminDashboard() {
   const seedStatus = trpc.admin.seedStatus.useQuery(undefined, { enabled: !!user });
   const stats = trpc.admin.stats.useQuery({ month }, { enabled: isAdmin });
   const prevStats = trpc.admin.stats.useQuery({ month: prevMonthStr(month) }, { enabled: isAdmin });
+  const bhiStats = trpc.admin.stats.useQuery({ month, program: "bhi" }, { enabled: isAdmin });
+  const apcmStats = trpc.admin.stats.useQuery({ month, program: "apcm" }, { enabled: isAdmin });
   const staffPerf = trpc.admin.staffPerformance.useQuery({ month }, { enabled: isAdmin });
   const clinicPerf = trpc.admin.clinicPerformance.useQuery({ month }, { enabled: isAdmin });
   const trend = trpc.admin.dailyTrend.useQuery({ month }, { enabled: isAdmin });
@@ -186,6 +188,90 @@ export default function AdminDashboard() {
         <StatCard index={5} icon={TrendingUp} label="In Progress" value={s?.inProgress ?? "—"} sub="Currently being worked" delta={makeDelta(s?.inProgress, ps?.inProgress, true)} />
         <StatCard index={6} icon={AlertTriangle} label="Needs Review" value={s?.needsReview ?? "—"} sub="Flagged for provider" tone="warn" delta={makeDelta(s?.needsReview, ps?.needsReview, false)} />
       </div>
+
+      {/* Behavioral Health Integration (BHI · 99484) — tracked separately from CCM */}
+      {(() => {
+        const b = bhiStats.data;
+        const active = b?.totalActivePatients ?? 0;
+        const bhiCards = [
+          { label: "BHI Patients", value: b?.totalActivePatients ?? 0, sub: `${b?.totalTasks ?? 0} tasks this month`, tone: "default" as const },
+          { label: "Completed", value: b?.completed ?? 0, sub: `${b?.completionPct ?? 0}% completion`, tone: "good" as const },
+          { label: "Billable (≥20 min)", value: b?.billable ?? 0, sub: `${Math.round((b?.totalMinutes || 0) / 60)}h logged`, tone: ((b?.billable ?? 0) < (b?.completed ?? 0) ? "warn" : "good") as "warn" | "good" },
+          { label: "Not Reached", value: b?.notReached ?? 0, sub: "No answer / voicemail", tone: ((b?.notReached ?? 0) ? "warn" : "default") as "warn" | "default" },
+        ];
+        const valueTone = { default: "text-slate-900", good: "text-emerald-600", warn: "text-amber-600" };
+        return (
+          <div className="mt-6 rounded-3xl border border-violet-100 bg-gradient-to-br from-violet-50/70 to-white p-6">
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-violet-100 flex items-center justify-center"><Brain size={18} className="text-violet-600" /></div>
+                <div>
+                  <h3 className="font-bold text-slate-900 tracking-tight leading-tight">Behavioral Health Integration</h3>
+                  <p className="text-xs text-slate-400">Tracked separately from CCM</p>
+                </div>
+              </div>
+              <button onClick={() => setLocation("/worklist")} className="inline-flex items-center gap-1.5 text-sm font-semibold text-violet-700 hover:text-violet-900 transition-colors">
+                BHI worklist <ArrowRight size={14} />
+              </button>
+            </div>
+            {active === 0 ? (
+              <p className="text-sm text-slate-500 font-light py-2">No patients enrolled in BHI yet. Enroll patients with a behavioral-health condition (depression, anxiety, SUD…) from a patient page or the Patients list to start tracking BHI.</p>
+            ) : (
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                {bhiCards.map((c) => (
+                  <div key={c.label} className="rounded-2xl bg-white border border-violet-100/70 p-4">
+                    <p className="text-xs uppercase tracking-wider text-slate-400">{c.label}</p>
+                    <p className={cn("text-3xl font-bold mt-1 font-mono tabular-nums", valueTone[c.tone])}>{c.value}</p>
+                    <p className="text-xs text-slate-400 mt-0.5 font-light">{c.sub}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Advanced Primary Care Management (APCM · G0556/57/58) — non-time-based, mutually exclusive with CCM */}
+      {(() => {
+        const a = apcmStats.data;
+        const active = a?.totalActivePatients ?? 0;
+        const apcmCards = [
+          { label: "APCM Patients", value: a?.totalActivePatients ?? 0, sub: `${a?.totalTasks ?? 0} tasks this month`, tone: "default" as const },
+          { label: "Serviced", value: a?.completed ?? 0, sub: `${a?.completionPct ?? 0}% this month`, tone: "good" as const },
+          { label: "Ready to bill", value: a?.readyForBilling ?? 0, sub: "consent · visit · care plan met", tone: "good" as const },
+          { label: "Not reached", value: a?.notReached ?? 0, sub: "No answer / voicemail", tone: ((a?.notReached ?? 0) ? "warn" : "default") as "warn" | "default" },
+        ];
+        const valueTone = { default: "text-slate-900", good: "text-emerald-600", warn: "text-amber-600" };
+        return (
+          <div className="mt-6 rounded-3xl border border-indigo-100 bg-gradient-to-br from-indigo-50/70 to-white p-6">
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-indigo-100 flex items-center justify-center"><Activity size={18} className="text-indigo-600" /></div>
+                <div>
+                  <h3 className="font-bold text-slate-900 tracking-tight leading-tight">Advanced Primary Care Management</h3>
+                  <p className="text-xs text-slate-400">Non-time-based · G0556/57/58 · CCM-first, APCM as the monthly fallback (never both same month)</p>
+                </div>
+              </div>
+              <button onClick={() => setLocation("/worklist")} className="inline-flex items-center gap-1.5 text-sm font-semibold text-indigo-700 hover:text-indigo-900 transition-colors">
+                APCM worklist <ArrowRight size={14} />
+              </button>
+            </div>
+            {active === 0 ? (
+              <p className="text-sm text-slate-500 font-light py-2">APCM auto-covers your active CCM patients. It bills for anyone who didn't get a completed CCM that month — once their consent + care plan are on file. Capture those on the patient page to start billing.</p>
+            ) : (
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                {apcmCards.map((c) => (
+                  <div key={c.label} className="rounded-2xl bg-white border border-indigo-100/70 p-4">
+                    <p className="text-xs uppercase tracking-wider text-slate-400">{c.label}</p>
+                    <p className={cn("text-3xl font-bold mt-1 font-mono tabular-nums", valueTone[c.tone])}>{c.value}</p>
+                    <p className="text-xs text-slate-400 mt-0.5 font-light">{c.sub}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       <div className="mt-6 bg-white rounded-3xl p-6 border border-slate-100 shadow-soft">
         <div className="flex items-center justify-between mb-4">

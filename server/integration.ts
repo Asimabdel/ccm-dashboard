@@ -112,6 +112,10 @@ export function registerIntegrationRoutes(app: Express) {
         .select({ c: sql<number>`COUNT(*)` })
         .from(patients)
         .where(eq(patients.rpmEnrolled, true));
+      const [bhiRow] = await db
+        .select({ c: sql<number>`COUNT(*)` })
+        .from(patients)
+        .where(eq(patients.bhiEnrollmentStatus, "active"));
 
       // Best-effort "new in range" using patient creation date (the CCM app does not
       // store a dedicated enrollment date yet). Documented as a proxy for the consumer.
@@ -152,6 +156,7 @@ export function registerIntegrationRoutes(app: Express) {
         totals: {
           ccmActive: activeRow?.c ?? 0,
           rpmEnrolled: rpmRow?.c ?? 0,
+          bhiActive: bhiRow?.c ?? 0,
         },
         newInRange: {
           ccm: newCcmRow?.c ?? 0,

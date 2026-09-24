@@ -4,7 +4,7 @@ import { trpc } from "@/lib/trpc";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Loader2, Check, X, DollarSign, FileCheck, Download } from "lucide-react";
-import { BILLING_STATUS_LABELS, billingBadgeClass, currentMonthStr, fmtDate } from "@/lib/ccm";
+import { BILLING_STATUS_LABELS, billingBadgeClass, currentMonthStr, fmtDate, PROGRAM_LABELS, programBadgeClass, APCM_CPT_BY_LEVEL, type Program } from "@/lib/ccm";
 
 const CHECKS: { key: string; label: string }[] = [
   { key: "documentationComplete", label: "Documentation" },
@@ -14,9 +14,16 @@ const CHECKS: { key: string; label: string }[] = [
   { key: "providerReviewCompleted", label: "Provider Review" },
 ];
 
-/** CPT for CCM clinical-staff time: 99490 at >=20 min, +99439 per extra 20 (max 2). */
-function cptFor(minutes: number): { code: string; addOnUnits: number } | null {
+/**
+ * CPT for clinical-staff time at >=20 min/month.
+ * - CCM: 99490 base, +99439 per extra 20 min (max 2 add-on units).
+ * - BHI: 99484 flat — no add-on code exists for extra time.
+ */
+function cptFor(minutes: number, program: string, apcmLevel?: string | null): { code: string; addOnUnits: number } | null {
+  // APCM is NOT time-based — it bills a complexity G-code regardless of minutes.
+  if (program === "apcm") return { code: APCM_CPT_BY_LEVEL[apcmLevel || "level_1"] || "G0556", addOnUnits: 0 };
   if (minutes < 20) return null;
+  if (program === "bhi") return { code: "99484", addOnUnits: 0 };
   return { code: "99490", addOnUnits: Math.min(2, Math.floor((minutes - 20) / 20)) };
 }
 
@@ -35,8 +42,9 @@ export default function BillingPage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
   const [month, setMonth] = useState(currentMonthStr());
   const [statusFilter, setStatusFilter] = useState("");
+  const [programFilter, setProgramFilter] = useState<"" | Program>("");
 
-  const queryInput = useMemo(() => ({ month, status: statusFilter || undefined }), [month, statusFilter]);
+  const queryInput = useMemo(() => ({ month, status: statusFilter || undefined, program: programFilter || undefined }), [month, statusFilter, programFilter]);
   const list = trpc.billing.list.useQuery(queryInput, { enabled: !!user });
   const utils = trpc.useUtils();
   const markBilled = trpc.billing.markBilled.useMutation({
@@ -55,16 +63,18 @@ export default function BillingPage() {
   const field = "px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]";
 
   const exportCsv = () => {
-    const header = ["Patient", "DOB", "Provider", "Month", "Minutes", "CPT", "99439 Units", "Time Met", "Status", "Completed At"];
+    const header = ["Patient", "DOB", "Provider", "Program", "Month", "Minutes", "CPT", "99439 Units", "Time Met", "Status", "Completed At"];
     const lines = rows.map((r) => {
       const mins = r.task?.timeSpentMinutes ?? 0;
-      const cpt = cptFor(mins);
+      const prog = r.billing.program || "ccm";
+      const cpt = cptFor(mins, prog, (r.patient as any).apcmLevel);
       return [
         r.patient.name,
         r.patient.dateOfBirth ? new Date(r.patient.dateOfBirth).toLocaleDateString() : "",
         r.providerName || "",
+        prog.toUpperCase(),
         month,
-        mins,
+        prog === "apcm" ? "n/a" : mins,
         cpt ? cpt.code : "TIME NOT MET",
         cpt ? cpt.addOnUnits : 0,
         mins >= 20 ? "YES" : "NO",
@@ -75,7 +85,7 @@ export default function BillingPage() {
     const blob = new Blob(["﻿" + [header.join(","), ...lines].join("\r\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `ccm-billing-${month}${statusFilter ? `-${statusFilter}` : ""}.csv`;
+    a.download = `${programFilter || "all"}-billing-${month}${statusFilter ? `-${statusFilter}` : ""}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
     toast.success(`Exported ${rows.length} rows.`);
@@ -109,6 +119,12 @@ export default function BillingPage() {
             <option value="">All Statuses</option>
             {Object.entries(BILLING_STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
+          <select className={field} value={programFilter} onChange={(e) => setProgramFilter(e.target.value as "" | Program)}>
+            <option value="">All Programs</option>
+            <option value="ccm">CCM (99490)</option>
+            <option value="bhi">BHI (99484)</option>
+            <option value="apcm">APCM (G0556–8)</option>
+          </select>
         </div>
         <button onClick={exportCsv} disabled={rows.length === 0}
           className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 active:scale-[0.97] disabled:opacity-50 transition">
@@ -131,29 +147,40 @@ export default function BillingPage() {
               <thead>
                 <tr className="bg-slate-50/70 text-slate-500 text-xs uppercase tracking-wider">
                   <th className="text-left font-medium px-5 py-3">Patient</th>
+                  <th className="text-left font-medium px-3 py-3">Program</th>
                   <th className="text-left font-medium px-3 py-3" title="Documented clinical staff minutes this month (20 required)">Time</th>
                   <th className="text-left font-medium px-3 py-3">CPT</th>
                   {CHECKS.map((c) => <th key={c.key} className="font-medium px-3 py-3 text-center whitespace-nowrap">{c.label}</th>)}
+                  <th className="font-medium px-3 py-3 text-center whitespace-nowrap" title="BHI: documented patient consent (99484)">Consent</th>
+                  <th className="font-medium px-3 py-3 text-center whitespace-nowrap" title="BHI: initiating visit on file within 12 months">Init. Visit</th>
                   <th className="text-left font-medium px-3 py-3">Status</th>
                   <th className="text-right font-medium px-5 py-3">Action</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => {
-                  const allReady = CHECKS.every((c) => (r.billing as any)[c.key]);
                   const isBilled = r.billing.billingStatus === "billed";
                   const mins = r.task?.timeSpentMinutes ?? 0;
-                  const cpt = cptFor(mins);
+                  const prog = (r.billing.program || "ccm") as Program;
+                  const cpt = cptFor(mins, prog, (r.patient as any).apcmLevel);
+                  // BHI and APCM satisfy every gate server-side (encoded in the
+                  // ready_for_billing status); CCM keeps its existing checklist gate.
+                  const allReady = prog === "bhi" || prog === "apcm"
+                    ? r.billing.billingStatus === "ready_for_billing"
+                    : CHECKS.every((c) => (r.billing as any)[c.key]);
                   return (
                     <tr key={r.billing.id} className="border-t border-slate-50 hover:bg-slate-50/40">
                       <td className="px-5 py-3 font-medium text-slate-800 whitespace-nowrap">{r.patient.name}</td>
-                      <td className={`px-3 py-3 font-mono tabular-nums font-semibold whitespace-nowrap ${mins >= 20 ? "text-emerald-600" : "text-amber-600"}`}>{mins}m</td>
+                      <td className="px-3 py-3"><span className={`px-2 py-0.5 rounded-md text-[11px] font-bold ${programBadgeClass(prog)}`}>{PROGRAM_LABELS[prog]}</span></td>
+                      <td className={`px-3 py-3 font-mono tabular-nums font-semibold whitespace-nowrap ${prog === "apcm" ? "text-slate-400" : mins >= 20 ? "text-emerald-600" : "text-amber-600"}`}>{prog === "apcm" ? "n/a" : `${mins}m`}</td>
                       <td className="px-3 py-3 whitespace-nowrap">
                         {cpt
                           ? <span className="font-mono text-xs font-semibold text-slate-700">{cpt.code}{cpt.addOnUnits > 0 ? ` +99439×${cpt.addOnUnits}` : ""}</span>
                           : <span className="text-xs text-amber-600 font-medium">needs time</span>}
                       </td>
                       {CHECKS.map((c) => <td key={c.key} className="px-3 py-3 text-center"><YN ok={!!(r.billing as any)[c.key]} /></td>)}
+                      <td className="px-3 py-3 text-center">{prog === "bhi" ? <YN ok={!!r.billing.consentObtained} /> : <span className="text-slate-300">—</span>}</td>
+                      <td className="px-3 py-3 text-center">{prog === "bhi" ? <YN ok={!!r.billing.initiatingVisitOnFile} /> : <span className="text-slate-300">—</span>}</td>
                       <td className="px-3 py-3"><span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap ${billingBadgeClass(r.billing.billingStatus || "not_started")}`}>{BILLING_STATUS_LABELS[r.billing.billingStatus || "not_started"]}</span></td>
                       <td className="px-5 py-3 text-right">
                         {isBilled ? (

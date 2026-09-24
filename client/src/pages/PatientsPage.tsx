@@ -4,8 +4,8 @@ import { trpc } from "@/lib/trpc";
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
-import { Search, Plus, Loader2, UserPlus, X, Upload, AlertTriangle, Activity, ChevronUp, ChevronDown, ChevronsUpDown, MoreVertical, Pencil, Trash2 } from "lucide-react";
-import { statusBadgeClass, RPM_STATUS_LABELS, fmtDate, toDateInput } from "@/lib/ccm";
+import { Search, Plus, Loader2, UserPlus, X, Upload, AlertTriangle, Activity, ChevronUp, ChevronDown, ChevronsUpDown, MoreVertical, Pencil, Trash2, Brain } from "lucide-react";
+import { statusBadgeClass, RPM_STATUS_LABELS, fmtDate, toDateInput, programBadgeClass, BHI_CONDITION_OPTIONS } from "@/lib/ccm";
 import { cn } from "@/lib/utils";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
@@ -170,6 +170,53 @@ function EnrollDialog({ onDone }: { onDone: () => void }) {
   );
 }
 
+/** Dialog to bulk-enroll the selected patients into BHI (99484). */
+function BhiBulkEnrollDialog({ ids, open, onOpenChange, onDone }: { ids: number[]; open: boolean; onOpenChange: (o: boolean) => void; onDone: () => void }) {
+  const [conditions, setConditions] = useState<string[]>([]);
+  const [consent, setConsent] = useState<"pending" | "consented" | "declined">("pending");
+  const enroll = trpc.patients.bulkEnrollBHI.useMutation({
+    onSuccess: (r) => { toast.success(`Enrolled ${r.count} patient${r.count === 1 ? "" : "s"} in BHI.`); onOpenChange(false); setConditions([]); onDone(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const toggle = (c: string) => setConditions((cs) => cs.includes(c) ? cs.filter((x) => x !== c) : [...cs, c]);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader><DialogTitle className="flex items-center gap-2"><Brain size={18} className="text-violet-500" /> Enroll {ids.length} patient{ids.length === 1 ? "" : "s"} in BHI</DialogTitle></DialogHeader>
+        <div className="space-y-4">
+          <p className="text-sm text-slate-500">Enrolls the selected patients in Behavioral Health Integration and creates this month's BHI task for each. You can refine conditions per patient afterward.</p>
+          <div>
+            <p className="text-xs text-slate-400 mb-2">Apply behavioral-health conditions to all (optional)</p>
+            <div className="flex flex-wrap gap-2">
+              {BHI_CONDITION_OPTIONS.map((c) => {
+                const on = conditions.includes(c);
+                return <button key={c} type="button" onClick={() => toggle(c)}
+                  className={`px-3 py-1.5 rounded-full text-sm font-medium border transition ${on ? "bg-violet-100 text-violet-800 border-violet-200" : "bg-white text-slate-500 border-slate-200 hover:border-violet-200"}`}>{c}</button>;
+              })}
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">BHI consent status</label>
+            <select value={consent} onChange={(e) => setConsent(e.target.value as any)}
+              className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-300">
+              <option value="pending">Consent pending</option>
+              <option value="consented">Consented</option>
+              <option value="declined">Declined</option>
+            </select>
+          </div>
+        </div>
+        <DialogFooter>
+          <button onClick={() => onOpenChange(false)} className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50">Cancel</button>
+          <button disabled={enroll.isPending} onClick={() => enroll.mutate({ ids, bhiConditions: conditions.length ? conditions : undefined, bhiConsentStatus: consent })}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-violet-600 text-white text-sm font-semibold hover:brightness-110 disabled:opacity-50">
+            {enroll.isPending ? <Loader2 size={14} className="animate-spin" /> : <Brain size={14} />} Enroll {ids.length}
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function PatientsPage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
   const [, setLocation] = useLocation();
@@ -227,6 +274,10 @@ export default function PatientsPage() {
 
   const [editing, setEditing] = useState<PatientLike | null>(null);
   const [deleting, setDeleting] = useState<{ id: number; name: string } | null>(null);
+  // Bulk BHI enrollment selection
+  const [selected, setSelected] = useState<number[]>([]);
+  const [bhiDialogOpen, setBhiDialogOpen] = useState(false);
+  const toggleSelect = (id: number) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
   const canDelete = !!user && user.role === "admin";
   const removePatient = trpc.patients.remove.useMutation({
     onSuccess: () => { utils.patients.list.invalidate(); toast.success("Patient deleted."); setDeleting(null); },
@@ -283,11 +334,32 @@ export default function PatientsPage() {
         </div>
       </div>
 
+      {/* Bulk BHI enrollment bar — appears when patients are selected */}
+      {canEnroll && selected.length > 0 && (
+        <div className="flex items-center justify-between gap-3 mb-4 bg-violet-50 border border-violet-100 rounded-2xl px-4 py-2.5">
+          <span className="text-sm font-semibold text-violet-900">{selected.length} selected</span>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setBhiDialogOpen(true)} className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-violet-600 text-white text-sm font-semibold hover:brightness-110">
+              <Brain size={14} /> Enroll in BHI
+            </button>
+            <button onClick={() => setSelected([])} className="px-3 py-1.5 rounded-xl text-sm text-violet-700 hover:bg-violet-100">Clear</button>
+          </div>
+        </div>
+      )}
+      <BhiBulkEnrollDialog ids={selected} open={bhiDialogOpen} onOpenChange={setBhiDialogOpen} onDone={() => { setSelected([]); utils.patients.list.invalidate(); }} />
+
       <div className="bg-white rounded-3xl border border-slate-100 overflow-hidden">
         <div className="overflow-auto max-h-[70vh]">
           <table className="w-full text-sm">
             <thead className="sticky top-0 z-10 shadow-[0_1px_0_0_rgb(241_245_249)]">
               <tr className="text-left text-xs uppercase tracking-wider text-slate-400">
+                {canEnroll && (
+                  <th className="px-4 py-3 font-medium bg-slate-50 w-10">
+                    <input type="checkbox" className="accent-violet-600" title="Select all shown"
+                      checked={sortedPatients.length > 0 && selected.length === sortedPatients.length}
+                      onChange={(e) => setSelected(e.target.checked ? sortedPatients.map((r) => r.patient.id) : [])} />
+                  </th>
+                )}
                 <SortTh label="Patient" k="name" sort={sort} onSort={onSort} />
                 <th className="px-5 py-3 font-medium bg-slate-50">Conditions</th>
                 <SortTh label="Provider" k="provider" sort={sort} onSort={onSort} />
@@ -302,11 +374,11 @@ export default function PatientsPage() {
             <tbody>
               {patients.isLoading && Array.from({ length: 6 }).map((_, i) => (
                 <tr key={`sk-${i}`} className="border-b border-slate-50 last:border-0">
-                  <td colSpan={9} className="px-5 py-3.5"><div className="h-8 rounded-lg bg-slate-100 animate-pulse" /></td>
+                  <td colSpan={canEnroll ? 10 : 9} className="px-5 py-3.5"><div className="h-8 rounded-lg bg-slate-100 animate-pulse" /></td>
                 </tr>
               ))}
               {!patients.isLoading && sortedPatients.length === 0 && (
-                <tr><td colSpan={9} className="px-5 py-16 text-center">
+                <tr><td colSpan={canEnroll ? 10 : 9} className="px-5 py-16 text-center">
                   <Search className="mx-auto text-slate-300 mb-2" size={28} />
                   <p className="text-slate-500 font-medium">No patients found</p>
                   <p className="text-sm font-light text-slate-400 mt-0.5">{hasFilters ? "Try adjusting your filters." : "Enroll a patient to get started."}</p>
@@ -315,9 +387,17 @@ export default function PatientsPage() {
               {!patients.isLoading && sortedPatients.map((r) => (
                 <tr key={r.patient.id} onClick={() => setLocation(`/patients/${r.patient.id}`)}
                   className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60 cursor-pointer">
+                  {canEnroll && (
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" className="accent-violet-600" checked={selected.includes(r.patient.id)} onChange={() => toggleSelect(r.patient.id)} />
+                    </td>
+                  )}
                   <td className="px-5 py-3">
                     <p className="font-semibold text-slate-800 flex items-center gap-1.5">
                       {r.patient.name}
+                      {r.patient.bhiEnrollmentStatus === "active" && (
+                        <span title="Enrolled in Behavioral Health Integration" className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold ${programBadgeClass("bhi")}`}>BHI</span>
+                      )}
                       {dupIds.has(r.patient.id) && (
                         <span title="Possible duplicate: another patient shares this name" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-semibold">
                           <AlertTriangle size={10} /> Duplicate

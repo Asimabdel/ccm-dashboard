@@ -23,6 +23,12 @@ import AuditLogPage from "./pages/AuditLogPage";
 import TeamAccessPage from "./pages/TeamAccessPage";
 import ClinicsPage from "./pages/ClinicsPage";
 import ProvidersPage from "./pages/ProvidersPage";
+import RefillRequestsPage from "./pages/RefillRequestsPage";
+import ReachOutPage from "./pages/ReachOutPage";
+import ApcmPage from "./pages/ApcmPage";
+import WorkforcePage from "./pages/WorkforcePage";
+import MyDayPage from "./pages/MyDayPage";
+import MySchedulePage from "./pages/MySchedulePage";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
 
 function Router() {
@@ -46,6 +52,12 @@ function Router() {
       <Route path="/workflow/:taskId" component={CallWorkflowPage} />
       <Route path="/assignment" component={StaffAssignmentPage} />
       <Route path="/escalations" component={EscalationsPage} />
+      <Route path="/refill-requests" component={RefillRequestsPage} />
+      <Route path="/reach-out" component={ReachOutPage} />
+      <Route path="/apcm" component={ApcmPage} />
+      <Route path="/workforce" component={WorkforcePage} />
+      <Route path="/my-day" component={MyDayPage} />
+      <Route path="/my-schedule" component={MySchedulePage} />
       <Route path="/billing" component={BillingPage} />
       <Route path="/follow-ups" component={FollowUpsPage} />
       <Route path="/reports" component={ReportsPage} />

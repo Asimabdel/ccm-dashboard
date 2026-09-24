@@ -1,4 +1,5 @@
 import { NOT_ADMIN_ERR_MSG, UNAUTHED_ERR_MSG } from '@shared/const';
+import { WORKFORCE_ONLY_ROLES } from '@shared/workforce';
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
@@ -24,11 +25,23 @@ const t = initTRPC.context<TrpcContext>().create({
 export const router = t.router;
 export const publicProcedure = t.procedure;
 
+// Workforce-only roles (e.g. medical assistants using the schedule / time clock)
+// are fenced to these routers at the middleware level, so no patient (PHI)
+// procedure is reachable for them even if it lacks its own role check.
+const WORKFORCE_ONLY_ALLOWED_PREFIXES = ["auth.", "workforce.", "notifications.", "system."];
+
 const requireUser = t.middleware(async opts => {
-  const { ctx, next } = opts;
+  const { ctx, next, path } = opts;
 
   if (!ctx.user) {
     throw new TRPCError({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
+  }
+
+  if (
+    (WORKFORCE_ONLY_ROLES as readonly string[]).includes(ctx.user.role) &&
+    !WORKFORCE_ONLY_ALLOWED_PREFIXES.some((p) => path.startsWith(p))
+  ) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this resource." });
   }
 
   return next({

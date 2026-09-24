@@ -4,7 +4,7 @@ import { trpc } from "@/lib/trpc";
 import { useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
-import { Loader2, Upload, FileText, AlertTriangle, CheckCircle2, ArrowLeft, Download } from "lucide-react";
+import { Loader2, Upload, FileText, AlertTriangle, CheckCircle2, ArrowLeft, Download, Brain } from "lucide-react";
 import { STATUS_LABELS } from "@/lib/ccm";
 
 const SAMPLE_DRMAI = `Name,Provider,Wellness Call,Date Completed,Next Appointment,Notes
@@ -27,6 +27,7 @@ export default function BulkImportPage() {
   const [defaultProviderId, setDefaultProviderId] = useState(0);
   const [defaultStaffId, setDefaultStaffId] = useState(0);
   const [skipExisting, setSkipExisting] = useState(true);
+  const [enrollBHI, setEnrollBHI] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const utils = trpc.useUtils();
   const staff = trpc.staff.all.useQuery(undefined, { enabled: !!user });
@@ -139,9 +140,14 @@ export default function BulkImportPage() {
                 <input type="checkbox" className="accent-slate-900" checked={skipExisting} onChange={(e) => setSkipExisting(e.target.checked)} />
                 Skip patients that already exist (matching name)
               </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700 rounded-xl bg-violet-50 border border-violet-100 px-3 py-2">
+                <input type="checkbox" className="accent-violet-600" checked={enrollBHI} onChange={(e) => setEnrollBHI(e.target.checked)} />
+                <span className="flex items-center gap-1.5"><Brain size={14} className="text-violet-500" /> Enroll every imported patient in <b>BHI</b></span>
+              </label>
+              <p className="text-[11px] text-slate-500 -mt-1">Use this when the whole file is a BHI-eligibility list. A per-row <code className="text-violet-700">BHI</code> column (yes/no) and <code className="text-violet-700">BHI Conditions</code> column are also honored automatically.</p>
               <button
                 disabled={commit.isPending || validCount === 0}
-                onClick={() => commit.mutate({ csv, defaultClinicId: defaultClinicId || undefined, defaultProviderId: defaultProviderId || undefined, defaultStaffId: defaultStaffId || undefined, skipExistingDuplicates: skipExisting })}
+                onClick={() => commit.mutate({ csv, defaultClinicId: defaultClinicId || undefined, defaultProviderId: defaultProviderId || undefined, defaultStaffId: defaultStaffId || undefined, skipExistingDuplicates: skipExisting, defaultEnrollBHI: enrollBHI || undefined })}
                 className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[hsl(17_68%_47%)] text-white text-sm font-semibold hover:brightness-95 disabled:opacity-50 active:scale-[0.98] transition-transform">
                 {commit.isPending ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
                 Import {validCount} valid {validCount === 1 ? "patient" : "patients"}

@@ -8,6 +8,7 @@ import { Loader2, Phone, PhoneOff, X, CheckCircle2, ListChecks, ChevronUp, Chevr
 import {
   WORKLIST_STATUS_OPTIONS, WORKLIST_STATUS_LABELS, worklistStatusValue,
   statusBadgeClass, currentMonthStr, fmtDate,
+  PROGRAM_LABELS, programBadgeClass, type Program,
 } from "@/lib/ccm";
 
 export default function WorklistPage() {
@@ -19,6 +20,9 @@ export default function WorklistPage() {
   const [clinicFilter, setClinicFilter] = useState(0);
   const [selected, setSelected] = useState<number[]>([]);
   const [bulkStatus, setBulkStatus] = useState("");
+  // Which care-management program's worklist to show. CCM (99490) and BHI (99484)
+  // are tracked independently; "all" merges both (each row shows its program).
+  const [program, setProgram] = useState<Program | "all">("ccm");
   // Staff default to viewing only their own assigned tasks; admins see all.
   const [mineOnly, setMineOnly] = useState(() => user?.role === "staff");
 
@@ -30,21 +34,31 @@ export default function WorklistPage() {
     clinicId: clinicFilter || undefined,
     assignedStaffId: mineOnly && user ? user.id : undefined,
   }), [month, clinicFilter, mineOnly, user]);
-  const worklist = trpc.worklist.forMonth.useQuery(filters, { enabled: !!user });
+  // CCM, BHI and APCM are separate task sets; fetch each and merge for "all".
+  const ccmQ = trpc.worklist.forMonth.useQuery({ ...filters, program: "ccm" }, { enabled: !!user && (program === "ccm" || program === "all") });
+  const bhiQ = trpc.worklist.forMonth.useQuery({ ...filters, program: "bhi" }, { enabled: !!user && (program === "bhi" || program === "all") });
+  const apcmQ = trpc.worklist.forMonth.useQuery({ ...filters, program: "apcm" }, { enabled: !!user && (program === "apcm" || program === "all") });
+  const worklistData = useMemo(() => {
+    if (program === "ccm") return ccmQ.data || [];
+    if (program === "bhi") return bhiQ.data || [];
+    if (program === "apcm") return apcmQ.data || [];
+    return [...(ccmQ.data || []), ...(bhiQ.data || []), ...(apcmQ.data || [])];
+  }, [program, ccmQ.data, bhiQ.data, apcmQ.data]);
+  const worklistLoading = program === "ccm" ? ccmQ.isLoading : program === "bhi" ? bhiQ.isLoading : program === "apcm" ? apcmQ.isLoading : (ccmQ.isLoading || bhiQ.isLoading || apcmQ.isLoading);
   const utils = trpc.useUtils();
 
   // Optional sort by "Last Called": none -> oldest first (asc) -> newest first (desc).
   // Never-called patients count as oldest, so ascending surfaces the most overdue first.
   const [lastCalledSort, setLastCalledSort] = useState<"none" | "asc" | "desc">("none");
   const sortedRows = useMemo(() => {
-    const data = worklist.data || [];
+    const data = worklistData;
     if (lastCalledSort === "none") return data;
     const t = (d: unknown) => (d ? new Date(d as string).getTime() : 0);
     return [...data].sort((a, b) => {
       const av = t(a.patient.lastCalledAt), bv = t(b.patient.lastCalledAt);
       return lastCalledSort === "asc" ? av - bv : bv - av;
     });
-  }, [worklist.data, lastCalledSort]);
+  }, [worklistData, lastCalledSort]);
 
   const isStaff = user && ["admin", "staff"].includes(user.role);
 
@@ -84,6 +98,19 @@ export default function WorklistPage() {
 
   return (
     <CCMDashboardLayout title={`Monthly Worklist - ${month}`}>
+      {/* Program tabs — CCM and BHI are tracked independently. */}
+      <div className="flex items-center gap-1 mb-4 bg-slate-100 rounded-2xl p-1 w-fit">
+        {(["ccm", "bhi", "apcm", "all"] as const).map((p) => {
+          const active = program === p;
+          const label = p === "all" ? "All" : PROGRAM_LABELS[p];
+          return (
+            <button key={p} onClick={() => { setProgram(p); setSelected([]); }}
+              className={`inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl text-sm font-semibold transition ${active ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+              {label}
+            </button>
+          );
+        })}
+      </div>
       <div className="flex items-center justify-between flex-wrap gap-3 mb-5">
         <div className="flex items-center gap-2 flex-wrap">
           <div className="relative">
@@ -153,15 +180,20 @@ export default function WorklistPage() {
               </tr>
             </thead>
             <tbody>
-              {worklist.isLoading && <tr><td colSpan={8} className="px-5 py-12 text-center"><Loader2 className="animate-spin text-slate-300 mx-auto" /></td></tr>}
-              {!worklist.isLoading && rows.length === 0 && <tr><td colSpan={8} className="px-5 py-12 text-center text-slate-400 font-light">{filtersActive ? "No patients match your search or filters." : "No tasks for this month. An admin can generate the worklist from the Admin Dashboard."}</td></tr>}
+              {worklistLoading && <tr><td colSpan={8} className="px-5 py-12 text-center"><Loader2 className="animate-spin text-slate-300 mx-auto" /></td></tr>}
+              {!worklistLoading && rows.length === 0 && <tr><td colSpan={8} className="px-5 py-12 text-center text-slate-400 font-light">{filtersActive ? "No patients match your search or filters." : program === "bhi" ? "No BHI patients enrolled for this month. Enroll patients in BHI from their patient page." : "No tasks for this month. An admin can generate the worklist from the Admin Dashboard."}</td></tr>}
               {rows.map((r) => (
                 <tr key={r.task.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60">
                   {isStaff && (
                     <td className="px-3 py-2"><input type="checkbox" checked={selected.includes(r.task.id)} onChange={() => toggle(r.task.id)} className="accent-slate-900" /></td>
                   )}
                   <td className="px-4 py-2">
-                    <p className="font-semibold text-slate-800">{r.patient.name}</p>
+                    <p className="font-semibold text-slate-800 flex items-center gap-2">
+                      {r.patient.name}
+                      {program === "all" && (
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${programBadgeClass(r.task.program)}`}>{PROGRAM_LABELS[r.task.program as Program]}</span>
+                      )}
+                    </p>
                     <p className="text-xs text-slate-400">{r.clinicName} - {r.staffName || "Unassigned"}</p>
                   </td>
                   <td className="px-4 py-2 text-slate-600">{r.providerName || "-"}</td>

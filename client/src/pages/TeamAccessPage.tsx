@@ -19,6 +19,7 @@ const ROLE_OPTIONS = [
   { value: "provider", label: "Provider" },
   { value: "billing", label: "Billing" },
   { value: "front_desk", label: "Front Desk" },
+  { value: "medical_assistant", label: "Medical Assistant (schedule & time clock only)" },
   { value: "user", label: "No access (pending)" },
 ] as const;
 
@@ -31,6 +32,7 @@ function roleBadge(role: string): string {
     case "provider": return "bg-emerald-100 text-emerald-700";
     case "billing": return "bg-amber-100 text-amber-800";
     case "front_desk": return "bg-cyan-100 text-cyan-700";
+    case "medical_assistant": return "bg-rose-100 text-rose-700";
     default: return "bg-slate-100 text-slate-500";
   }
 }
@@ -120,7 +122,7 @@ export default function TeamAccessPage() {
             createMember.mutate({
               email,
               name: name || undefined,
-              role: newRole as "admin" | "staff" | "provider" | "billing" | "front_desk",
+              role: newRole as "admin" | "staff" | "provider" | "billing" | "front_desk" | "medical_assistant",
               clinicLocation: clinicLocation || undefined,
               password: password || undefined,
             });
@@ -219,7 +221,7 @@ export default function TeamAccessPage() {
                         value={u.role}
                         disabled={isSelf || setRole.isPending}
                         title={isSelf ? "You cannot change your own role" : undefined}
-                        onChange={(e) => setRole.mutate({ userId: u.id, role: e.target.value as "admin" | "staff" | "provider" | "billing" | "front_desk" | "user" })}
+                        onChange={(e) => setRole.mutate({ userId: u.id, role: e.target.value as "admin" | "staff" | "provider" | "billing" | "front_desk" | "medical_assistant" | "user" })}
                       >
                         {ROLE_OPTIONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
                       </select>

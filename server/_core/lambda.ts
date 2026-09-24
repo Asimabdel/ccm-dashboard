@@ -24,4 +24,19 @@ app.use((req, res, next) => {
   res.sendFile(path.join(pub, "index.html"));
 });
 
-export const handler = serverless(app);
+const httpHandler = serverless(app);
+
+/**
+ * RDS only accepts connections from this function's security group, so schema
+ * migrations run here rather than from a laptop. They're triggered by a DIRECT,
+ * IAM-authorized invoke — `aws lambda invoke --payload '{"__migrate":"workforce"}'`.
+ * API Gateway always wraps HTTP requests in its own event envelope (version,
+ * requestContext, ...), so no web request can ever produce this payload.
+ */
+export const handler = async (event: any, context: any) => {
+  if (event && event.__migrate === "workforce" && !event.requestContext && !event.version) {
+    const { runWorkforceMigration } = await import("../workforceMigration");
+    return { migrated: "workforce", applied: await runWorkforceMigration() };
+  }
+  return httpHandler(event, context);
+};

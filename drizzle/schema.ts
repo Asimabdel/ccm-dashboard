@@ -25,7 +25,9 @@ export const users = mysqlTable("users", {
   passwordHash: varchar("passwordHash", { length: 255 }),
   passwordSetAt: timestamp("passwordSetAt"),
   mustChangePassword: boolean("mustChangePassword").default(false).notNull(),
-  role: mysqlEnum("role", ["admin", "staff", "provider", "billing", "front_desk", "user"]).default("user").notNull(),
+  // medical_assistant is a workforce-only role: it can use the schedule / time
+  // clock / My Day pages but is blocked from every patient (PHI) endpoint.
+  role: mysqlEnum("role", ["admin", "staff", "provider", "billing", "front_desk", "user", "medical_assistant"]).default("user").notNull(),
   // How many days per week this coordinator works — used to compute per-work-day
   // CCM averages and goal pacing on their dashboard.
   workDaysPerWeek: int("workDaysPerWeek").default(5),
@@ -78,7 +80,7 @@ export type InsertProvider = typeof providers.$inferInsert;
 export const teamInvites = mysqlTable("teamInvites", {
   id: int("id").autoincrement().primaryKey(),
   email: varchar("email", { length: 320 }).notNull(),
-  role: mysqlEnum("role", ["admin", "staff", "provider", "billing", "front_desk", "user"]).default("staff").notNull(),
+  role: mysqlEnum("role", ["admin", "staff", "provider", "billing", "front_desk", "user", "medical_assistant"]).default("staff").notNull(),
   clinicLocation: varchar("clinicLocation", { length: 255 }),
   invitedByUserId: int("invitedByUserId").references(() => users.id),
   status: mysqlEnum("status", ["pending", "accepted", "revoked"]).default("pending").notNull(),
@@ -104,6 +106,39 @@ export const patients = mysqlTable("patients", {
   insurance: text("insurance"),
   ccmEnrollmentStatus: mysqlEnum("ccmEnrollmentStatus", ["active", "inactive", "declined", "transferred"]).default("active"),
   consentStatus: mysqlEnum("consentStatus", ["consented", "pending", "declined"]).default("pending"),
+  // Behavioral Health Integration (BHI, CPT 99484) — enrollment is independent of
+  // CCM: a patient can be in CCM, BHI, or both. Defaults to not_enrolled since BHI
+  // is opt-in and requires a behavioral-health condition + its own consent.
+  bhiEnrollmentStatus: mysqlEnum("bhiEnrollmentStatus", ["not_enrolled", "active", "inactive", "declined", "transferred"]).default("not_enrolled"),
+  // The behavioral-health conditions that qualify the patient for BHI (depression,
+  // anxiety, substance use disorder, etc.), kept separate from chronicConditions.
+  bhiConditions: json("bhiConditions").$type<string[]>().default([]),
+  // BHI requires its own documented consent (cost-sharing/copay applies; only one
+  // practitioner bills per month) — tracked separately from CCM consent.
+  bhiConsentStatus: mysqlEnum("bhiConsentStatus", ["consented", "pending", "declined"]).default("pending"),
+  bhiConsentDate: datetime("bhiConsentDate"),
+  // The qualifying initiating visit (E/M, AWV, or IPPE) required before BHI can be
+  // billed for new patients or anyone not seen in the prior 12 months.
+  bhiInitiatingVisitDate: datetime("bhiInitiatingVisitDate"),
+  // The behavioral-health care plan (condition, goals, interventions, follow-up) —
+  // the documentation foundation CMS requires for 99484.
+  bhiCarePlan: text("bhiCarePlan"),
+  // Advanced Primary Care Management (APCM, HCPCS G0556/G0557/G0558) — a bundled,
+  // NON-time-based monthly service billed by patient complexity. Enrollment is
+  // independent of CCM/BHI but MUTUALLY EXCLUSIVE with CCM (can't bill both for the
+  // same patient in the same month), enforced in updatePatientAPCM/recomputeBilling.
+  apcmEnrollmentStatus: mysqlEnum("apcmEnrollmentStatus", ["not_enrolled", "active", "inactive", "declined", "transferred"]).default("not_enrolled"),
+  // Complexity level → G-code: level_1=G0556 (1 chronic condition), level_2=G0557
+  // (2+ conditions), level_3=G0558 (2+ conditions AND a Qualified Medicare Beneficiary).
+  apcmLevel: mysqlEnum("apcmLevel", ["level_1", "level_2", "level_3"]).default("level_1"),
+  // Qualified Medicare Beneficiary status — drives APCM Level 3 (G0558).
+  isQMB: boolean("isQMB").default(false),
+  apcmConsentStatus: mysqlEnum("apcmConsentStatus", ["consented", "pending", "declined"]).default("pending"),
+  apcmConsentDate: datetime("apcmConsentDate"),
+  // Initiating visit required for new patients or anyone not seen within 3 years.
+  apcmInitiatingVisitDate: datetime("apcmInitiatingVisitDate"),
+  // The comprehensive electronic care plan CMS requires for APCM.
+  apcmCarePlan: text("apcmCarePlan"),
   riskLevel: mysqlEnum("riskLevel", ["high", "medium", "low"]).default("medium"),
   priorityLevel: mysqlEnum("priorityLevel", ["high", "medium", "low"]).default("medium"),
   assignedStaffId: int("assignedStaffId").references(() => users.id),
@@ -133,6 +168,10 @@ export const ccmTasks = mysqlTable("ccmTasks", {
   id: int("id").autoincrement().primaryKey(),
   patientId: int("patientId").references(() => patients.id).notNull(),
   month: varchar("month", { length: 7 }).notNull(), // YYYY-MM format
+  // Which care-management program this monthly task belongs to. A patient enrolled
+  // in both CCM and BHI has TWO tasks per month (one per program), each tracked and
+  // billed independently (99490 vs 99484) so their time never double-counts.
+  program: mysqlEnum("program", ["ccm", "bhi", "apcm"]).default("ccm").notNull(),
   assignedStaffId: int("assignedStaffId").references(() => users.id),
   priorityLevel: mysqlEnum("priorityLevel", ["high", "medium", "low"]).default("medium"),
   status: mysqlEnum("status", [
@@ -173,6 +212,8 @@ export const ccmTasks = mysqlTable("ccmTasks", {
   // The worklist is queried by month every load; without this it's a full scan.
   monthIdx: index("ccmTasks_month_idx").on(t.month),
   monthStatusIdx: index("ccmTasks_month_status_idx").on(t.month, t.status),
+  // Worklists and reports are scoped by program, so index (month, program).
+  monthProgramIdx: index("ccmTasks_month_program_idx").on(t.month, t.program),
 }));
 
 export type CCMTask = typeof ccmTasks.$inferSelect;
@@ -210,7 +251,22 @@ export const ccmNotes = mysqlTable("ccmNotes", {
   
   // Follow-up actions
   followUpActions: json("followUpActions").$type<string[]>().default([]),
-  
+
+  // ---- Behavioral Health Integration (BHI, CPT 99484) assessment ----
+  // Populated on BHI calls only. Validated rating scales are the documentation
+  // foundation for 99484: PHQ-9 (depression, 0-27) and GAD-7 (anxiety, 0-21).
+  phq9Score: int("phq9Score"),
+  gad7Score: int("gad7Score"),
+  // Any additional validated tool used (AUDIT-C alcohol, DAST-10 drugs, etc.).
+  assessmentToolOther: varchar("assessmentToolOther", { length: 50 }),
+  assessmentScoreOther: int("assessmentScoreOther"),
+  // Behavioral trajectory since last contact, and whether the behavioral care plan
+  // was revised this month (CMS requires revision when the patient isn't progressing).
+  behavioralStatus: mysqlEnum("behavioralStatus", ["improved", "unchanged", "worsening", "new"]),
+  carePlanUpdated: boolean("carePlanUpdated").default(false),
+  // Safety flag (e.g. PHQ-9 item 9 / suicidal ideation) — routes to provider review.
+  bhiRiskFlag: boolean("bhiRiskFlag").default(false),
+
   timeSpentMinutes: int("timeSpentMinutes").default(0),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -281,12 +337,20 @@ export const billingRecords = mysqlTable("billingRecords", {
   ccmTaskId: int("ccmTaskId").references(() => ccmTasks.id).notNull(),
   patientId: int("patientId").references(() => patients.id).notNull(),
   month: varchar("month", { length: 7 }).notNull(),
+  // Which program this claim is for, and the CPT it bills under (CCM 99490 vs BHI
+  // 99484) — so the ready-to-bill export separates the two cleanly.
+  program: mysqlEnum("program", ["ccm", "bhi", "apcm"]).default("ccm").notNull(),
+  cptCode: varchar("cptCode", { length: 10 }).default("99490"),
   timeThresholdMet: boolean("timeThresholdMet").default(false),
   documentationComplete: boolean("documentationComplete").default(false),
   providerAssociated: boolean("providerAssociated").default(false),
   carePlanReviewed: boolean("carePlanReviewed").default(false),
   noMissingFields: boolean("noMissingFields").default(false),
   providerReviewCompleted: boolean("providerReviewCompleted").default(false),
+  // BHI (99484) compliance gates — documented consent + a qualifying initiating
+  // visit are prerequisites to billing (mirror CCM's requirements for BHI).
+  consentObtained: boolean("consentObtained").default(false),
+  initiatingVisitOnFile: boolean("initiatingVisitOnFile").default(false),
   billingStatus: mysqlEnum("billingStatus", [
     "not_started",
     "in_progress",
@@ -312,7 +376,7 @@ export type InsertBillingRecord = typeof billingRecords.$inferInsert;
 export const notifications = mysqlTable("notifications", {
   id: int("id").autoincrement().primaryKey(),
   userId: int("userId").references(() => users.id).notNull(),
-  type: mysqlEnum("type", ["urgent_symptom", "escalation", "missing_documentation", "not_reached", "billing_ready"]).notNull(),
+  type: mysqlEnum("type", ["urgent_symptom", "escalation", "missing_documentation", "not_reached", "billing_ready", "refill_request", "refill_decision", "workforce"]).notNull(),
   title: varchar("title", { length: 255 }).notNull(),
   content: text("content"),
   relatedPatientId: int("relatedPatientId").references(() => patients.id),
@@ -402,3 +466,227 @@ export const monthlyGoals = mysqlTable("monthlyGoals", {
 }));
 
 export type MonthlyGoal = typeof monthlyGoals.$inferSelect;
+
+/**
+ * Medication refill requests: a care coordinator collects the medications a patient
+ * asked to refill during a call and sends them to the patient's provider, who then
+ * approves, asks to schedule a visit, or declines to refill. Closes the loop between
+ * coordinators and providers on-platform.
+ */
+export const refillRequests = mysqlTable("refillRequests", {
+  id: int("id").autoincrement().primaryKey(),
+  patientId: int("patientId").references(() => patients.id).notNull(),
+  // The provider this request is routed to (the patient's provider at send time).
+  providerId: int("providerId").references(() => providers.id),
+  // The coordinator who sent it, and the call it came from (if any).
+  requestedByUserId: int("requestedByUserId").references(() => users.id),
+  ccmTaskId: int("ccmTaskId").references(() => ccmTasks.id),
+  // Medications picked from the search dropdown (name + optional note per med).
+  medications: json("medications").$type<{ name: string; note?: string }[]>().default([]),
+  note: text("note"), // coordinator's overall note to the provider
+  status: mysqlEnum("status", ["pending", "approved", "schedule_visit", "denied"]).default("pending").notNull(),
+  providerNote: text("providerNote"), // provider's note back to the coordinator
+  decidedByUserId: int("decidedByUserId").references(() => users.id),
+  decidedAt: datetime("decidedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  // The provider portal queries pending requests by provider; the patient page by patient.
+  providerStatusIdx: index("refillRequests_provider_status_idx").on(t.providerId, t.status),
+  patientIdx: index("refillRequests_patient_idx").on(t.patientId),
+}));
+
+export type RefillRequest = typeof refillRequests.$inferSelect;
+export type InsertRefillRequest = typeof refillRequests.$inferInsert;
+
+/**
+ * "Reach Out" — outbound appointment-scheduling call campaign. A standalone list
+ * (kept separate from CCM `patients`) of insurance patients we cold-call to ask if
+ * they'd like to schedule a visit. Two independent tracking dimensions per contact:
+ *   • callStatus — the connection result of the attempt (did we reach them?)
+ *   • outcome     — what they said once reached (do they want an appointment?)
+ * Worked as a shared pool: any coordinator calls the next un-called contact, and
+ * each logged call stamps who called + when and increments the attempt count.
+ */
+export const reachOutContacts = mysqlTable("reachOutContacts", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  phoneNumber: varchar("phoneNumber", { length: 20 }).notNull(),
+  dateOfBirth: datetime("dateOfBirth"),
+  insurance: varchar("insurance", { length: 255 }),
+  language: varchar("language", { length: 50 }),
+  callStatus: mysqlEnum("callStatus", [
+    "not_called", "no_answer", "voicemail", "wrong_number", "callback", "reached", "do_not_call",
+  ]).default("not_called").notNull(),
+  outcome: mysqlEnum("outcome", [
+    "pending", "wants_appointment", "appointment_scheduled", "already_scheduled", "not_interested", "declined",
+  ]).default("pending").notNull(),
+  attempts: int("attempts").default(0).notNull(),
+  lastCalledAt: datetime("lastCalledAt"),
+  lastCalledByStaffId: int("lastCalledByStaffId").references(() => users.id),
+  notes: text("notes"),
+  campaign: varchar("campaign", { length: 100 }).default("insurance-outreach"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  // The pool view sorts un-called first and filters by status/outcome constantly.
+  callStatusIdx: index("reachOut_callStatus_idx").on(t.callStatus),
+  outcomeIdx: index("reachOut_outcome_idx").on(t.outcome),
+}));
+
+export type ReachOutContact = typeof reachOutContacts.$inferSelect;
+export type InsertReachOutContact = typeof reachOutContacts.$inferInsert;
+
+// ============================================================================
+// Workforce — employee roles, scheduling, time clock, and performance.
+// Contains NO patient data. Calendar dates are stored as "YYYY-MM-DD" strings and
+// shift times as "HH:MM" in clinic-local time (America/Chicago) so a shift never
+// drifts across a day boundary; only clock punches are real UTC timestamps.
+// ============================================================================
+
+/** A job definition (e.g. "Medical Assistant") — what the role is responsible for. */
+export const jobRoles = mysqlTable("jobRoles", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 120 }).notNull(),
+  summary: text("summary"),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type JobRole = typeof jobRoles.$inferSelect;
+
+/**
+ * One responsibility within a job role. Recurring duties (daily/weekly/monthly)
+ * show up on the employee's "My Day" as a check-off; "as_needed" duties are
+ * reference-only (part of the job description, not tracked).
+ */
+export const jobDuties = mysqlTable("jobDuties", {
+  id: int("id").autoincrement().primaryKey(),
+  jobRoleId: int("jobRoleId").references(() => jobRoles.id).notNull(),
+  category: varchar("category", { length: 80 }).notNull().default("General"),
+  title: varchar("title", { length: 255 }).notNull(),
+  detail: text("detail"),
+  frequency: mysqlEnum("frequency", ["daily", "weekly", "monthly", "as_needed"]).default("daily").notNull(),
+  sortOrder: int("sortOrder").default(0).notNull(),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  roleIdx: index("jobDuties_role_idx").on(t.jobRoleId),
+}));
+
+export type JobDuty = typeof jobDuties.$inferSelect;
+
+/** Employment details for a user: which job they hold and where they're based. */
+export const staffProfiles = mysqlTable("staffProfiles", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").references(() => users.id).notNull().unique(),
+  jobRoleId: int("jobRoleId").references(() => jobRoles.id),
+  homeClinicId: int("homeClinicId").references(() => clinics.id),
+  // Willing/able to cover shifts at other clinics — drives the coverage finder.
+  canFloat: boolean("canFloat").default(false).notNull(),
+  hoursPerWeek: int("hoursPerWeek").default(40),
+  hireDate: varchar("hireDate", { length: 10 }),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type StaffProfile = typeof staffProfiles.$inferSelect;
+
+/** A scheduled shift: one person, one clinic, one day. */
+export const shifts = mysqlTable("shifts", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").references(() => users.id).notNull(),
+  clinicId: int("clinicId").references(() => clinics.id).notNull(),
+  date: varchar("date", { length: 10 }).notNull(), // YYYY-MM-DD (clinic-local)
+  startTime: varchar("startTime", { length: 5 }).notNull(), // HH:MM
+  endTime: varchar("endTime", { length: 5 }).notNull(),
+  // called_out = the employee can't work it; the shift stays on the board as a
+  // coverage need until another shift points at it via coversShiftId.
+  status: mysqlEnum("status", ["scheduled", "called_out"]).default("scheduled").notNull(),
+  coversShiftId: int("coversShiftId"),
+  note: text("note"),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  dateIdx: index("shifts_date_idx").on(t.date),
+  userDateIdx: index("shifts_user_date_idx").on(t.userId, t.date),
+}));
+
+export type Shift = typeof shifts.$inferSelect;
+
+export const timeOffRequests = mysqlTable("timeOffRequests", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").references(() => users.id).notNull(),
+  startDate: varchar("startDate", { length: 10 }).notNull(),
+  endDate: varchar("endDate", { length: 10 }).notNull(),
+  type: mysqlEnum("type", ["pto", "sick", "unpaid", "other"]).default("pto").notNull(),
+  reason: text("reason"),
+  status: mysqlEnum("status", ["pending", "approved", "denied", "cancelled"]).default("pending").notNull(),
+  managerNote: text("managerNote"),
+  decidedByUserId: int("decidedByUserId").references(() => users.id),
+  decidedAt: datetime("decidedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  userIdx: index("timeOff_user_idx").on(t.userId),
+  statusIdx: index("timeOff_status_idx").on(t.status),
+}));
+
+export type TimeOffRequest = typeof timeOffRequests.$inferSelect;
+
+/** Clock in / clock out. An open punch has clockOutAt = null. */
+export const timePunches = mysqlTable("timePunches", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").references(() => users.id).notNull(),
+  clinicId: int("clinicId").references(() => clinics.id),
+  shiftId: int("shiftId").references(() => shifts.id),
+  workDate: varchar("workDate", { length: 10 }).notNull(), // clinic-local date of clock-in
+  clockInAt: datetime("clockInAt").notNull(),
+  clockOutAt: datetime("clockOutAt"),
+  // Minutes past the scheduled start at clock-in (0 if on time / unscheduled).
+  minutesLate: int("minutesLate").default(0).notNull(),
+  note: text("note"),
+  // Set when a manager corrected this punch (missed clock-out, etc.).
+  editedByUserId: int("editedByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  userDateIdx: index("timePunches_user_date_idx").on(t.userId, t.workDate),
+  dateIdx: index("timePunches_date_idx").on(t.workDate),
+}));
+
+export type TimePunch = typeof timePunches.$inferSelect;
+
+/**
+ * A duty checked off for a period. periodKey is the date for daily duties, the
+ * Monday of the week for weekly duties, and YYYY-MM for monthly duties.
+ */
+export const dutyCompletions = mysqlTable("dutyCompletions", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").references(() => users.id).notNull(),
+  dutyId: int("dutyId").references(() => jobDuties.id).notNull(),
+  periodKey: varchar("periodKey", { length: 10 }).notNull(),
+  completedAt: timestamp("completedAt").defaultNow().notNull(),
+}, (t) => ({
+  userPeriodIdx: index("dutyCompletions_user_period_idx").on(t.userId, t.periodKey),
+}));
+
+export type DutyCompletion = typeof dutyCompletions.$inferSelect;
+
+/** Manager feedback on an employee: kudos, coaching, or a formal review (1-5). */
+export const performanceNotes = mysqlTable("performanceNotes", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").references(() => users.id).notNull(),
+  authorUserId: int("authorUserId").references(() => users.id),
+  kind: mysqlEnum("kind", ["kudos", "coaching", "review"]).default("review").notNull(),
+  rating: int("rating"),
+  note: text("note").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  userIdx: index("performanceNotes_user_idx").on(t.userId),
+}));
+
+export type PerformanceNote = typeof performanceNotes.$inferSelect;

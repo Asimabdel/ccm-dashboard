@@ -42,8 +42,9 @@ export default function ReportsPage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
   const [tab, setTab] = useState<"custom" | "monthly">("custom");
   const [month, setMonth] = useState(currentMonthStr());
+  const [program, setProgram] = useState<"ccm" | "bhi" | "apcm">("ccm");
 
-  const input = useMemo(() => ({ month }), [month]);
+  const input = useMemo(() => ({ month, program }), [month, program]);
   const report = trpc.reports.summary.useQuery(input, { enabled: !!user && tab === "monthly" });
 
   if (loading || !user) {
@@ -76,9 +77,18 @@ export default function ReportsPage() {
 
       {tab === "monthly" && (
       <>
-      <div className="flex items-center gap-2 mb-6">
+      <div className="flex items-center gap-3 mb-6 flex-wrap">
         <input type="month" value={month} onChange={(e) => setMonth(e.target.value || currentMonthStr())}
           className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[hsl(17_72%_62%)]" />
+        {/* Program: CCM vs BHI vs APCM — tracked separately */}
+        <div className="inline-flex p-1 rounded-xl bg-slate-100">
+          {([["ccm", "CCM"], ["bhi", "BHI"], ["apcm", "APCM"]] as const).map(([k, label]) => (
+            <button key={k} onClick={() => setProgram(k)}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-sm font-semibold transition ${program === k ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {report.isLoading && <div className="py-12 text-center"><Loader2 className="animate-spin text-slate-300 mx-auto" /></div>}
@@ -87,7 +97,7 @@ export default function ReportsPage() {
         <>
           {/* Key metrics — scoped to actively-enrolled patients */}
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            <Stat label="Completed CCMs" value={stats.completed} sub={`~${stats.avgPerDay}/day · of ${stats.totalTasks} active`} tone="good" />
+            <Stat label={`Completed ${program.toUpperCase()}s`} value={stats.completed} sub={`~${stats.avgPerDay}/day · of ${stats.totalTasks} active`} tone="good" />
             <Stat label="Completion rate" value={`${stats.completionPct}%`} sub={`${stats.daysElapsed} of ${stats.daysInMonth} days elapsed`} />
             <Stat label="Billable (≥20 min)" value={stats.billable ?? 0} sub={`of ${stats.completed} completed · ${Math.round((stats.totalMinutes || 0) / 60)}h logged`} tone={(stats.billable ?? 0) < stats.completed ? "warn" : "good"} />
             <Stat label="Not reached" value={stats.notReached} sub={`${stats.pendingEscalations} escalation(s) open`} tone={stats.notReached ? "warn" : "default"} />

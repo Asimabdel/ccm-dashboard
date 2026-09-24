@@ -60,6 +60,10 @@ import {
   bulkInsertPatients,
   findExistingByNames,
   updatePatientRPM,
+  updatePatientBHI,
+  bulkEnrollPatientsBHI,
+  updatePatientAPCM,
+  bulkEnrollAPCM,
   normalizeName,
 } from "./db";
 import {
@@ -72,8 +76,18 @@ import {
   users,
 } from "../drizzle/schema";
 import { ccmNotesRouter } from "./routers/ccmNotes";
+import { workforceRouter } from "./routers/workforce";
 import { seedDatabase, isSeeded, currentMonth } from "./seed";
-import { ensureMonthlyTask, deletePatient, getUpcomingAppointments } from "./db";
+import { ensureMonthlyTask, ensureMonthlyTasksForPatient, deletePatient, getUpcomingAppointments } from "./db";
+import {
+  getProviderByUserId, createRefillRequest, getRefillRequestsForProvider,
+  getRefillRequestsForPatient, getPendingRefillCountForProvider, decideRefillRequest,
+  createProviderLogin,
+} from "./db";
+import {
+  getReachOutContacts, getReachOutStats, logReachOutCall, bulkInsertReachOut, deleteReachOutContact,
+} from "./db";
+import { getApcmOverview, applyStandardApcmCarePlan } from "./db";
 import { parsePatientCsv, findInBatchDuplicates, matchProviderId, matchWorklistStatus } from "../shared/csvImport";
 import { clinics, providers } from "../drizzle/schema";
 
@@ -108,7 +122,7 @@ const statusEnum = z.enum([
   "needs_appointment", "documentation_incomplete", "ready_for_billing", "billed",
   "cancelled", "unable_to_reach", "declined_ccm", "inactive",
 ]);
-const roleEnum = z.enum(["admin", "staff", "provider", "billing", "front_desk", "user"]);
+const roleEnum = z.enum(["admin", "staff", "provider", "billing", "front_desk", "medical_assistant", "user"]);
 
 // Statuses that mean the patient was actually called this cycle — these stamp the
 // patient's "Last Called" date automatically.
@@ -118,9 +132,55 @@ const CONTACTED_STATUSES = [
   "ready_for_billing", "billed",
 ];
 
+// Minimal CSV parser for the Reach Out import: flexible headers (name or first/last,
+// any phone column, optional DOB/insurance/language). Handles quoted fields + commas.
+function parseReachOutCsv(csv: string) {
+  const rows: string[][] = [];
+  let row: string[] = [], field = "", q = false;
+  for (let i = 0; i < csv.length; i++) {
+    const ch = csv[i];
+    if (q) {
+      if (ch === '"') { if (csv[i + 1] === '"') { field += '"'; i++; } else q = false; }
+      else field += ch;
+    } else if (ch === '"') q = true;
+    else if (ch === ",") { row.push(field); field = ""; }
+    else if (ch === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
+    else if (ch !== "\r") field += ch;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  if (!rows.length) return [];
+  const header = rows[0].map((h) => h.trim().toLowerCase());
+  const idx = (...names: string[]) => header.findIndex((h) => names.includes(h));
+  const iName = idx("name", "patient", "patient name", "full name");
+  const iFirst = idx("first name", "firstname", "first");
+  const iLast = idx("last name", "lastname", "last");
+  const iPhone = idx("phone", "phonenumber", "phone number", "mobile phone", "mobile", "cell", "cell phone", "home phone");
+  const iDob = idx("dob", "date of birth", "dateofbirth", "birthdate");
+  const iIns = idx("insurance", "plan", "payer", "carrier");
+  const iLang = idx("language", "preferred language", "preferredlanguage");
+  const out: { name: string; phoneNumber: string; dateOfBirth: Date | null; insurance: string | null; language: string | null }[] = [];
+  for (let r = 1; r < rows.length; r++) {
+    const cols = rows[r];
+    if (!cols || cols.every((c) => !c || !c.trim())) continue;
+    const at = (i: number) => (i >= 0 ? (cols[i] ?? "").trim() : "");
+    const name = iName >= 0 ? at(iName) : `${at(iFirst)} ${at(iLast)}`.replace(/\s+/g, " ").trim();
+    const phone = at(iPhone);
+    if (!name && !phone) continue;
+    let dob: Date | null = null;
+    const dRaw = at(iDob);
+    if (dRaw) { const m = dRaw.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/); if (m) { let [, mo, d, y] = m; if (y.length === 2) y = (Number(y) > 30 ? "19" : "20") + y; const dt = new Date(`${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}T00:00:00Z`); if (!isNaN(+dt)) dob = dt; } }
+    out.push({ name: name.slice(0, 255), phoneNumber: phone.slice(0, 20), dateOfBirth: dob, insurance: (at(iIns) || null)?.slice(0, 255) ?? null, language: (at(iLang) || null)?.slice(0, 50) ?? null });
+  }
+  return out;
+}
+
+const reachCallStatusEnum = z.enum(["not_called", "no_answer", "voicemail", "wrong_number", "callback", "reached", "do_not_call"]);
+const reachOutcomeEnum = z.enum(["pending", "wants_appointment", "appointment_scheduled", "already_scheduled", "not_interested", "declined"]);
+
 export const appRouter = router({
   system: systemRouter,
   ccmNotesAI: ccmNotesRouter,
+  workforce: workforceRouter,
 
   auth: router({
     me: publicProcedure.query((opts) => sanitizeUser(opts.ctx.user)),
@@ -318,10 +378,10 @@ export const appRouter = router({
       return summary;
     }),
     stats: protectedProcedure
-      .input(z.object({ month: z.string() }).optional())
+      .input(z.object({ month: z.string().optional(), program: z.enum(["ccm", "bhi", "apcm"]).optional() }).optional())
       .query(async ({ input, ctx }) => {
         requireRole(ctx, ["admin"]);
-        return getAdminStats(input?.month || currentMonth());
+        return getAdminStats(input?.month || currentMonth(), input?.program);
       }),
     staffPerformance: protectedProcedure
       .input(z.object({ month: z.string() }).optional())
@@ -439,6 +499,82 @@ export const appRouter = router({
         return result;
       }),
 
+    /** Enroll / update a patient's Behavioral Health Integration (BHI 99484) status. */
+    updateBHI: protectedProcedure
+      .input(
+        z.object({
+          id: z.number(),
+          bhiEnrollmentStatus: z.enum(["not_enrolled", "active", "inactive", "declined", "transferred"]).optional(),
+          bhiConditions: z.array(z.string()).optional(),
+          bhiConsentStatus: z.enum(["consented", "pending", "declined"]).optional(),
+          bhiConsentDate: z.date().nullable().optional(),
+          bhiInitiatingVisitDate: z.date().nullable().optional(),
+          bhiCarePlan: z.string().nullable().optional(),
+          assignedStaffId: z.number().nullable().optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "staff", "front_desk"]);
+        const { id, ...data } = input;
+        const result = await updatePatientBHI(id, data, currentMonth());
+        void logAudit(ctx, "update_patient", { entityType: "patient", entityId: id, description: `Updated BHI enrollment for patient #${id}` });
+        return result;
+      }),
+
+    /** Bulk-enroll a set of existing patients in BHI (99484). */
+    bulkEnrollBHI: protectedProcedure
+      .input(
+        z.object({
+          ids: z.array(z.number()).min(1),
+          bhiConditions: z.array(z.string()).optional(),
+          bhiConsentStatus: z.enum(["consented", "pending", "declined"]).optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "staff", "front_desk"]);
+        const count = await bulkEnrollPatientsBHI(input.ids, { bhiConditions: input.bhiConditions, bhiConsentStatus: input.bhiConsentStatus }, currentMonth());
+        void logAudit(ctx, "update_patient", { entityType: "patient", description: `Bulk-enrolled ${count} patients in BHI` });
+        return { success: true, count };
+      }),
+
+    /** Enroll/update a patient in APCM (G0556/57/58). Auto-stratifies by complexity
+     *  and enforces CCM mutual-exclusivity (enrolling APCM takes them off CCM). */
+    updateAPCM: protectedProcedure
+      .input(
+        z.object({
+          id: z.number(),
+          apcmEnrollmentStatus: z.enum(["not_enrolled", "active", "inactive", "declined", "transferred"]).optional(),
+          isQMB: z.boolean().optional(),
+          apcmConsentStatus: z.enum(["consented", "pending", "declined"]).optional(),
+          apcmConsentDate: z.date().nullable().optional(),
+          apcmInitiatingVisitDate: z.date().nullable().optional(),
+          apcmCarePlan: z.string().nullable().optional(),
+          assignedStaffId: z.number().nullable().optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "staff", "front_desk"]);
+        const { id, ...data } = input;
+        const result = await updatePatientAPCM(id, data, currentMonth());
+        void logAudit(ctx, "update_patient", { entityType: "patient", entityId: id, description: `Updated APCM enrollment for patient #${id}` });
+        return result;
+      }),
+
+    /** Bulk-enroll a set of existing patients in APCM (moves them off CCM). */
+    bulkEnrollAPCM: protectedProcedure
+      .input(
+        z.object({
+          ids: z.array(z.number()).min(1),
+          apcmConsentStatus: z.enum(["consented", "pending", "declined"]).optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "staff", "front_desk"]);
+        const count = await bulkEnrollAPCM(input.ids, { apcmConsentStatus: input.apcmConsentStatus }, currentMonth());
+        void logAudit(ctx, "update_patient", { entityType: "patient", description: `Bulk-enrolled ${count} patients in APCM` });
+        return { success: true, count };
+      }),
+
     /** Update Last Called and/or Next Appointment dates for a single patient. */
     updateDates: protectedProcedure
       .input(
@@ -512,6 +648,10 @@ export const appRouter = router({
           defaultProviderId: z.number().optional(),
           defaultStaffId: z.number().optional(),
           skipExistingDuplicates: z.boolean().default(true),
+          // Enroll every imported patient in BHI (99484) — use when the whole file
+          // is a BHI-eligibility list. Per-row "BHI" columns still apply on top.
+          defaultEnrollBHI: z.boolean().optional(),
+          defaultBhiConditions: z.array(z.string()).optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
@@ -553,6 +693,10 @@ export const appRouter = router({
           // Carry the file's status onto this month's worklist task.
           worklistStatus: matchWorklistStatus(r.wellnessCallStatus),
           ccmEnrollmentStatus: r.enrollmentStatus,
+          // BHI: per-row "BHI" column OR the whole-file toggle enrolls the patient;
+          // conditions come from the row's "BHI Conditions" column or the shared default.
+          bhiEnroll: r.bhiEnroll || input.defaultEnrollBHI || false,
+          bhiConditions: (r.bhiConditions && r.bhiConditions.length ? r.bhiConditions : input.defaultBhiConditions) || [],
         }));
 
         // Inserts patients AND their current-month worklist tasks (with the mapped
@@ -595,9 +739,9 @@ export const appRouter = router({
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { id, ...updateData } = input;
         await db.update(patients).set({ ...updateData, updatedAt: new Date() }).where(eq(patients.id, id));
-        // Keep this month's worklist task in sync (creates one if missing, updates the
-        // assigned employee if it changed) so reassignments reflect on the worklist.
-        await ensureMonthlyTask(id, currentMonth());
+        // Keep this month's worklist tasks in sync for whichever programs the patient
+        // is enrolled in (creates missing ones, updates the assigned employee).
+        await ensureMonthlyTasksForPatient(id, currentMonth());
         void logAudit(ctx, "update_patient", { entityType: "patient", entityId: id, description: `Updated patient #${id}` });
         return getPatientById(id);
       }),
@@ -634,6 +778,7 @@ export const appRouter = router({
           assignedStaffId: z.number().optional(),
           clinicId: z.number().optional(),
           providerId: z.number().optional(),
+          program: z.enum(["ccm", "bhi", "apcm"]).optional(),
         }).optional()
       )
       .query(async ({ input, ctx }) => {
@@ -646,12 +791,12 @@ export const appRouter = router({
       }),
 
     mine: protectedProcedure
-      .input(z.object({ month: z.string().optional() }).optional())
+      .input(z.object({ month: z.string().optional(), program: z.enum(["ccm", "bhi", "apcm"]).optional() }).optional())
       .query(async ({ input, ctx }) => {
         requireRole(ctx, ["staff", "admin"]);
         const month = input?.month || currentMonth();
         if (month === currentMonth()) await ensureMonthlyWorklistGenerated(month);
-        return getWorklistForMonth(month, { assignedStaffId: ctx.user.id });
+        return getWorklistForMonth(month, { assignedStaffId: ctx.user.id, program: input?.program });
       }),
 
     generate: protectedProcedure
@@ -677,12 +822,14 @@ export const appRouter = router({
           const task = await getCCMTaskById(input.id);
           if (task?.patientId) await db.update(patients).set({ lastCalledAt: now, updatedAt: now }).where(eq(patients.id, task.patientId));
         }
-        // Marking Inactive / Declined CCM moves the patient off the worklist onto its
-        // own tab by syncing the patient's enrollment status.
+        // Marking Inactive / Declined moves the patient off THIS program's worklist
+        // onto its own tab by syncing the matching enrollment status (CCM vs BHI).
         if (input.status === "inactive" || input.status === "declined_ccm") {
           const t = await getCCMTaskById(input.id);
           if (t?.patientId) {
-            await db.update(patients).set({ ccmEnrollmentStatus: input.status === "inactive" ? "inactive" : "declined", updatedAt: now }).where(eq(patients.id, t.patientId));
+            const patch: Record<string, unknown> = { updatedAt: now };
+            patch[t.program === "bhi" ? "bhiEnrollmentStatus" : t.program === "apcm" ? "apcmEnrollmentStatus" : "ccmEnrollmentStatus"] = input.status === "inactive" ? "inactive" : "declined";
+            await db.update(patients).set(patch as any).where(eq(patients.id, t.patientId));
           }
         }
         await recomputeBilling(input.id, currentMonth());
@@ -705,7 +852,11 @@ export const appRouter = router({
           }
           if (input.status === "inactive" || input.status === "declined_ccm") {
             const t = await getCCMTaskById(id);
-            if (t?.patientId) await db.update(patients).set({ ccmEnrollmentStatus: input.status === "inactive" ? "inactive" : "declined", updatedAt: now }).where(eq(patients.id, t.patientId));
+            if (t?.patientId) {
+              const patch: Record<string, unknown> = { updatedAt: now };
+              patch[t.program === "bhi" ? "bhiEnrollmentStatus" : t.program === "apcm" ? "apcmEnrollmentStatus" : "ccmEnrollmentStatus"] = input.status === "inactive" ? "inactive" : "declined";
+              await db.update(patients).set(patch as any).where(eq(patients.id, t.patientId));
+            }
           }
           await recomputeBilling(id, currentMonth());
         }
@@ -814,8 +965,16 @@ export const appRouter = router({
           escalationFlag: z.boolean().optional(),
           escalationReason: z.string().optional(),
           followUpActions: z.array(z.string()).optional(),
+          // ---- BHI (99484) behavioral-health assessment (BHI calls only) ----
+          phq9Score: z.number().int().min(0).max(27).nullable().optional(),
+          gad7Score: z.number().int().min(0).max(21).nullable().optional(),
+          assessmentToolOther: z.string().optional(),
+          assessmentScoreOther: z.number().int().nullable().optional(),
+          behavioralStatus: z.enum(["improved", "unchanged", "worsening", "new"]).optional(),
+          carePlanUpdated: z.boolean().optional(),
+          bhiRiskFlag: z.boolean().optional(),
           // Clinical staff minutes spent during THIS session — accrued onto the
-          // monthly task's total (CCM 99490 requires >=20 documented min/month).
+          // monthly task's total (CCM 99490 / BHI 99484 require >=20 documented min/month).
           sessionMinutes: z.number().int().min(0).max(480).optional(),
           markCompleted: z.boolean().optional(),
         })
@@ -843,9 +1002,17 @@ export const appRouter = router({
           patientConcerns: input.patientConcerns,
           generatedNote: input.generatedNote,
           aiGeneratedAt: input.aiGeneratedAt ? new Date(input.aiGeneratedAt) : undefined,
-          escalationFlag: input.escalationFlag || false,
+          escalationFlag: (input.escalationFlag || input.bhiRiskFlag) || false,
           escalationReason: input.escalationReason,
           followUpActions: input.followUpActions || [],
+          // BHI assessment (undefined for CCM calls — columns stay null).
+          phq9Score: input.phq9Score ?? null,
+          gad7Score: input.gad7Score ?? null,
+          assessmentToolOther: input.assessmentToolOther,
+          assessmentScoreOther: input.assessmentScoreOther ?? null,
+          behavioralStatus: input.behavioralStatus,
+          carePlanUpdated: input.carePlanUpdated || false,
+          bhiRiskFlag: input.bhiRiskFlag || false,
         };
 
         let noteId: number;
@@ -857,6 +1024,10 @@ export const appRouter = router({
           noteId = res[0]?.insertId ?? 0;
         }
 
+        // A behavioral-health risk flag (e.g. PHQ-9 item 9 / suicidal ideation) is
+        // treated like a clinical escalation — routes the task to provider review.
+        const escalate = !!(input.escalationFlag || input.bhiRiskFlag);
+
         // Update task time + completion
         const taskUpdate: any = { updatedAt: new Date() };
         const mins = input.sessionMinutes ?? 0;
@@ -866,8 +1037,8 @@ export const appRouter = router({
         }
         if (input.markCompleted) {
           taskUpdate.ccmNoteCompleted = true;
-          taskUpdate.status = input.escalationFlag ? "needs_provider_review" : "completed";
-          if (input.escalationFlag) taskUpdate.providerReviewNeeded = true;
+          taskUpdate.status = escalate ? "needs_provider_review" : "completed";
+          if (escalate) taskUpdate.providerReviewNeeded = true;
           taskUpdate.completedAt = new Date();
           taskUpdate.completedByStaffId = ctx.user.id;
         }
@@ -879,14 +1050,15 @@ export const appRouter = router({
         // Escalation -> create provider escalation + notify provider.
         // Requires a provider on the patient (escalations route to a provider);
         // patients imported without a provider simply can't be escalated this way.
-        if (input.escalationFlag && noteId) {
+        if (escalate && noteId) {
           const patient = await getPatientById(input.patientId);
           if (patient && patient.providerId) {
+            const reason = input.escalationReason || (input.bhiRiskFlag ? "Behavioral-health safety risk flagged." : "Provider review requested.");
             await db.insert(providerEscalations).values({
               ccmNoteId: noteId,
               patientId: input.patientId,
               providerId: patient.providerId,
-              reason: input.escalationReason || "Provider review requested.",
+              reason,
               escalationStatus: "pending",
             });
             const provider = await getProviderById(patient.providerId);
@@ -895,7 +1067,7 @@ export const appRouter = router({
                 userId: provider.userId,
                 type: "escalation",
                 title: "Patient escalated for review",
-                content: `${patient.name} was escalated: ${input.escalationReason || "Provider review requested."}`,
+                content: `${patient.name} was escalated: ${reason}`,
                 relatedPatientId: patient.id,
                 relatedCCMTaskId: input.ccmTaskId,
               });
@@ -951,13 +1123,163 @@ export const appRouter = router({
       }),
   }),
 
+  // ---- Medication refill requests (coordinator -> provider) ----
+  refills: router({
+    // Coordinator sends a refill request; it routes to the patient's provider.
+    create: protectedProcedure
+      .input(z.object({
+        patientId: z.number(),
+        medications: z.array(z.object({ name: z.string().min(1), note: z.string().optional() })).min(1),
+        note: z.string().optional(),
+        ccmTaskId: z.number().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "staff"]);
+        const patient = await getPatientById(input.patientId);
+        if (!patient) throw new TRPCError({ code: "NOT_FOUND", message: "Patient not found." });
+        const res = await createRefillRequest({
+          patientId: input.patientId,
+          providerId: patient.providerId ?? null,
+          requestedByUserId: ctx.user.id,
+          ccmTaskId: input.ccmTaskId ?? null,
+          medications: input.medications,
+          note: input.note,
+        });
+        void logAudit(ctx, "update_patient", { entityType: "patient", entityId: input.patientId, description: `Refill request sent to provider: ${input.medications.map((m) => m.name).join(", ")}` });
+        return res;
+      }),
+
+    // Provider portal: refill requests routed to me (optionally filtered by status).
+    mine: protectedProcedure
+      .input(z.object({ status: z.string().optional() }).optional())
+      .query(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "provider"]);
+        const prov = await getProviderByUserId(ctx.user.id);
+        if (!prov) return [];
+        return getRefillRequestsForProvider(prov.id, input?.status);
+      }),
+
+    // Pending count for the logged-in provider (portal badge).
+    myPendingCount: protectedProcedure.query(async ({ ctx }) => {
+      if (ctx.user.role !== "provider" && ctx.user.role !== "admin") return 0;
+      const prov = await getProviderByUserId(ctx.user.id);
+      return prov ? getPendingRefillCountForProvider(prov.id) : 0;
+    }),
+
+    // Refill history for a patient (shown on the patient page).
+    forPatient: protectedProcedure
+      .input(z.number())
+      .query(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "staff", "provider", "front_desk", "billing"]);
+        return getRefillRequestsForPatient(input);
+      }),
+
+    // Provider decides: Approve / Schedule visit / Don't refill (+ optional note).
+    decide: protectedProcedure
+      .input(z.object({ id: z.number(), status: z.enum(["approved", "schedule_visit", "denied"]), providerNote: z.string().optional() }))
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "provider"]);
+        // Providers may only decide requests routed to them; admins may decide any.
+        const guard = ctx.user.role === "provider" ? (await getProviderByUserId(ctx.user.id))?.id ?? -1 : undefined;
+        const res = await decideRefillRequest(input.id, ctx.user.id, input.status, input.providerNote, guard);
+        if (!res.success) throw new TRPCError({ code: "FORBIDDEN", message: "This refill request is not assigned to you." });
+        return res;
+      }),
+  }),
+
+  // ---- APCM (Advanced Primary Care Management) management tab ----
+  apcm: router({
+    overview: protectedProcedure
+      .input(z.object({
+        month: z.string().optional(),
+        category: z.enum(["ready", "needs_setup", "ccm_done"]).optional(),
+        assignedStaffId: z.number().optional(),
+        search: z.string().optional(),
+        limit: z.number().optional(),
+        offset: z.number().optional(),
+      }).optional())
+      .query(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "staff", "billing"]);
+        return getApcmOverview(input?.month || currentMonth(), input || {});
+      }),
+
+    // Bulk-apply the standard (personalized) care plan to APCM patients missing one.
+    applyStandardCarePlan: protectedProcedure
+      .input(z.object({ limit: z.number().optional() }).optional())
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "staff"]);
+        const res = await applyStandardApcmCarePlan({ limit: input?.limit });
+        void logAudit(ctx, "update_patient", { entityType: "apcm", description: `Applied standard APCM care plan to ${res.applied} patients` });
+        return res;
+      }),
+  }),
+
+  // ---- Reach Out (outbound appointment-scheduling call campaign) ----
+  reachOut: router({
+    // Shared-pool contact list (un-called first), filtered + paginated.
+    list: protectedProcedure
+      .input(z.object({
+        callStatus: z.string().optional(),
+        outcome: z.string().optional(),
+        search: z.string().optional(),
+        uncontactedOnly: z.boolean().optional(),
+        limit: z.number().optional(),
+        offset: z.number().optional(),
+      }).optional())
+      .query(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "staff"]);
+        return getReachOutContacts(input || {});
+      }),
+
+    // Campaign dashboard metrics.
+    stats: protectedProcedure.query(async ({ ctx }) => {
+      requireRole(ctx, ["admin", "staff"]);
+      return getReachOutStats();
+    }),
+
+    // Log a call: result + (optional) outcome + note; stamps caller and bumps attempts.
+    logCall: protectedProcedure
+      .input(z.object({
+        id: z.number(),
+        callStatus: reachCallStatusEnum,
+        outcome: reachOutcomeEnum.optional(),
+        note: z.string().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin", "staff"]);
+        const res = await logReachOutCall({ ...input, staffId: ctx.user.id, staffName: ctx.user.name ?? null });
+        if (!res.success) throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found." });
+        return res;
+      }),
+
+    // Bulk-import the campaign list from CSV text (admin).
+    import: protectedProcedure
+      .input(z.object({ csv: z.string().min(1), campaign: z.string().optional() }))
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin"]);
+        const parsed = parseReachOutCsv(input.csv);
+        if (!parsed.length) throw new TRPCError({ code: "BAD_REQUEST", message: "No valid rows found. Expected a header row with at least a name and phone column." });
+        const imported = await bulkInsertReachOut(parsed, input.campaign || "insurance-outreach");
+        void logAudit(ctx, "bulk_import_patients", { entityType: "reachOut", description: `Reach Out import: ${imported} contacts` });
+        return { imported };
+      }),
+
+    remove: protectedProcedure
+      .input(z.number())
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin"]);
+        await deleteReachOutContact(input);
+        return { success: true };
+      }),
+  }),
+
   // ---- Billing ----
   billing: router({
     list: protectedProcedure
-      .input(z.object({ month: z.string().optional(), status: z.string().optional() }).optional())
+      .input(z.object({ month: z.string().optional(), status: z.string().optional(), program: z.enum(["ccm", "bhi", "apcm"]).optional() }).optional())
       .query(async ({ input, ctx }) => {
         requireRole(ctx, ["admin", "billing"]);
-        return getEnrichedBilling(input?.month || currentMonth(), input?.status);
+        return getEnrichedBilling(input?.month || currentMonth(), input?.status, input?.program);
       }),
 
     markBilled: protectedProcedure
@@ -1079,6 +1401,19 @@ export const appRouter = router({
     all: protectedProcedure.query(async () => getAllProviders()),
     listByClinic: protectedProcedure.input(z.number()).query(async ({ input }) => getProvidersByClinic(input)),
     getById: protectedProcedure.input(z.number()).query(async ({ input }) => getProviderById(input)),
+    // Give a provider their own secure portal login (creates role=provider user + links it).
+    createLogin: protectedProcedure
+      .input(z.object({ providerId: z.number(), email: z.string().email(), password: z.string() }))
+      .mutation(async ({ input, ctx }) => {
+        requireRole(ctx, ["admin"]);
+        const strengthError = validatePasswordStrength(input.password);
+        if (strengthError) throw new TRPCError({ code: "BAD_REQUEST", message: strengthError });
+        const passwordHash = await hashPassword(input.password);
+        const res = await createProviderLogin(input.providerId, input.email, passwordHash);
+        if (!res.success) throw new TRPCError({ code: "BAD_REQUEST", message: res.error || "Could not create login." });
+        void logAudit(ctx, "manage_access", { entityType: "user", entityId: res.userId, description: `Created provider portal login for provider #${input.providerId} (${input.email})` });
+        return { success: true };
+      }),
     create: protectedProcedure
       .input(z.object({ name: z.string().min(1), title: z.string().optional(), clinicId: z.number().optional(), userId: z.number().optional(), aliases: z.array(z.string()).optional() }))
       .mutation(async ({ input, ctx }) => {
@@ -1126,19 +1461,20 @@ export const appRouter = router({
   // ---- Reports ----
   reports: router({
     summary: protectedProcedure
-      .input(z.object({ month: z.string().optional() }).optional())
+      .input(z.object({ month: z.string().optional(), program: z.enum(["ccm", "bhi", "apcm"]).optional() }).optional())
       .query(async ({ input, ctx }) => {
         requireRole(ctx, ["admin", "billing"]);
         const month = input?.month || currentMonth();
+        const program = input?.program ?? "ccm";
         const [stats, staffPerf, clinicPerf, providerPerf, trend, monthlyTrend] = await Promise.all([
-          getAdminStats(month),
-          getStaffPerformance(month),
-          getClinicPerformance(month),
-          getProviderPerformance(month),
-          getDailyCompletionTrend(month),
-          getMonthlyCompletionTrend(6),
+          getAdminStats(month, program),
+          getStaffPerformance(month, program),
+          getClinicPerformance(month, program),
+          getProviderPerformance(month, program),
+          getDailyCompletionTrend(month, program),
+          getMonthlyCompletionTrend(6, program),
         ]);
-        return { month, stats, staffPerformance: staffPerf, clinicPerformance: clinicPerf, providerPerformance: providerPerf, dailyTrend: trend, monthlyTrend };
+        return { month, program, stats, staffPerformance: staffPerf, clinicPerformance: clinicPerf, providerPerformance: providerPerf, dailyTrend: trend, monthlyTrend };
       }),
 
     // Flexible completion report: group by any combination of date/week/provider/employee/clinic

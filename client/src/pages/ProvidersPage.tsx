@@ -3,7 +3,7 @@ import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { useState } from "react";
-import { Loader2, Stethoscope, Plus, Pencil, Trash2, Building2, ShieldCheck } from "lucide-react";
+import { Loader2, Stethoscope, Plus, Pencil, Trash2, Building2, ShieldCheck, KeyRound, CheckCircle2 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -25,11 +25,14 @@ export default function ProvidersPage() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<ProviderForm>(EMPTY);
   const [removeTarget, setRemoveTarget] = useState<{ id: number; name: string } | null>(null);
+  const [loginTarget, setLoginTarget] = useState<{ id: number; name: string } | null>(null);
+  const [loginForm, setLoginForm] = useState({ email: "", password: "" });
 
   const invalidate = () => utils.providers.all.invalidate();
   const create = trpc.providers.create.useMutation({ onSuccess: () => { invalidate(); toast.success("Provider added."); setOpen(false); }, onError: (e) => toast.error(e.message) });
   const update = trpc.providers.update.useMutation({ onSuccess: () => { invalidate(); toast.success("Provider updated."); setOpen(false); }, onError: (e) => toast.error(e.message) });
   const remove = trpc.providers.remove.useMutation({ onSuccess: () => { invalidate(); toast.success("Provider removed."); setRemoveTarget(null); }, onError: (e) => { toast.error(e.message); setRemoveTarget(null); } });
+  const createLogin = trpc.providers.createLogin.useMutation({ onSuccess: () => { invalidate(); toast.success("Provider login created — share the temporary password; they'll set their own on first sign-in."); setLoginTarget(null); setLoginForm({ email: "", password: "" }); }, onError: (e) => toast.error(e.message) });
 
   if (loading || !user) {
     return <div className="min-h-screen flex items-center justify-center bg-white"><Loader2 className="animate-spin text-slate-400" /></div>;
@@ -74,6 +77,7 @@ export default function ProvidersPage() {
                   <th className="px-5 py-3 font-medium">Provider</th>
                   <th className="px-5 py-3 font-medium">Title</th>
                   <th className="px-5 py-3 font-medium">Clinic</th>
+                  <th className="px-5 py-3 font-medium">Portal login</th>
                   <th className="px-5 py-3 font-medium text-right">Actions</th>
                 </tr>
               </thead>
@@ -85,6 +89,11 @@ export default function ProvidersPage() {
                     </td>
                     <td className="px-5 py-3 text-slate-500">{r.provider.title || "—"}</td>
                     <td className="px-5 py-3 text-slate-500">{r.clinicName ? <span className="inline-flex items-center gap-1.5"><Building2 size={13} className="text-slate-400" /> {r.clinicName}{r.location ? ` · ${r.location}` : ""}</span> : "—"}</td>
+                    <td className="px-5 py-3">
+                      {r.provider.userId
+                        ? <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-semibold"><CheckCircle2 size={12} /> Active</span>
+                        : <button onClick={() => { setLoginTarget({ id: r.provider.id, name: r.provider.name }); setLoginForm({ email: "", password: "" }); }} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 text-slate-600 text-xs font-semibold hover:bg-slate-50 transition"><KeyRound size={13} /> Create login</button>}
+                    </td>
                     <td className="px-5 py-3 text-right">
                       <div className="inline-flex items-center gap-1">
                         <button onClick={() => openEdit({ id: r.provider.id, name: r.provider.name, title: r.provider.title || "", clinicId: r.provider.clinicId ? String(r.provider.clinicId) : "", aliases: (r.provider.aliases || []).join(", ") })} className="p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"><Pencil size={15} /></button>
@@ -125,6 +134,26 @@ export default function ProvidersPage() {
             <button onClick={() => setOpen(false)} className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50 transition">Cancel</button>
             <button onClick={submit} disabled={create.isPending || update.isPending} className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 active:scale-[0.97] transition disabled:opacity-50">
               {(create.isPending || update.isPending) && <Loader2 size={14} className="animate-spin" />} {form.id ? "Save changes" : "Add provider"}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!loginTarget} onOpenChange={(o) => !o && setLoginTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create portal login</DialogTitle>
+            <DialogDescription>Give <span className="font-semibold text-slate-700">{loginTarget?.name}</span> secure access to their provider portal (refill requests & escalations for their own patients). They'll set their own password on first sign-in.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div><label className="block text-xs font-medium text-slate-500 mb-1.5">Provider email *</label><input className={field} type="email" value={loginForm.email} onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })} placeholder="provider@clinic.com" /></div>
+            <div><label className="block text-xs font-medium text-slate-500 mb-1.5">Temporary password *</label><input className={field} value={loginForm.password} onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })} placeholder="At least 8 chars, 1 letter + 1 number" /><p className="text-[11px] text-slate-400 mt-1">Share this with the provider securely. They'll be prompted to change it on first login.</p></div>
+          </div>
+          <DialogFooter>
+            <button onClick={() => setLoginTarget(null)} className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50 transition">Cancel</button>
+            <button onClick={() => { if (!loginForm.email.trim() || !loginForm.password) { toast.error("Email and temporary password are required."); return; } loginTarget && createLogin.mutate({ providerId: loginTarget.id, email: loginForm.email.trim(), password: loginForm.password }); }}
+              disabled={createLogin.isPending} className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 active:scale-[0.97] transition disabled:opacity-50">
+              {createLogin.isPending ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} />} Create login
             </button>
           </DialogFooter>
         </DialogContent>

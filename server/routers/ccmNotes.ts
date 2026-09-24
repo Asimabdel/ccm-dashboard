@@ -8,6 +8,8 @@ export const ccmNotesRouter = router({
       z.object({
         patientName: z.string(),
         localDateTime: z.string().optional(), // caller's local date+time string for the header
+        // Which program this note documents — drives CCM vs BHI (99484) formatting.
+        program: z.enum(["ccm", "bhi", "apcm"]).optional(),
         responses: z.object({
           howFeeling: z.string().optional(),
           newSymptoms: z.string().optional(),
@@ -21,6 +23,16 @@ export const ccmNotesRouter = router({
           followUpNeeded: z.string().optional(),
           patientConcerns: z.string().optional(),
         }),
+        // BHI-only validated assessment context for the note.
+        bhiAssessment: z.object({
+          phq9Score: z.number().nullable().optional(),
+          gad7Score: z.number().nullable().optional(),
+          assessmentToolOther: z.string().optional(),
+          assessmentScoreOther: z.number().nullable().optional(),
+          behavioralStatus: z.string().optional(),
+          carePlanUpdated: z.boolean().optional(),
+          riskFlag: z.boolean().optional(),
+        }).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -29,7 +41,44 @@ export const ccmNotesRouter = router({
       const dateTime = input.localDateTime || new Date().toLocaleString();
       // The three header lines, placed deterministically at the very top of the note.
       const header = `Patient Name: ${input.patientName}\nDate and time: ${dateTime}\nCompleted by: ${employee}`;
-      const prompt = `Generate a professional and concise CCM (Chronic Care Management) monthly follow-up note based on the following patient call responses. The note should be well-organized, clinically appropriate, and suitable for medical records.
+
+      const isBhi = input.program === "bhi";
+      const a = input.bhiAssessment;
+      const bhiPrompt = `Generate a professional, concise BHI (Behavioral Health Integration, CPT 99484) monthly care-management note based on the following patient call. The note must document behavioral-health care management, be clinically appropriate, and be suitable for the medical record.
+
+Patient: ${input.patientName}
+
+Behavioral Health Check-In:
+- Mood / emotional wellbeing since last contact: ${input.responses.howFeeling || "Not reported"}
+- Behavioral symptoms / changes (sleep, appetite, concentration, energy): ${input.responses.newSymptoms || "None reported"}
+- Psychiatric medication adherence & side effects: ${input.responses.medicationAdherence || "Not discussed"}
+- Refills needed: ${input.responses.refillsNeeded || "None"}
+- Crisis events / ER / psychiatric hospitalization since last contact: ${input.responses.erHospitalizationSince || "None"}
+- Therapy / psychiatry / counseling engagement: ${input.responses.recentSpecialistVisits || "None"}
+- Upcoming behavioral-health appointments: ${input.responses.upcomingAppointments || "None scheduled"}
+- Follow-up / coordination needed: ${input.responses.followUpNeeded || "None identified"}
+- Patient concerns / psychosocial stressors: ${input.responses.patientConcerns || "None reported"}
+
+Validated Rating Scales:
+- PHQ-9 (depression, 0-27): ${a?.phq9Score ?? "Not administered"}
+- GAD-7 (anxiety, 0-21): ${a?.gad7Score ?? "Not administered"}
+- Other tool: ${a?.assessmentToolOther ? `${a.assessmentToolOther} = ${a.assessmentScoreOther ?? "n/a"}` : "None"}
+- Behavioral trajectory: ${a?.behavioralStatus || "Not specified"}
+- Behavioral care plan revised this month: ${a?.carePlanUpdated ? "Yes" : "No"}
+- Safety risk flagged: ${a?.riskFlag ? "YES — provider review required" : "No"}
+
+Generate a structured behavioral-health note with these sections:
+1. REASON FOR CONTACT
+2. BEHAVIORAL HEALTH STATUS (interval history)
+3. VALIDATED ASSESSMENT RESULTS (interpret PHQ-9/GAD-7 severity)
+4. MEDICATION & TREATMENT REVIEW
+5. CARE PLAN (goals, interventions, coordination — note any revision)
+6. RISK ASSESSMENT / SAFETY
+7. FOLLOW-UP
+
+The note should be professional, concise (300-500 words), and ready for the medical record. Begin directly with the first section heading — do NOT add a title, patient name, date, or "completed by" line, as those are added separately at the top of the note.`;
+
+      const ccmPrompt = `Generate a professional and concise CCM (Chronic Care Management) monthly follow-up note based on the following patient call responses. The note should be well-organized, clinically appropriate, and suitable for medical records.
 
 Patient: ${input.patientName}
 
@@ -57,13 +106,17 @@ Generate a structured clinical note with the following sections:
 
 The note should be professional, concise (300-500 words), and ready for inclusion in the patient's medical record. Begin directly with the first section heading — do NOT add a title, patient name, date, or "completed by" line, as those are added separately at the top of the note.`;
 
+      const prompt = isBhi ? bhiPrompt : ccmPrompt;
+      const systemContent = isBhi
+        ? "You are an experienced behavioral-health documentation specialist. Generate professional, clinically appropriate Behavioral Health Integration (BHI) care-management notes based on call summaries and validated rating scales (PHQ-9, GAD-7). Notes must be well-organized, concise, and suitable for the medical record."
+        : "You are an experienced medical documentation specialist. Generate professional, clinically appropriate CCM notes based on call summaries. Ensure notes are well-organized, concise, and suitable for medical records.";
+
       try {
         const response = await invokeLLM({
           messages: [
             {
               role: "system",
-              content:
-                "You are an experienced medical documentation specialist. Generate professional, clinically appropriate CCM notes based on call summaries. Ensure notes are well-organized, concise, and suitable for medical records.",
+              content: systemContent,
             },
             {
               role: "user",
