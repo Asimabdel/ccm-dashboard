@@ -6,6 +6,7 @@ import {
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { useWorkspace } from "@/components/workspace/useWorkspace";
+import { ClockStrip } from "@/components/workspace/ClockStrip";
 import {
   Btn, EmptyState, ErrorNote, FLOW_DOT, Loading, MetricCard, Panel, SectionLabel, TONE_TEXT, ToneTile, cardCls, fmtMinutes, type Tone,
 } from "@/components/workspace/ui";
@@ -94,6 +95,8 @@ export default function WorkspaceHome() {
         </h2>
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Let's make today a good day for great care.</p>
       </div>
+
+      <ClockStrip />
 
       {caps && !caps.tasks && (
         <Panel><EmptyState icon={Info} title="Your account doesn't have a Workspace role yet" body="Ask a practice manager to assign your role on the Team & Access page." /></Panel>

@@ -48,6 +48,10 @@ describe("workforce management is admin-only", () => {
     await expect(caller.workforce.performance.scorecards({ from: "2026-09-01", to: "2026-09-21" })).rejects.toThrow(/access/i);
     await expect(caller.workforce.performance.addNote({ userId: 1, kind: "kudos", note: "x" })).rejects.toThrow(/access/i);
     await expect(caller.workforce.punches.edit({ id: 1, clockInAt: new Date(), clockOutAt: null })).rejects.toThrow(/access/i);
+    await expect(caller.workforce.punches.add({ userId: 1, clockInAt: new Date(), clockOutAt: null })).rejects.toThrow(/access/i);
+    await expect(caller.workforce.punches.delete(1)).rejects.toThrow(/access/i);
+    await expect(caller.workforce.timesheet({ from: "2026-09-14", to: "2026-09-20" })).rejects.toThrow(/access/i);
+    await expect(caller.workforce.people.saveProfile({ userId: 1, jobRoleId: null, homeClinicId: null, canFloat: false, usesTimeClock: true, active: true })).rejects.toThrow(/access/i);
   });
 
   it("rejects malformed dates and times before any DB work", async () => {
@@ -59,6 +63,19 @@ describe("workforce management is admin-only", () => {
   it("rejects a time-off request that ends before it starts", async () => {
     const ma = appRouter.createCaller(ctxFor("medical_assistant"));
     await expect(ma.workforce.me.requestTimeOff({ startDate: "2026-10-10", endDate: "2026-10-08", type: "pto" })).rejects.toThrow(/end date/i);
+  });
+});
+
+describe("team schedule", () => {
+  it("is closed to accounts without an access role", async () => {
+    const pending = appRouter.createCaller(ctxFor("user"));
+    await expect(pending.workforce.team.week({ from: "2026-09-21", to: "2026-09-27" })).rejects.toThrow(/access/i);
+  });
+
+  it("rejects backwards or oversized ranges before any DB work", async () => {
+    const ma = appRouter.createCaller(ctxFor("medical_assistant"));
+    await expect(ma.workforce.team.week({ from: "2026-09-27", to: "2026-09-21" })).rejects.toThrow(/6 weeks/);
+    await expect(ma.workforce.team.week({ from: "2026-01-01", to: "2026-06-01" })).rejects.toThrow(/6 weeks/);
   });
 });
 

@@ -210,6 +210,14 @@ async function upgradeOpportunityActions(db: Db): Promise<string[]> {
   return done;
 }
 
+/** Time clock: hourly staff are marked on their profile (added 2026-09-24). */
+async function upgradeStaffProfiles(db: Db): Promise<string[]> {
+  const cols = await rows<{ c: string }>(db, sql`SELECT COLUMN_NAME AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'staffProfiles'`);
+  if (!cols.length || cols.some((c) => c.c === "usesTimeClock")) return [];
+  await db.execute(sql.raw("ALTER TABLE `staffProfiles` ADD COLUMN `usesTimeClock` boolean NOT NULL DEFAULT false AFTER `canFloat`"));
+  return ["staffProfiles.usesTimeClock added"];
+}
+
 const NEW_TABLES = ["workTasks", "workTaskActivities", "appointments", "appointmentStatusEvents", "scheduleImports", "opportunityActions", "playbooks", "playbookVersions"];
 const WATCHED_TABLES = ["users", "patients", "clinics", "providers", "ccmTasks", "ccmNotes", "billingRecords", "followUpItems", "providerEscalations", "refillRequests", "reachOutContacts", "notifications", "auditLogs"];
 
@@ -266,6 +274,7 @@ export async function runWorkspaceMigration(): Promise<string[]> {
     applied.push(s.label);
   }
   applied.push(...(await upgradeOpportunityActions(db)));
+  applied.push(...(await upgradeStaffProfiles(db)));
   const seeded = await seedPlaybooksIfEmpty(db);
   if (seeded) applied.push(seeded);
   return applied;

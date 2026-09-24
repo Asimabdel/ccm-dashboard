@@ -1,17 +1,19 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { useState } from "react";
-import { Loader2, Sun, CalendarDays, Plane, TrendingUp, BookOpenCheck, Users } from "lucide-react";
+import { Loader2, Sun, CalendarDays, Plane, TrendingUp, BookOpenCheck, Users, Timer } from "lucide-react";
 import { TodayTab } from "./workforce/TodayTab";
 import { ScheduleTab } from "./workforce/ScheduleTab";
 import { TimeOffTab } from "./workforce/TimeOffTab";
 import { PerformanceTab } from "./workforce/PerformanceTab";
 import { RolesTab } from "./workforce/RolesTab";
 import { PeopleTab } from "./workforce/PeopleTab";
+import { TimesheetsTab } from "./workforce/TimesheetsTab";
 
 const TABS = [
   { key: "today", label: "Today", icon: Sun },
   { key: "schedule", label: "Schedule", icon: CalendarDays },
+  { key: "timesheets", label: "Timesheets", icon: Timer },
   { key: "timeoff", label: "Time off", icon: Plane },
   { key: "performance", label: "Performance", icon: TrendingUp },
   { key: "roles", label: "Job roles", icon: BookOpenCheck },
@@ -21,7 +23,11 @@ type TabKey = (typeof TABS)[number]["key"];
 
 export default function WorkforcePage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
-  const [tab, setTab] = useState<TabKey>("today");
+  // ?tab=timesheets etc. deep-links straight to a tab.
+  const [tab, setTab] = useState<TabKey>(() => {
+    const t = new URLSearchParams(window.location.search).get("tab");
+    return TABS.some((x) => x.key === t) ? (t as TabKey) : "today";
+  });
 
   if (loading || !user) return <div className="min-h-screen flex items-center justify-center bg-white"><Loader2 className="animate-spin text-slate-400" /></div>;
   if (user.role !== "admin") {
@@ -40,6 +46,7 @@ export default function WorkforcePage() {
       </div>
       {tab === "today" && <TodayTab onOpenTimeOff={() => setTab("timeoff")} />}
       {tab === "schedule" && <ScheduleTab />}
+      {tab === "timesheets" && <TimesheetsTab />}
       {tab === "timeoff" && <TimeOffTab />}
       {tab === "performance" && <PerformanceTab />}
       {tab === "roles" && <RolesTab />}

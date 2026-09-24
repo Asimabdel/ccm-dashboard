@@ -3,7 +3,8 @@ import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { trpc } from "@/lib/trpc";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, LogIn, LogOut, CheckCircle2, Circle, MapPin, Clock, ClipboardCheck, BookOpen } from "lucide-react";
+import { Link } from "wouter";
+import { Loader2, LogIn, LogOut, CheckCircle2, Circle, MapPin, Clock, ClipboardCheck, BookOpen, AlertTriangle, UsersRound } from "lucide-react";
 import { fmtDay, fmtDuration, fmtTime, type DutyFrequency } from "@shared/workforce";
 
 const FREQ_LABEL: Record<DutyFrequency, string> = {
@@ -83,6 +84,23 @@ export default function MyDayPage() {
             ))}
           </div>
 
+          {(d?.missedClockOuts || []).length > 0 && (
+            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <p className="flex items-center gap-1.5 font-semibold"><AlertTriangle size={14} /> You didn't clock out</p>
+              <ul className="mt-1 text-xs space-y-0.5">
+                {d!.missedClockOuts.map((m) => <li key={m.id}>{fmtDay(m.workDate)} — clocked in at {clockTime(m.clockInAt)}</li>)}
+              </ul>
+              <p className="mt-1 text-xs">Tell your manager what time you left so they can fix your hours.</p>
+            </div>
+          )}
+
+          {d && !d.clockEnabled && !open ? (
+            <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-600">
+              <p className="font-semibold text-slate-800">The time clock isn't on for you</p>
+              <p className="mt-1">It's only for hourly staff. {user.role === "admin" ? <>Turn it on for hourly employees in <Link href="/workforce?tab=people" className="font-semibold underline">Workforce → People</Link>.</> : "If you're paid hourly, ask your manager to turn it on."}</p>
+            </div>
+          ) : (
+          <>
           <button
             onClick={() => (open ? clockOut.mutate() : clockIn.mutate())}
             disabled={busy}
@@ -95,6 +113,8 @@ export default function MyDayPage() {
             {open ? <>On the clock since <b className="text-slate-800">{clockTime(open.clockInAt)}</b></> : workedMin > 0 ? "You're clocked out." : "Not clocked in yet."}
             {workedMin > 0 && <> · <b className="text-slate-800">{fmtDuration(workedMin)}</b> today</>}
           </p>
+          </>
+          )}
           {(d?.punches || []).length > 0 && (
             <ul className="mt-3 pt-3 border-t border-slate-100 space-y-1 text-xs text-slate-500">
               {d!.punches.map((p) => (
@@ -105,6 +125,7 @@ export default function MyDayPage() {
               ))}
             </ul>
           )}
+          <Link href="/team-schedule" className="mt-4 inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-900"><UsersRound size={13} /> See who's working today →</Link>
         </div>
 
         {/* ---- Checklist ---- */}
@@ -123,7 +144,7 @@ export default function MyDayPage() {
           )}
 
           {!d?.jobRole && (
-            <p className="mt-6 text-sm text-slate-500">Your manager hasn't assigned your job role yet. Once they do, your responsibilities and daily checklist will show up here. You can still clock in and out.</p>
+            <p className="mt-6 text-sm text-slate-500">Your manager hasn't assigned your job role yet. Once they do, your responsibilities and daily checklist will show up here.</p>
           )}
           {d?.jobRole?.summary && <p className="mt-4 text-sm text-slate-600 leading-relaxed">{d.jobRole.summary}</p>}
 

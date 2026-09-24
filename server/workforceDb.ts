@@ -1,7 +1,7 @@
 // Workforce data layer — job roles, staff profiles, shifts, time off, time clock,
 // duty check-offs and performance scorecards. Kept out of db.ts because nothing
 // here touches patient data.
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { getDb } from "./db";
 import {
@@ -10,7 +10,7 @@ import {
 } from "../drizzle/schema";
 import {
   LATE_GRACE_MINUTES, MA_ROLE_TEMPLATE, addDays, localDateStr, localMinutes,
-  periodKey, shiftMinutes, timeToMinutes, type DutyFrequency,
+  periodKey, shiftMinutes, timeToMinutes, weekStart, type DutyFrequency,
 } from "../shared/workforce";
 
 async function requireDb() {
@@ -113,7 +113,7 @@ export async function listPeople() {
       userId: users.id, name: users.name, email: users.email, accessRole: users.role,
       profileId: staffProfiles.id, jobRoleId: staffProfiles.jobRoleId, jobRoleName: jobRoles.name,
       homeClinicId: staffProfiles.homeClinicId, homeClinicName: clinics.name,
-      canFloat: staffProfiles.canFloat, hoursPerWeek: staffProfiles.hoursPerWeek,
+      canFloat: staffProfiles.canFloat, usesTimeClock: staffProfiles.usesTimeClock, hoursPerWeek: staffProfiles.hoursPerWeek,
       hireDate: staffProfiles.hireDate, active: staffProfiles.active,
     })
     .from(users)
@@ -125,12 +125,13 @@ export async function listPeople() {
 }
 
 export async function saveProfile(input: {
-  userId: number; jobRoleId: number | null; homeClinicId: number | null; canFloat: boolean;
+  userId: number; jobRoleId: number | null; homeClinicId: number | null; canFloat: boolean; usesTimeClock?: boolean;
   hoursPerWeek?: number | null; hireDate?: string | null; active: boolean;
 }) {
   const db = await requireDb();
   const values = {
     jobRoleId: input.jobRoleId, homeClinicId: input.homeClinicId, canFloat: input.canFloat,
+    ...(input.usesTimeClock !== undefined ? { usesTimeClock: input.usesTimeClock } : {}),
     hoursPerWeek: input.hoursPerWeek ?? 40, hireDate: input.hireDate ?? null, active: input.active,
   };
   const existing = await db.select({ id: staffProfiles.id }).from(staffProfiles).where(eq(staffProfiles.userId, input.userId)).limit(1);
@@ -345,14 +346,33 @@ export async function decideTimeOff(input: { id: number; status: "approved" | "d
 
 // ---- Time clock ----
 
+/**
+ * Today's open punch. Open punches from earlier days are forgotten clock-outs: they
+ * don't block clocking in again, and managers fix them on the Timesheets tab.
+ */
 export async function getOpenPunch(userId: number) {
   const db = await requireDb();
-  const rows = await db.select().from(timePunches).where(and(eq(timePunches.userId, userId), isNull(timePunches.clockOutAt))).orderBy(desc(timePunches.clockInAt)).limit(1);
+  const rows = await db.select().from(timePunches)
+    .where(and(eq(timePunches.userId, userId), isNull(timePunches.clockOutAt), eq(timePunches.workDate, localDateStr())))
+    .orderBy(desc(timePunches.clockInAt)).limit(1);
   return rows[0];
+}
+
+/** Forgotten clock-outs from the last 30 days (open punches before today). */
+async function missedClockOuts(userId: number) {
+  const db = await requireDb();
+  const today = localDateStr();
+  return db.select({ id: timePunches.id, workDate: timePunches.workDate, clockInAt: timePunches.clockInAt }).from(timePunches)
+    .where(and(eq(timePunches.userId, userId), isNull(timePunches.clockOutAt), lt(timePunches.workDate, today), gte(timePunches.workDate, addDays(today, -30))))
+    .orderBy(asc(timePunches.workDate));
 }
 
 export async function clockIn(userId: number): Promise<{ id: number; minutesLate: number } | { error: string }> {
   const db = await requireDb();
+  const [clockProfile] = await db.select({ usesTimeClock: staffProfiles.usesTimeClock, active: staffProfiles.active }).from(staffProfiles).where(eq(staffProfiles.userId, userId)).limit(1);
+  if (!clockProfile?.usesTimeClock || !clockProfile.active) {
+    return { error: "The time clock isn't turned on for you. If you're paid hourly, ask your manager to turn it on (Workforce → People)." };
+  }
   if (await getOpenPunch(userId)) return { error: "You're already clocked in." };
   const now = new Date();
   const today = localDateStr(now);
@@ -404,6 +424,7 @@ export async function editPunch(input: { id: number; clockInAt: Date; clockOutAt
   if (input.clockOutAt && +input.clockOutAt <= +input.clockInAt) return { error: "Clock-out must be after clock-in." };
   await db.update(timePunches).set({
     clockInAt: input.clockInAt, clockOutAt: input.clockOutAt, note: input.note ?? null, editedByUserId: input.editedByUserId,
+    workDate: localDateStr(input.clockInAt),
   }).where(eq(timePunches.id, input.id));
   return { success: true };
 }
@@ -438,6 +459,8 @@ export async function getMyDay(userId: number) {
   );
   return {
     today,
+    clockEnabled: !!profileRow?.profile.usesTimeClock && profileRow.profile.active,
+    missedClockOuts: await missedClockOuts(userId),
     jobRole: profileRow?.jobRole ?? null,
     homeClinicName: profileRow?.clinicName ?? null,
     duties: duties.map((d) => ({ ...d, done: doneIds.has(d.id) })),
@@ -595,4 +618,159 @@ export async function addEmployee(input: { name: string; jobRoleId?: number | nu
   const userId = res?.[0]?.insertId as number;
   await db.insert(staffProfiles).values({ userId, jobRoleId: input.jobRoleId ?? null, homeClinicId: input.homeClinicId ?? null });
   return { userId };
+}
+
+// ---- Team schedule (every employee can see it) ----
+
+/**
+ * Who works where in a date range, and who is on the clock right now. Deliberately
+ * leaves out lateness, clock-in times, pay and time-off reasons: time off is just "Off".
+ */
+export async function getTeamWeek(from: string, to: string) {
+  const db = await requireDb();
+  const today = localDateStr();
+  const [shiftRows, offRows, openNow, allClinics, profiles] = await Promise.all([
+    db.select({ id: shifts.id, userId: shifts.userId, clinicId: shifts.clinicId, date: shifts.date, startTime: shifts.startTime, endTime: shifts.endTime, status: shifts.status, userName: users.name })
+      .from(shifts).innerJoin(users, eq(users.id, shifts.userId))
+      .where(and(gte(shifts.date, from), lte(shifts.date, to)))
+      .orderBy(asc(shifts.date), asc(shifts.startTime)),
+    db.select({ userId: timeOffRequests.userId, startDate: timeOffRequests.startDate, endDate: timeOffRequests.endDate, userName: users.name })
+      .from(timeOffRequests).innerJoin(users, eq(users.id, timeOffRequests.userId))
+      .where(and(eq(timeOffRequests.status, "approved"), lte(timeOffRequests.startDate, to), gte(timeOffRequests.endDate, from))),
+    db.select({ userId: timePunches.userId, clinicId: timePunches.clinicId, userName: users.name })
+      .from(timePunches).innerJoin(users, eq(users.id, timePunches.userId))
+      .where(and(eq(timePunches.workDate, today), isNull(timePunches.clockOutAt))),
+    db.select({ id: clinics.id, name: clinics.name }).from(clinics).orderBy(asc(clinics.name)),
+    db.select({ userId: staffProfiles.userId, homeClinicId: staffProfiles.homeClinicId, jobRoleName: jobRoles.name })
+      .from(staffProfiles).leftJoin(jobRoles, eq(jobRoles.id, staffProfiles.jobRoleId)),
+  ]);
+  const profileBy = new Map(profiles.map((p) => [p.userId, p]));
+  const todayShiftEnd = new Map(shiftRows.filter((s) => s.date === today && s.status === "scheduled").map((s) => [s.userId, s.endTime]));
+
+  // One row per person who has a shift or approved time off in the range.
+  const people = new Map<number, { userId: number; name: string; jobRoleName: string | null; homeClinicId: number | null }>();
+  const addPerson = (userId: number, name: string | null) => {
+    if (people.has(userId)) return;
+    const p = profileBy.get(userId);
+    people.set(userId, { userId, name: name ?? "Unknown", jobRoleName: p?.jobRoleName ?? null, homeClinicId: p?.homeClinicId ?? null });
+  };
+  shiftRows.forEach((s) => addPerson(s.userId, s.userName));
+  offRows.forEach((o) => addPerson(o.userId, o.userName));
+
+  const offDays: { userId: number; date: string }[] = [];
+  for (const o of offRows) {
+    for (let d = o.startDate < from ? from : o.startDate; d <= o.endDate && d <= to; d = addDays(d, 1)) offDays.push({ userId: o.userId, date: d });
+  }
+  return {
+    from,
+    to,
+    today,
+    clinics: allClinics,
+    people: Array.from(people.values()).sort((a, b) => a.name.localeCompare(b.name)),
+    // out = the person can't work that shift (called out); no reason is shared.
+    shifts: shiftRows.map((s) => ({ id: s.id, userId: s.userId, clinicId: s.clinicId, date: s.date, startTime: s.startTime, endTime: s.endTime, out: s.status === "called_out" })),
+    offDays,
+    workingNow: openNow.map((o) => ({
+      userId: o.userId,
+      name: o.userName ?? "Unknown",
+      clinicId: o.clinicId ?? profileBy.get(o.userId)?.homeClinicId ?? null,
+      jobRoleName: profileBy.get(o.userId)?.jobRoleName ?? null,
+      until: todayShiftEnd.get(o.userId) ?? null,
+    })),
+  };
+}
+
+// ---- Timesheets (managers) ----
+
+const punchMinutes = (p: { clockInAt: Date; clockOutAt: Date | null }) =>
+  p.clockOutAt ? Math.max(0, Math.round((+p.clockOutAt - +p.clockInAt) / 60000)) : 0;
+
+/**
+ * Hours per person for a date range, from time punches. Open punches before today are
+ * forgotten clock-outs (they count 0 hours until a manager fixes them). Overtime is
+ * time over 40 hours in a Monday–Sunday week.
+ */
+export async function getTimesheet(from: string, to: string) {
+  const db = await requireDb();
+  const today = localDateStr();
+  const [punchRows, profileRows, shiftRows] = await Promise.all([
+    db.select({ p: timePunches, clinicName: clinics.name, userName: users.name }).from(timePunches)
+      .innerJoin(users, eq(users.id, timePunches.userId))
+      .leftJoin(clinics, eq(clinics.id, timePunches.clinicId))
+      .where(and(gte(timePunches.workDate, from), lte(timePunches.workDate, to)))
+      .orderBy(asc(timePunches.clockInAt)),
+    db.select({ userId: users.id, name: users.name, usesTimeClock: staffProfiles.usesTimeClock, active: staffProfiles.active, jobRoleName: jobRoles.name, homeClinicName: clinics.name })
+      .from(staffProfiles).innerJoin(users, eq(users.id, staffProfiles.userId))
+      .leftJoin(jobRoles, eq(jobRoles.id, staffProfiles.jobRoleId))
+      .leftJoin(clinics, eq(clinics.id, staffProfiles.homeClinicId)),
+    db.select({ userId: shifts.userId, startTime: shifts.startTime, endTime: shifts.endTime })
+      .from(shifts).where(and(gte(shifts.date, from), lte(shifts.date, to), eq(shifts.status, "scheduled"))),
+  ]);
+  const scheduled = new Map<number, number>();
+  shiftRows.forEach((s) => scheduled.set(s.userId, (scheduled.get(s.userId) ?? 0) + shiftMinutes(s.startTime, s.endTime)));
+  const profileBy = new Map(profileRows.map((r) => [r.userId, r]));
+
+  // Everyone on the time clock appears (even with no punches), plus anyone who punched.
+  const people = new Map<number, { userId: number; name: string; jobRoleName: string | null; homeClinicName: string | null; usesTimeClock: boolean }>();
+  profileRows.filter((r) => r.usesTimeClock && r.active).forEach((r) =>
+    people.set(r.userId, { userId: r.userId, name: r.name ?? "Unknown", jobRoleName: r.jobRoleName, homeClinicName: r.homeClinicName, usesTimeClock: true }));
+  punchRows.forEach(({ p, userName }) => {
+    if (people.has(p.userId)) return;
+    const pr = profileBy.get(p.userId);
+    people.set(p.userId, { userId: p.userId, name: userName ?? "Unknown", jobRoleName: pr?.jobRoleName ?? null, homeClinicName: pr?.homeClinicName ?? null, usesTimeClock: !!pr?.usesTimeClock });
+  });
+
+  return {
+    from,
+    to,
+    today,
+    people: Array.from(people.values())
+      .map((person) => {
+        const mine = punchRows.filter((r) => r.p.userId === person.userId);
+        const byWeek = new Map<string, number>();
+        let total = 0;
+        for (const { p } of mine) {
+          const m = punchMinutes(p);
+          total += m;
+          const wk = weekStart(p.workDate);
+          byWeek.set(wk, (byWeek.get(wk) ?? 0) + m);
+        }
+        const overtime = Array.from(byWeek.values()).reduce((s, m) => s + Math.max(0, m - 40 * 60), 0);
+        return {
+          ...person,
+          totalMinutes: total,
+          overtimeMinutes: overtime,
+          regularMinutes: total - overtime,
+          scheduledMinutes: scheduled.get(person.userId) ?? 0,
+          daysWorked: new Set(mine.map((r) => r.p.workDate)).size,
+          lateCount: mine.filter((r) => r.p.minutesLate > 0).length,
+          missedClockOuts: mine.filter((r) => !r.p.clockOutAt && r.p.workDate < today).length,
+          onTheClock: mine.some((r) => !r.p.clockOutAt && r.p.workDate === today),
+          punches: mine.map(({ p, clinicName }) => ({
+            id: p.id, workDate: p.workDate, clockInAt: p.clockInAt, clockOutAt: p.clockOutAt, minutes: punchMinutes(p),
+            minutesLate: p.minutesLate, note: p.note, edited: !!p.editedByUserId, clinicName,
+            missingClockOut: !p.clockOutAt && p.workDate < today,
+          })),
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  };
+}
+
+/** A manager adds a punch someone forgot entirely. */
+export async function addPunch(input: { userId: number; clockInAt: Date; clockOutAt: Date | null; note?: string | null; editedByUserId: number }): Promise<{ id: number } | { error: string }> {
+  const db = await requireDb();
+  if (input.clockOutAt && +input.clockOutAt <= +input.clockInAt) return { error: "Clock-out must be after clock-in." };
+  if (+input.clockInAt > Date.now()) return { error: "Clock-in can't be in the future." };
+  const [profile] = await db.select({ homeClinicId: staffProfiles.homeClinicId }).from(staffProfiles).where(eq(staffProfiles.userId, input.userId)).limit(1);
+  const res = await db.insert(timePunches).values({
+    userId: input.userId, clinicId: profile?.homeClinicId ?? null, workDate: localDateStr(input.clockInAt),
+    clockInAt: input.clockInAt, clockOutAt: input.clockOutAt, note: input.note || "Added by manager", editedByUserId: input.editedByUserId,
+  });
+  return { id: res?.[0]?.insertId as number };
+}
+
+export async function deletePunch(id: number) {
+  const db = await requireDb();
+  await db.delete(timePunches).where(eq(timePunches.id, id));
 }

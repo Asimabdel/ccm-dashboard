@@ -51,7 +51,7 @@ export const workforceRouter = router({
     saveProfile: protectedProcedure
       .input(z.object({
         userId: z.number(), jobRoleId: z.number().nullable(), homeClinicId: z.number().nullable(), canFloat: z.boolean(),
-        hoursPerWeek: z.number().min(0).max(80).nullish(), hireDate: dateStr.nullish(), active: z.boolean(),
+        usesTimeClock: z.boolean().optional(), hoursPerWeek: z.number().min(0).max(80).nullish(), hireDate: dateStr.nullish(), active: z.boolean(),
       }))
       .mutation(async ({ input, ctx }) => { requireAdmin(ctx); await wf.saveProfile(input); return { success: true }; }),
   }),
@@ -113,6 +113,30 @@ export const workforceRouter = router({
     edit: protectedProcedure
       .input(z.object({ id: z.number(), clockInAt: z.date(), clockOutAt: z.date().nullable(), note: z.string().max(500).nullish() }))
       .mutation(async ({ input, ctx }) => { requireAdmin(ctx); return unwrap(await wf.editPunch({ ...input, editedByUserId: ctx.user.id })); }),
+    add: protectedProcedure
+      .input(z.object({ userId: z.number(), clockInAt: z.date(), clockOutAt: z.date().nullable(), note: z.string().max(500).nullish() }))
+      .mutation(async ({ input, ctx }) => { requireAdmin(ctx); return unwrap(await wf.addPunch({ ...input, editedByUserId: ctx.user.id })); }),
+    delete: protectedProcedure.input(z.number()).mutation(async ({ input, ctx }) => { requireAdmin(ctx); await wf.deletePunch(input); return { success: true }; }),
+  }),
+
+  // Hours, overtime and missed clock-outs per person — for payroll.
+  timesheet: protectedProcedure
+    .input(range)
+    .query(async ({ input, ctx }) => {
+      requireAdmin(ctx);
+      if (input.to < input.from) throw new TRPCError({ code: "BAD_REQUEST", message: "The end date can't be before the start date." });
+      return wf.getTimesheet(input.from, input.to);
+    }),
+
+  // ---- Team schedule: every employee sees who works where, and who is in now ----
+  team: router({
+    week: protectedProcedure
+      .input(range)
+      .query(async ({ input, ctx }) => {
+        if (ctx.user.role === "user") throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this resource." });
+        if (input.to < input.from || input.to > addDays(input.from, 41)) throw new TRPCError({ code: "BAD_REQUEST", message: "Pick a range of up to 6 weeks." });
+        return wf.getTeamWeek(input.from, input.to);
+      }),
   }),
 
   performance: router({

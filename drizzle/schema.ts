@@ -593,6 +593,8 @@ export const staffProfiles = mysqlTable("staffProfiles", {
   homeClinicId: int("homeClinicId").references(() => clinics.id),
   // Willing/able to cover shifts at other clinics — drives the coverage finder.
   canFloat: boolean("canFloat").default(false).notNull(),
+  // Hourly staff who clock in and out. Only they can use the time clock.
+  usesTimeClock: boolean("usesTimeClock").default(false).notNull(),
   hoursPerWeek: int("hoursPerWeek").default(40),
   hireDate: varchar("hireDate", { length: 10 }),
   active: boolean("active").default(true).notNull(),

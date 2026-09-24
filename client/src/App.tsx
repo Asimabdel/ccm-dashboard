@@ -34,6 +34,7 @@ import ApcmPage from "./pages/ApcmPage";
 import WorkforcePage from "./pages/WorkforcePage";
 import MyDayPage from "./pages/MyDayPage";
 import MySchedulePage from "./pages/MySchedulePage";
+import TeamSchedulePage from "./pages/TeamSchedulePage";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
 
 function Router() {
@@ -69,6 +70,7 @@ function Router() {
       <Route path="/workforce" component={WorkforcePage} />
       <Route path="/my-day" component={MyDayPage} />
       <Route path="/my-schedule" component={MySchedulePage} />
+      <Route path="/team-schedule" component={TeamSchedulePage} />
       <Route path="/billing" component={BillingPage} />
       <Route path="/follow-ups" component={FollowUpsPage} />
       <Route path="/reports" component={ReportsPage} />

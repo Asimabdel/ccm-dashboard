@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, ClipboardList, UserCog, AlertTriangle, Receipt,
   BarChart3, PhoneCall, CalendarClock, ShieldCheck, Building2, Stethoscope, Target,
   UserMinus, Ban, Pill, PhoneOutgoing, Activity, Sunrise, CalendarDays, BriefcaseBusiness,
-  Home, ListTodo, Waypoints, Radar, BookOpen,
+  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound,
 } from "lucide-react";
 
 export interface NavItem {
@@ -26,12 +26,13 @@ const OPPORTUNITIES: NavItem = { label: "Opportunities", path: "/opportunities",
 const PATIENTS: NavItem = { label: "Patients", path: "/patients", icon: Users };
 const PLAYBOOKS: NavItem = { label: "Playbooks", path: "/playbooks", icon: BookOpen };
 
-// Every employee with a shift gets the self-service time clock + schedule pages.
+// Every employee gets the self-service time clock + schedule pages and the team schedule.
 const ME: NavGroup = {
   label: "Me",
   items: [
     { label: "My Day", path: "/my-day", icon: Sunrise },
     { label: "My Schedule", path: "/my-schedule", icon: CalendarDays },
+    { label: "Team Schedule", path: "/team-schedule", icon: UsersRound },
   ],
 };
 
@@ -72,6 +73,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
         { label: "Audit Log", path: "/audit", icon: ShieldCheck },
       ],
     },
+    ME,
   ],
   staff: [
     { label: "Workspace", items: [HOME, MY_WORK, FLOW, OPPORTUNITIES, PATIENTS, PLAYBOOKS] },
@@ -98,6 +100,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
         { label: "Escalations", path: "/escalations", icon: AlertTriangle },
       ],
     },
+    ME,
   ],
   billing: [
     { label: "Workspace", items: [HOME, MY_WORK, PLAYBOOKS] },
@@ -108,10 +111,12 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
         { label: "Reports", path: "/reports", icon: BarChart3 },
       ],
     },
+    ME,
   ],
   front_desk: [
     { label: "Workspace", items: [HOME, MY_WORK, FLOW, OPPORTUNITIES, PATIENTS, PLAYBOOKS] },
     { label: "Care Management", items: [{ label: "Follow-ups", path: "/follow-ups", icon: CalendarClock }] },
+    ME,
   ],
   // MAs get operational pages only; the server fences CCM/billing data away from them.
   medical_assistant: [{ label: "Workspace", items: [HOME, FLOW, MY_WORK, PLAYBOOKS] }, ME],
