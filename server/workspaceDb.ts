@@ -547,6 +547,7 @@ export async function commitSchedule(
   }
   const existingByKey = new Map(existing.map((e) => [e.externalKey, e]));
   const inserts: (typeof appointments.$inferInsert)[] = [];
+  const updateGroups = new Map<string, { diff: Partial<typeof appointments.$inferInsert>; ids: number[] }>();
   let updated = 0;
   let unchanged = 0;
   for (const r of resolved) {
@@ -573,17 +574,32 @@ export async function commitSchedule(
     // status already moved on the flow board and only adopt the file's while still "scheduled".
     const status = FINAL_STATUSES.includes(r.status) || prev.status === "scheduled" ? r.status : prev.status;
     const next = { ...base, patientId: base.patientId ?? prev.patientId, status };
-    const same =
-      next.clinicId === prev.clinicId && next.patientId === prev.patientId && next.patientName === prev.patientName &&
-      ymd(next.dateOfBirth) === ymd(prev.dateOfBirth) && next.phoneNumber === prev.phoneNumber && next.providerId === prev.providerId &&
-      next.providerName === prev.providerName && next.durationMin === prev.durationMin && next.visitType === prev.visitType &&
-      next.reason === prev.reason && next.status === prev.status;
-    if (same) {
+    // Only the fields that actually changed.
+    const diff: Partial<typeof appointments.$inferInsert> = {};
+    if (next.clinicId !== prev.clinicId) diff.clinicId = next.clinicId;
+    if (next.patientId !== prev.patientId) diff.patientId = next.patientId;
+    if (next.patientName !== prev.patientName) diff.patientName = next.patientName;
+    if (ymd(next.dateOfBirth) !== ymd(prev.dateOfBirth)) diff.dateOfBirth = next.dateOfBirth;
+    if (next.phoneNumber !== prev.phoneNumber) diff.phoneNumber = next.phoneNumber;
+    if (next.providerId !== prev.providerId) diff.providerId = next.providerId;
+    if (next.providerName !== prev.providerName) diff.providerName = next.providerName;
+    if (next.durationMin !== prev.durationMin) diff.durationMin = next.durationMin;
+    if (next.visitType !== prev.visitType) diff.visitType = next.visitType;
+    if (next.reason !== prev.reason) diff.reason = next.reason;
+    if (next.status !== prev.status) diff.status = next.status;
+    if (!Object.keys(diff).length) {
       unchanged++;
       continue;
     }
-    await d.update(appointments).set({ ...next, importId }).where(eq(appointments.id, prev.id));
+    // Identical changes (e.g. "move to clinic 4" after a provider changes clinics) are
+    // written together, so re-importing a whole year stays within the request time limit.
+    const groupKey = JSON.stringify(diff);
+    const group = updateGroups.get(groupKey) ?? updateGroups.set(groupKey, { diff, ids: [] }).get(groupKey)!;
+    group.ids.push(prev.id);
     updated++;
+  }
+  for (const { diff, ids } of Array.from(updateGroups.values())) {
+    for (let i = 0; i < ids.length; i += 1000) await d.update(appointments).set({ ...diff, importId }).where(inArray(appointments.id, ids.slice(i, i + 1000)));
   }
   for (let i = 0; i < inserts.length; i += 400) await d.insert(appointments).values(inserts.slice(i, i + 400));
   const created = inserts.length;
@@ -868,16 +884,21 @@ async function loadOpportunityData(actor: WorkspaceActor, clinicId?: number | nu
       })
       .from(patients)
       .leftJoin(clinics, eq(patients.clinicId, clinics.id))
-      .leftJoin(providers, eq(patients.providerId, providers.id))
-      .where(clinicFilter(patients.clinicId, scope)),
+      .leftJoin(providers, eq(patients.providerId, providers.id)),
     loadScheduleSubjects(),
     d.select({ id: clinics.id, name: clinics.name }).from(clinics),
   ]);
   const clinicName = new Map(clinicRows.map((c) => [c.id, c.name]));
+  const providerClinic = new Map((await d.select({ id: providers.id, clinicId: providers.clinicId }).from(providers)).map((p) => [p.id, p.clinicId]));
+  const inScope = (id: number | null) => scope === null || (id != null && scope.includes(id));
   const candidates: OpportunityCandidate[] = [];
 
   // CCM roster: condition/enrollment rules plus the schedule rules on their visits.
   for (const p of pats) {
+    // Many roster records have no clinic: use their latest imported visit's clinic, then
+    // their provider's. (Workspace grouping only; the CCM record isn't changed.)
+    const clinicId = p.clinicId ?? subjects.get(`p:${p.id}`)?.clinicId ?? (p.providerId ? providerClinic.get(p.providerId) ?? null : null);
+    if (!inScope(clinicId)) continue;
     const visits = subjects.get(`p:${p.id}`)?.visits ?? [];
     const { lastSeen, nextBooked } = visitDates(visits, now);
     const lastVisit = lastSeen && (!p.lastOfficeVisit || lastSeen > p.lastOfficeVisit) ? lastSeen : p.lastOfficeVisit;
@@ -900,7 +921,8 @@ async function loadOpportunityData(actor: WorkspaceActor, clinicId?: number | nu
       ),
     ];
     if (!matches.length) continue;
-    candidates.push({ key: `p:${p.id}`, patientId: p.id, name: p.name, dateOfBirth: p.dateOfBirth, phoneNumber: p.phoneNumber, clinicId: p.clinicId, clinicName: p.clinicName, providerId: p.providerId, providerName: p.providerName, lastVisit, nextVisit, matches });
+    const latest = subjects.get(`p:${p.id}`);
+    candidates.push({ key: `p:${p.id}`, patientId: p.id, name: p.name, dateOfBirth: p.dateOfBirth, phoneNumber: p.phoneNumber ?? latest?.phone ?? null, clinicId, clinicName: clinicId ? clinicName.get(clinicId) ?? null : null, providerId: p.providerId, providerName: p.providerName ?? latest?.providerName ?? null, lastVisit, nextVisit, matches });
   }
 
   // Everyone else on the schedule (not on the CCM roster): schedule rules only.
