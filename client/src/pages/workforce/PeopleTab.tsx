@@ -7,7 +7,7 @@ import { Field, Modal, btnPrimary, inputCls } from "./ui";
 
 interface ProfileDraft {
   userId: number; name: string | null; jobRoleId: number | null; homeClinicId: number | null;
-  canFloat: boolean; usesTimeClock: boolean; hoursPerWeek: number; hireDate: string; active: boolean;
+  canFloat: boolean; usesTimeClock: boolean; hoursPerWeek: number; originalClinicId: number | null; moveShifts: boolean; hireDate: string; active: boolean;
 }
 
 export function PeopleTab() {
@@ -22,7 +22,7 @@ export function PeopleTab() {
     onError: (e) => toast.error(e.message),
   });
   const save = trpc.workforce.people.saveProfile.useMutation({
-    onSuccess: () => { utils.workforce.invalidate(); setDraft(null); toast.success("Profile saved"); },
+    onSuccess: (r) => { utils.workforce.invalidate(); setDraft(null); toast.success(r.movedShifts ? `Profile saved — ${r.movedShifts} upcoming shifts moved to the new clinic` : "Profile saved"); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -57,7 +57,7 @@ export function PeopleTab() {
                     <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${!p.profileId ? "bg-amber-100 text-amber-800" : p.active ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-500"}`}>{!p.profileId ? "Not set up" : p.active ? "Active" : "Inactive"}</span>
                   </td>
                   <td className="px-3 py-3 text-right">
-                    <button onClick={() => setDraft({ userId: p.userId, name: p.name, jobRoleId: p.jobRoleId, homeClinicId: p.homeClinicId, canFloat: !!p.canFloat, usesTimeClock: !!p.usesTimeClock, hoursPerWeek: p.hoursPerWeek ?? 40, hireDate: p.hireDate ?? "", active: p.active ?? true })}
+                    <button onClick={() => setDraft({ userId: p.userId, name: p.name, jobRoleId: p.jobRoleId, homeClinicId: p.homeClinicId, canFloat: !!p.canFloat, usesTimeClock: !!p.usesTimeClock, originalClinicId: p.homeClinicId, moveShifts: true, hoursPerWeek: p.hoursPerWeek ?? 40, hireDate: p.hireDate ?? "", active: p.active ?? true })}
                       className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-100"><Pencil size={12} /> {p.profileId ? "Edit" : "Set up"}</button>
                   </td>
                 </tr>
@@ -91,7 +91,7 @@ export function PeopleTab() {
 
       {draft && (
         <Modal title={draft.name ?? "Employee"} onClose={() => setDraft(null)}>
-          <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); save.mutate({ userId: draft.userId, jobRoleId: draft.jobRoleId, homeClinicId: draft.homeClinicId, canFloat: draft.canFloat, usesTimeClock: draft.usesTimeClock, hoursPerWeek: draft.hoursPerWeek, hireDate: draft.hireDate || null, active: draft.active }); }}>
+          <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); save.mutate({ userId: draft.userId, jobRoleId: draft.jobRoleId, homeClinicId: draft.homeClinicId, canFloat: draft.canFloat, usesTimeClock: draft.usesTimeClock, moveUpcomingShifts: draft.moveShifts, hoursPerWeek: draft.hoursPerWeek, hireDate: draft.hireDate || null, active: draft.active }); }}>
             <Field label="Job role">
               <select value={draft.jobRoleId ?? ""} onChange={(e) => setDraft({ ...draft, jobRoleId: e.target.value ? Number(e.target.value) : null })} className={inputCls}>
                 <option value="">— none —</option>
@@ -104,6 +104,9 @@ export function PeopleTab() {
                 {(clinics.data || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </Field>
+            {draft.homeClinicId != null && draft.homeClinicId !== draft.originalClinicId && (
+              <label className="flex items-center gap-2 text-sm text-slate-700 -mt-1"><input type="checkbox" checked={draft.moveShifts} onChange={(e) => setDraft({ ...draft, moveShifts: e.target.checked })} /> Also move their upcoming shifts to this clinic</label>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <Field label="Target hours / week"><input type="number" min={0} max={80} value={draft.hoursPerWeek} onChange={(e) => setDraft({ ...draft, hoursPerWeek: Number(e.target.value) })} className={inputCls} /></Field>
               <Field label="Hire date"><input type="date" value={draft.hireDate} onChange={(e) => setDraft({ ...draft, hireDate: e.target.value })} className={inputCls} /></Field>

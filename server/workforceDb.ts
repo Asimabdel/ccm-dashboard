@@ -127,16 +127,26 @@ export async function listPeople() {
 export async function saveProfile(input: {
   userId: number; jobRoleId: number | null; homeClinicId: number | null; canFloat: boolean; usesTimeClock?: boolean;
   hoursPerWeek?: number | null; hireDate?: string | null; active: boolean;
-}) {
+  /** When the home clinic changes, also move their upcoming shifts at the old clinic. */
+  moveUpcomingShifts?: boolean;
+}): Promise<{ movedShifts: number }> {
   const db = await requireDb();
   const values = {
     jobRoleId: input.jobRoleId, homeClinicId: input.homeClinicId, canFloat: input.canFloat,
     ...(input.usesTimeClock !== undefined ? { usesTimeClock: input.usesTimeClock } : {}),
     hoursPerWeek: input.hoursPerWeek ?? 40, hireDate: input.hireDate ?? null, active: input.active,
   };
-  const existing = await db.select({ id: staffProfiles.id }).from(staffProfiles).where(eq(staffProfiles.userId, input.userId)).limit(1);
+  const existing = await db.select({ id: staffProfiles.id, homeClinicId: staffProfiles.homeClinicId }).from(staffProfiles).where(eq(staffProfiles.userId, input.userId)).limit(1);
   if (existing.length) await db.update(staffProfiles).set(values).where(eq(staffProfiles.userId, input.userId));
   else await db.insert(staffProfiles).values({ userId: input.userId, ...values });
+
+  const oldClinicId = existing[0]?.homeClinicId ?? null;
+  if (!input.moveUpcomingShifts || !input.homeClinicId || input.homeClinicId === oldClinicId) return { movedShifts: 0 };
+  // Coverage shifts stay where the gap was; with no previous home clinic, every upcoming shift moves.
+  const conds = [eq(shifts.userId, input.userId), gte(shifts.date, localDateStr()), eq(shifts.status, "scheduled"), isNull(shifts.coversShiftId)];
+  if (oldClinicId) conds.push(eq(shifts.clinicId, oldClinicId));
+  const [res] = await db.update(shifts).set({ clinicId: input.homeClinicId }).where(and(...conds));
+  return { movedShifts: (res as { affectedRows?: number })?.affectedRows ?? 0 };
 }
 
 // ---- Schedule ----
