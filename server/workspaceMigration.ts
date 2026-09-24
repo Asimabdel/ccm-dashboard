@@ -111,13 +111,15 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     CONSTRAINT \`scheduleImports_importedByUserId_fk\` FOREIGN KEY (\`importedByUserId\`) REFERENCES \`users\`(\`id\`))` },
   { label: "opportunityActions", sql: `CREATE TABLE IF NOT EXISTS \`opportunityActions\` (
     \`id\` int AUTO_INCREMENT PRIMARY KEY,
-    \`patientId\` int NOT NULL,
+    \`patientId\` int,
+    \`subjectKey\` varchar(120),
     \`category\` varchar(40) NOT NULL,
     \`action\` ENUM('reviewed','task_created','dismissed') NOT NULL,
     \`userId\` int NOT NULL,
     \`taskId\` int,
     \`createdAt\` timestamp NOT NULL DEFAULT (now()),
     INDEX \`opportunityActions_patient_cat_idx\` (\`patientId\`, \`category\`),
+    INDEX \`opportunityActions_subject_cat_idx\` (\`subjectKey\`, \`category\`),
     CONSTRAINT \`opportunityActions_patientId_fk\` FOREIGN KEY (\`patientId\`) REFERENCES \`patients\`(\`id\`),
     CONSTRAINT \`opportunityActions_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`))` },
   { label: "playbooks", sql: `CREATE TABLE IF NOT EXISTS \`playbooks\` (
@@ -184,6 +186,30 @@ async function appendEnumValues(db: Db, table: string, column: string, add: stri
   return `${table}.${column} += ${missing.join(", ")}`;
 }
 
+/**
+ * Opportunity actions can now point at people who are only on the imported schedule
+ * (not the CCM roster): patientId becomes optional and a subjectKey identifies them.
+ * Each step runs only if still needed.
+ */
+async function upgradeOpportunityActions(db: Db): Promise<string[]> {
+  const done: string[] = [];
+  const cols = await rows<{ c: string; n: string }>(db, sql`SELECT COLUMN_NAME AS c, IS_NULLABLE AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'opportunityActions'`);
+  if (!cols.some((c) => c.c === "subjectKey")) {
+    await db.execute(sql.raw("ALTER TABLE `opportunityActions` ADD COLUMN `subjectKey` varchar(120) NULL AFTER `patientId`"));
+    done.push("opportunityActions.subjectKey added");
+  }
+  if (cols.find((c) => c.c === "patientId")?.n === "NO") {
+    await db.execute(sql.raw("ALTER TABLE `opportunityActions` MODIFY COLUMN `patientId` int NULL"));
+    done.push("opportunityActions.patientId now optional");
+  }
+  const idx = await rows<{ i: string }>(db, sql`SELECT INDEX_NAME AS i FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'opportunityActions' AND INDEX_NAME = 'opportunityActions_subject_cat_idx'`);
+  if (!idx.length) {
+    await db.execute(sql.raw("CREATE INDEX `opportunityActions_subject_cat_idx` ON `opportunityActions` (`subjectKey`, `category`)"));
+    done.push("opportunityActions subject index added");
+  }
+  return done;
+}
+
 const NEW_TABLES = ["workTasks", "workTaskActivities", "appointments", "appointmentStatusEvents", "scheduleImports", "opportunityActions", "playbooks", "playbookVersions"];
 const WATCHED_TABLES = ["users", "patients", "clinics", "providers", "ccmTasks", "ccmNotes", "billingRecords", "followUpItems", "providerEscalations", "refillRequests", "reachOutContacts", "notifications", "auditLogs"];
 
@@ -207,7 +233,9 @@ export async function inspectWorkspace() {
     const [r] = await rows<{ n: number }>(db, sql.raw(`SELECT COUNT(*) AS n FROM \`${t}\``));
     counts[t] = Number(r?.n ?? 0);
   }
-  return { enums, newTables, counts };
+  const oppCols = await rows<{ c: string; n: string }>(db, sql`SELECT COLUMN_NAME AS c, IS_NULLABLE AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'opportunityActions' AND COLUMN_NAME IN ('patientId', 'subjectKey')`);
+  const opportunityActionsColumns = Object.fromEntries(oppCols.map((c) => [c.c, c.n === "YES" ? "nullable" : "required"]));
+  return { enums, newTables, opportunityActionsColumns, counts };
 }
 
 /** Insert the starter playbooks, but only into an empty table (never overwrites edits). */
@@ -237,6 +265,7 @@ export async function runWorkspaceMigration(): Promise<string[]> {
     await db.execute(sql.raw(s.sql));
     applied.push(s.label);
   }
+  applied.push(...(await upgradeOpportunityActions(db)));
   const seeded = await seedPlaybooksIfEmpty(db);
   if (seeded) applied.push(seeded);
   return applied;

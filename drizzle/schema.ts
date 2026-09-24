@@ -829,7 +829,10 @@ export const scheduleImports = mysqlTable("scheduleImports", {
 /** A human action on an Opportunity Finder suggestion (the rules run live). */
 export const opportunityActions = mysqlTable("opportunityActions", {
   id: int("id").autoincrement().primaryKey(),
-  patientId: int("patientId").references(() => patients.id).notNull(),
+  // CCM-roster patient, when there is one; schedule-only patients are identified by subjectKey.
+  patientId: int("patientId").references(() => patients.id),
+  // "p:<patientId>" or "s:<normalized name>|<YYYY-MM-DD DOB>"
+  subjectKey: varchar("subjectKey", { length: 120 }),
   category: varchar("category", { length: 40 }).notNull(),
   action: mysqlEnum("action", ["reviewed", "task_created", "dismissed"]).notNull(),
   userId: int("userId").references(() => users.id).notNull(),
@@ -837,6 +840,7 @@ export const opportunityActions = mysqlTable("opportunityActions", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (t) => ({
   patientCategoryIdx: index("opportunityActions_patient_cat_idx").on(t.patientId, t.category),
+  subjectCategoryIdx: index("opportunityActions_subject_cat_idx").on(t.subjectKey, t.category),
 }));
 
 /** Practice knowledge base (SOPs / workflows). */

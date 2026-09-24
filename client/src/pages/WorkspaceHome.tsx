@@ -1,7 +1,7 @@
 import { Link } from "wouter";
 import {
   CalendarCheck, Users, Timer, ListTodo, UserX, AlertCircle, CalendarPlus, Radar, Upload, ArrowRight, ChevronRight, HeartPulse, Brain, Pill,
-  AlertTriangle, Building2, Info, Flame, CalendarClock,
+  AlertTriangle, Building2, Info, Flame, CalendarClock, CalendarX2, UserPlus,
 } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
@@ -72,8 +72,10 @@ export default function WorkspaceHome() {
     if (d.tasks.dueToday) priorities.push({ href: "/my-work?view=due_today", icon: CalendarClock, eyebrow: "Tasks", title: `${plural(d.tasks.dueToday, "task")} due today`, tone: "info" });
     if (d.tasks.high) priorities.push({ href: "/my-work?view=high", icon: Flame, eyebrow: "Tasks", title: `${plural(d.tasks.high, "high-priority task")} open`, tone: "violet" });
     if (caps?.opportunitiesView && d.openingsTomorrow) priorities.push({ href: "/opportunities?tab=openings", icon: CalendarPlus, eyebrow: "Scheduling", title: `${plural(d.openingsTomorrow, "opening")} next clinic day`, tone: "brand" });
-    if (d.opportunities?.missed) priorities.push({ href: "/opportunities?category=missed_appointment", icon: UserX, eyebrow: "Outreach", title: `${plural(d.opportunities.missed, "missed appointment")} to reschedule`, tone: "danger" });
-    if (d.opportunities?.overdue) priorities.push({ href: "/opportunities?category=overdue_follow_up", icon: Radar, eyebrow: "Outreach", title: `${plural(d.opportunities.overdue, "patient")} overdue for follow-up`, tone: "info" });
+    if (d.opportunities?.missed) priorities.push({ href: "/opportunities?category=missed_appointment", icon: UserX, eyebrow: "Outreach", title: `${plural(d.opportunities.missed, "no-show")} not rebooked`, tone: "danger" });
+    if (d.opportunities?.cancelled) priorities.push({ href: "/opportunities?category=cancelled_not_rebooked", icon: CalendarX2, eyebrow: "Outreach", title: `${plural(d.opportunities.cancelled, "cancellation")} not rebooked`, tone: "warning" });
+    if (d.opportunities?.newNoReturn) priorities.push({ href: "/opportunities?category=new_patient_no_return", icon: UserPlus, eyebrow: "Outreach", title: `${plural(d.opportunities.newNoReturn, "new patient")} never came back`, tone: "violet" });
+    if (d.opportunities?.lapsed) priorities.push({ href: "/opportunities?category=lapsed_follow_up", icon: Radar, eyebrow: "Outreach", title: `${plural(d.opportunities.lapsed, "patient")} not seen in 3+ months`, tone: "info" });
     if (d.care?.pendingRefills) priorities.push({ href: "/refill-requests", icon: Pill, eyebrow: "Provider items", title: `${plural(d.care.pendingRefills, "refill request")} pending`, tone: "violet" });
     if (d.care?.pendingEscalations) priorities.push({ href: "/escalations", icon: AlertTriangle, eyebrow: "Provider items", title: `${plural(d.care.pendingEscalations, "escalation")} awaiting review`, tone: "danger" });
   }

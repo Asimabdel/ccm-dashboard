@@ -46,7 +46,7 @@ export function ScheduleImportDialog({ open, onOpenChange, onImported }: { open:
   });
   const commitM = trpc.workspace.schedule.commit.useMutation({
     onSuccess: (r) => {
-      toast.success(`Imported ${r.rows} appointments: ${r.created} new, ${r.updated} updated${r.cancelled ? `, ${r.cancelled} cancelled` : ""}.`);
+      toast.success(`Imported ${r.rows.toLocaleString()} appointments: ${r.created.toLocaleString()} new, ${r.updated.toLocaleString()} updated, ${r.unchanged.toLocaleString()} unchanged${r.cancelled ? `, ${r.cancelled} cancelled` : ""}.`);
       void utils.workspace.invalidate();
       onImported?.(r.dates[0]);
       onOpenChange(false);
@@ -86,7 +86,7 @@ export function ScheduleImportDialog({ open, onOpenChange, onImported }: { open:
   };
 
   const p = preview;
-  const ready = !!p && p.rowCount > 0 && p.missingClinic === 0;
+  const ready = !!p && p.rowCount > 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -94,8 +94,9 @@ export function ScheduleImportDialog({ open, onOpenChange, onImported }: { open:
         <DialogHeader>
           <DialogTitle>Import the schedule from Practice Fusion</DialogTitle>
           <DialogDescription>
-            Export the appointment list for the day (or week) from Practice Fusion as a CSV file and upload it here. Re-importing the same day
-            updates appointments instead of duplicating them, and keeps any statuses already set on the flow board.
+            Export the appointment report from Practice Fusion as a CSV file and upload it here — a day, a week or a whole year. Re-importing
+            updates appointments instead of duplicating them: Practice Fusion's outcomes (seen, no-show, cancelled) are applied, and statuses
+            already moved on the flow board are otherwise kept.
           </DialogDescription>
         </DialogHeader>
 
@@ -125,7 +126,7 @@ export function ScheduleImportDialog({ open, onOpenChange, onImported }: { open:
                   if (csv) runPreview(csv, Object.keys(mapping).length ? mapping : undefined, e.target.value);
                 }}
               >
-                <option value="">From the file's facility column</option>
+                <option value="">Match by provider or patient (recommended)</option>
                 {clinics.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
@@ -143,8 +144,9 @@ export function ScheduleImportDialog({ open, onOpenChange, onImported }: { open:
               </div>
 
               {p.missingClinic > 0 && (
-                <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
-                  {p.missingClinic} row(s) don't say which clinic they're for. Pick the clinic for this file above.
+                <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                  {p.missingClinic} appointment(s) couldn't be matched to a clinic (their provider has no home clinic and the patient isn't on the CCM roster).
+                  They'll still import and show under "All clinics" for managers. To place them, set the provider's clinic on the Providers page or pick a clinic above.
                 </p>
               )}
 

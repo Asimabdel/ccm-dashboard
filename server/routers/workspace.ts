@@ -235,7 +235,7 @@ export const workspaceRouter = router({
       .input(
         z.object({
           category: z.enum(OPPORTUNITY_CATEGORY_LIST as [string, ...string[]]),
-          patientIds: z.array(z.number().int().positive()).min(1).max(500),
+          keys: z.array(z.string().regex(/^(p:\d+|s:.{1,110})$/)).min(1).max(500),
           action: z.enum(["reviewed", "task_created", "dismissed"]),
           assigneeId: z.number().int().positive().nullish(),
           taskTitle: z.string().trim().min(1).max(200).default("Follow up"),

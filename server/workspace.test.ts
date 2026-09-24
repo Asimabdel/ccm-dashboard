@@ -6,6 +6,7 @@ import {
   checkFlowTransition,
   clinicLocalToUtc,
   evaluateOpportunities,
+  evaluateScheduleOpportunities,
   findOpenings,
   mapScheduleStatus,
   nameKey,
@@ -14,6 +15,7 @@ import {
   parseScheduleCsv,
   parseTimeValue,
   type OpportunityPatient,
+  type ScheduleVisit,
 } from "../shared/workspace";
 import { appointmentKey } from "./workspaceDb";
 
@@ -61,7 +63,7 @@ describe("workspace RBAC (rejected before any data access)", () => {
   });
   it("blocks providers from acting on opportunities", async () => {
     await expect(
-      appRouter.createCaller(ctxFor("provider")).workspace.opportunities.act({ category: "missed_appointment", patientIds: [1], action: "reviewed" }),
+      appRouter.createCaller(ctxFor("provider")).workspace.opportunities.act({ category: "missed_appointment", keys: ["p:1"], action: "reviewed" }),
     ).rejects.toThrow(/access/);
   });
   it("blocks non-admins from editing playbooks", async () => {
@@ -145,8 +147,27 @@ describe("schedule CSV parsing", () => {
   it("matches 'Last, First' to 'First Last' and keys re-imports stably", () => {
     expect(nameKey("Doe, Jane")).toBe(nameKey("Jane Doe"));
     const row = parseScheduleCsv(csv).rows[0]!;
-    expect(appointmentKey(1, row)).toBe(appointmentKey(1, { ...row, status: "completed", reason: "changed" }));
-    expect(appointmentKey(1, row)).not.toBe(appointmentKey(2, row));
+    // Status, reason and clinic can change between imports without creating a duplicate.
+    expect(appointmentKey(row)).toBe(appointmentKey({ ...row, status: "completed", reason: "changed", location: "Katy" }));
+    expect(appointmentKey(row)).not.toBe(appointmentKey({ ...row, time: "08:40" }));
+  });
+  it("reads Practice Fusion's appointment report format", () => {
+    const pf = [
+      "AppointmentTime,Patient,DOB,MobilePhone,HomePhone,OfficePhone,AppointmentType,AppointmentStatus,SeenBy,Copay,Eligibility,Facility",
+      "01/05/2026 09:30 AM,Jane Doe,03/04/1958,(713) 555-0100,,,Video Follow-Up,Seen,Sudad Al Hadad,$0,Eligible for coverage,Dr Sudad's Schedule",
+      "09/24/2026 02:15 PM,John Public,11/02/1971,(281) 555-0101,,,In-Person New Patient,In lobby,Magdalene Inyang,$25,Not available.,NP Maggie's Schedule",
+      "09/28/2026 11:00 AM,Ann Smith,07/04/1949,,(713) 555-0102,,Follow-Up Visit,Pending,Yilian Almaguer Simon,$0,Error,ZNP 1",
+    ].join("\n");
+    const r = parseScheduleCsv(pf);
+    expect(r.errors).toEqual([]);
+    expect(r.mapping.datetime).toBe(0);
+    expect(r.mapping.provider).toBe(8);
+    expect(r.rows.map((x) => [x.date, x.time, x.status, x.provider, x.visitType, x.dob])).toEqual([
+      ["2026-01-05", "09:30", "completed", "Sudad Al Hadad", "Video Follow-Up", "1958-03-04"],
+      ["2026-09-24", "14:15", "arrived", "Magdalene Inyang", "In-Person New Patient", "1971-11-02"],
+      ["2026-09-28", "11:00", "scheduled", "Yilian Almaguer Simon", "Follow-Up Visit", "1949-07-04"],
+    ]);
+    expect(r.rows[0]!.phone).toBe("(713) 555-0100");
   });
 });
 
@@ -170,7 +191,7 @@ describe("opportunity rules", () => {
   const daysAgo = (n: number) => new Date(now.getTime() - n * 86_400_000);
   const blank: OpportunityPatient = {
     chronicConditions: [], bhiConditions: [], ccmEnrollmentStatus: null, bhiEnrollmentStatus: null,
-    rpmStatus: null, rpmEnrolled: false, lastOfficeVisit: null, nextVisit: null, lastNoShow: null,
+    rpmStatus: null, rpmEnrolled: false, lastOfficeVisit: null, nextVisit: null,
   };
   const cats = (p: Partial<OpportunityPatient>) => evaluateOpportunities({ ...blank, ...p }, now).map((m) => m.category).sort();
 
@@ -178,14 +199,39 @@ describe("opportunity rules", () => {
     expect(cats({ chronicConditions: ["Type 2 diabetes"], lastOfficeVisit: daysAgo(200) })).toEqual(["diabetes_follow_up", "overdue_follow_up"]);
     expect(cats({ chronicConditions: ["Type 2 diabetes"], lastOfficeVisit: daysAgo(200), nextVisit: new Date(now.getTime() + 86_400_000) })).toEqual([]);
   });
-  it("flags recent no-shows only", () => {
-    expect(cats({ lastNoShow: daysAgo(10) })).toEqual(["missed_appointment"]);
-    expect(cats({ lastNoShow: daysAgo(90) })).toEqual([]);
-    expect(cats({ lastNoShow: daysAgo(10), lastOfficeVisit: daysAgo(2) })).toEqual([]);
-  });
   it("respects declined enrollments", () => {
     expect(cats({ chronicConditions: ["COPD", "CKD"], ccmEnrollmentStatus: "declined", lastOfficeVisit: daysAgo(10) })).toEqual([]);
     expect(cats({ chronicConditions: ["COPD", "CKD"], ccmEnrollmentStatus: "inactive", lastOfficeVisit: daysAgo(10) })).toEqual(["ccm_eligible"]);
     expect(cats({ bhiConditions: ["Depression"], bhiEnrollmentStatus: "declined" })).toEqual([]);
+  });
+});
+
+describe("schedule opportunity rules (everyone on the schedule)", () => {
+  const now = new Date("2026-09-24T15:00:00Z");
+  const at = (days: number) => new Date(now.getTime() + days * 86_400_000);
+  const v = (days: number, status: string, visitType: string | null = "Video Follow-Up"): ScheduleVisit => ({ startsAt: at(days), status, visitType });
+  const cats = (visits: ScheduleVisit[]) => evaluateScheduleOpportunities(visits, now).map((m) => m.category).sort();
+
+  it("flags a recent no-show that was never rebooked", () => {
+    expect(cats([v(-100, "completed"), v(-10, "no_show")])).toEqual(["missed_appointment"]);
+    expect(cats([v(-10, "no_show"), v(5, "scheduled")])).toEqual([]); // rebooked
+    expect(cats([v(-10, "no_show"), v(-3, "completed")])).toEqual([]); // came back in
+    expect(cats([v(-90, "no_show")])).toEqual([]); // too old
+  });
+  it("flags cancellations with nothing booked since, but not twice with a no-show", () => {
+    expect(cats([v(-60, "completed"), v(-7, "cancelled")])).toEqual(["cancelled_not_rebooked"]);
+    expect(cats([v(-7, "cancelled"), v(3, "scheduled")])).toEqual([]);
+    expect(cats([v(-9, "cancelled"), v(-5, "no_show")])).toEqual(["missed_appointment"]);
+  });
+  it("flags new patients who never came back", () => {
+    expect(cats([v(-40, "completed", "New Patient Visit")])).toEqual(["new_patient_no_return"]);
+    expect(cats([v(-40, "completed", "New Patient Visit"), v(-10, "completed")])).toEqual([]);
+    expect(cats([v(-10, "completed", "New Patient Visit")])).toEqual([]); // too soon to worry
+  });
+  it("flags patients not seen in 3+ months with nothing booked", () => {
+    expect(cats([v(-200, "completed"), v(-120, "completed")])).toEqual(["lapsed_follow_up"]);
+    expect(cats([v(-120, "completed"), v(14, "scheduled")])).toEqual([]);
+    expect(cats([v(-30, "completed")])).toEqual([]);
+    expect(cats([v(-400, "completed")])).toEqual([]); // over a year: out of scope
   });
 });

@@ -5,22 +5,28 @@ import { CalendarPlus, CheckSquare, EyeOff, Info, ListPlus, Loader2, Radar, Squa
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { useUrlParams, useWorkspace } from "@/components/workspace/useWorkspace";
-import { Btn, EmptyState, ErrorNote, Loading, PageHeader, Panel, fmtShortDate, inputCls } from "@/components/workspace/ui";
+import { Btn, EmptyState, ErrorNote, Loading, PageHeader, Panel, SectionLabel, fmtDob, fmtShortDate, inputCls } from "@/components/workspace/ui";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { trpc } from "@/lib/trpc";
-import { fmtDay, fmtTime, localDateStr } from "@shared/workforce";
+import { addDays, fmtDay, fmtTime, localDateStr } from "@shared/workforce";
 import { OPPORTUNITY_CATEGORY_LIST, OPPORTUNITY_INFO, TASK_CATEGORIES, TASK_CATEGORY_LABELS, WORKSPACE_ROLE_LABELS, type OpportunityCategory } from "@shared/workspace";
 import { cn } from "@/lib/utils";
 
 const TASK_CATEGORY_FOR: Record<OpportunityCategory, string> = {
+  missed_appointment: "patient_call",
+  cancelled_not_rebooked: "patient_call",
+  new_patient_no_return: "patient_call",
+  lapsed_follow_up: "patient_call",
   overdue_follow_up: "patient_call",
   diabetes_follow_up: "patient_call",
   hypertension_follow_up: "patient_call",
-  missed_appointment: "patient_call",
   ccm_eligible: "care_management",
   bhi_candidate: "care_management",
   rpm_eligible: "care_management",
 };
+
+const SCHEDULE_CATEGORIES = new Set<OpportunityCategory>(["missed_appointment", "cancelled_not_rebooked", "new_patient_no_return", "lapsed_follow_up"]);
+const MAX_SELECT = 500;
 
 export default function OpportunitiesPage() {
   const { user } = useAuth({ redirectOnUnauthenticated: true });
@@ -61,8 +67,8 @@ function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: nu
   const { caps } = useWorkspace();
   const summary = trpc.workspace.opportunities.summary.useQuery({ clinicId });
   const [includeActioned, setIncludeActioned] = useState(false);
-  const list = trpc.workspace.opportunities.list.useQuery({ category: category ?? "overdue_follow_up", clinicId, includeActioned }, { enabled: !!category });
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const list = trpc.workspace.opportunities.list.useQuery({ category: category ?? "missed_appointment", clinicId, includeActioned }, { enabled: !!category });
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [taskOpen, setTaskOpen] = useState(false);
   const utils = trpc.useUtils();
 
@@ -78,16 +84,36 @@ function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: nu
     onError: (e) => toast.error(e.message),
   });
 
-  const rows = list.data ?? [];
-  const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.patientId));
-  const toggle = (id: number) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const rows = list.data?.rows ?? [];
+  const total = list.data?.total ?? 0;
+  // Bulk actions take up to 500 people at a time (the highest-priority ones first).
+  const selectable = rows.slice(0, MAX_SELECT);
+  const allSelected = selectable.length > 0 && selectable.every((r) => selected.has(r.key));
+  const toggle = (key: string) => setSelected((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.size < MAX_SELECT && n.add(key); return n; });
   const canAct = !!caps?.opportunitiesAct;
 
   return (
     <div className="space-y-5">
       {summary.error && <ErrorNote message={summary.error.message} />}
+      {summary.data && (!summary.data.scheduleThrough || summary.data.scheduleThrough < addDays(localDateStr(), 14)) && (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+          <Info size={16} className="mt-0.5 shrink-0" />
+          <span>
+            {summary.data.scheduleThrough
+              ? <>Upcoming appointments are only imported through <b>{fmtDay(summary.data.scheduleThrough, { month: "short", day: "numeric", year: "numeric" })}</b>. </>
+              : <>No schedule has been imported yet. </>}
+            Patients booked after that will still show as "nothing booked" — export the upcoming months from Practice Fusion and import them on Patient Flow.
+          </span>
+        </div>
+      )}
+      {[
+        { label: "From the schedule (everyone)", list: OPPORTUNITY_CATEGORY_LIST.filter((c) => SCHEDULE_CATEGORIES.has(c)) },
+        { label: "From the CCM roster", list: OPPORTUNITY_CATEGORY_LIST.filter((c) => !SCHEDULE_CATEGORIES.has(c)) },
+      ].map((group) => (
+      <section key={group.label}>
+      <SectionLabel>{group.label}</SectionLabel>
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-        {OPPORTUNITY_CATEGORY_LIST.map((c) => {
+        {group.list.map((c) => {
           const n = summary.data?.counts[c] ?? 0;
           const active = category === c;
           return (
@@ -105,6 +131,8 @@ function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: nu
           );
         })}
       </div>
+      </section>
+      ))}
 
       {!category && (
         <Panel>
@@ -131,13 +159,14 @@ function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: nu
             <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border-b border-slate-100 dark:border-slate-700 text-sm">
               <span className="font-semibold">{selected.size} selected</span>
               <Btn size="sm" onClick={() => setTaskOpen(true)}><ListPlus size={14} /> Create tasks</Btn>
-              <Btn size="sm" variant="secondary" disabled={act.isPending} onClick={() => act.mutate({ category, patientIds: Array.from(selected), action: "reviewed" })}><CheckSquare size={14} /> Mark reviewed</Btn>
-              <Btn size="sm" variant="ghost" disabled={act.isPending} onClick={() => act.mutate({ category, patientIds: Array.from(selected), action: "dismissed" })}><EyeOff size={14} /> Dismiss</Btn>
+              <Btn size="sm" variant="secondary" disabled={act.isPending} onClick={() => act.mutate({ category, keys: Array.from(selected), action: "reviewed" })}><CheckSquare size={14} /> Mark reviewed</Btn>
+              <Btn size="sm" variant="ghost" disabled={act.isPending} onClick={() => act.mutate({ category, keys: Array.from(selected), action: "dismissed" })}><EyeOff size={14} /> Dismiss</Btn>
             </div>
           )}
           {list.isLoading && <Loading />}
           {list.error && <div className="p-4"><ErrorNote message={list.error.message} /></div>}
           {list.data && rows.length === 0 && <EmptyState icon={CheckSquare} title="Nobody here right now" body="Handled patients are hidden for 30 days." />}
+          {total > rows.length && <p className="px-4 py-2 text-xs text-slate-500 border-b border-slate-100 dark:border-slate-700">Showing the top {rows.length.toLocaleString()} of {total.toLocaleString()} by priority. Handle these first, or pick a clinic to narrow the list.</p>}
           {rows.length > 0 && (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -145,7 +174,7 @@ function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: nu
                   <tr>
                     {canAct && (
                       <th className="w-10 px-4 py-2">
-                        <button aria-label={allSelected ? "Clear selection" : "Select all"} onClick={() => setSelected(allSelected ? new Set() : new Set(rows.map((r) => r.patientId)))}>
+                        <button aria-label={allSelected ? "Clear selection" : "Select all"} title={rows.length > MAX_SELECT ? `Selects the top ${MAX_SELECT}` : undefined} onClick={() => setSelected(allSelected ? new Set() : new Set(selectable.map((r) => r.key)))}>
                           {allSelected ? <CheckSquare size={16} className="text-brand" /> : <Square size={16} className="text-slate-400" />}
                         </button>
                       </th>
@@ -160,15 +189,24 @@ function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: nu
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
                   {rows.map((r) => (
-                    <tr key={r.patientId} className={cn(selected.has(r.patientId) && "bg-brand/5")}>
+                    <tr key={r.key} className={cn(selected.has(r.key) && "bg-brand/5")}>
                       {canAct && (
                         <td className="px-4 py-2.5">
-                          <button aria-label={`Select ${r.name}`} onClick={() => toggle(r.patientId)}>
-                            {selected.has(r.patientId) ? <CheckSquare size={16} className="text-brand" /> : <Square size={16} className="text-slate-400" />}
+                          <button aria-label={`Select ${r.name}`} onClick={() => toggle(r.key)}>
+                            {selected.has(r.key) ? <CheckSquare size={16} className="text-brand" /> : <Square size={16} className="text-slate-400" />}
                           </button>
                         </td>
                       )}
-                      <td className="px-3 py-2.5"><Link href={`/patients/${r.patientId}?tab=overview`} className="font-medium text-slate-900 dark:text-slate-50 hover:underline">{r.name}</Link></td>
+                      <td className="px-3 py-2.5">
+                        {r.patientId ? (
+                          <Link href={`/patients/${r.patientId}?tab=overview`} className="font-medium text-slate-900 dark:text-slate-50 hover:underline">{r.name}</Link>
+                        ) : (
+                          <span className="font-medium text-slate-900 dark:text-slate-50">{r.name}</span>
+                        )}
+                        <span className="block text-xs text-slate-500">
+                          DOB {fmtDob(r.dateOfBirth)}{r.patientId ? "" : " · not on CCM roster"}
+                        </span>
+                      </td>
                       <td className="px-3 py-2.5 text-slate-600 dark:text-slate-300">{r.reason}</td>
                       <td className="px-3 py-2.5 text-slate-500 hidden md:table-cell">{r.clinicName ?? "—"}{r.providerName ? ` · ${r.providerName}` : ""}</td>
                       <td className="px-3 py-2.5 text-slate-500 hidden lg:table-cell whitespace-nowrap">{fmtShortDate(r.lastOfficeVisit)}</td>
@@ -181,7 +219,7 @@ function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: nu
             </div>
           )}
           <p className="flex items-start gap-2 px-4 py-3 text-xs text-slate-500 border-t border-slate-100 dark:border-slate-700">
-            <Info size={13} className="mt-0.5 shrink-0" /> Rules use the CCM roster and imported schedules. Visits not imported from Practice Fusion won't count, so check the chart before calling.
+            <Info size={13} className="mt-0.5 shrink-0" /> Schedule rules use every appointment imported from Practice Fusion (last 13 months); roster rules use the CCM roster. Check the chart before calling.
           </p>
         </Panel>
       )}
@@ -193,7 +231,7 @@ function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: nu
           count={selected.size}
           category={category}
           pending={act.isPending}
-          onSubmit={(v) => act.mutate({ category, patientIds: Array.from(selected), action: "task_created", ...v })}
+          onSubmit={(v) => act.mutate({ category, keys: Array.from(selected), action: "task_created", ...v })}
         />
       )}
     </div>
@@ -298,8 +336,8 @@ function Openings({ clinicId }: { clinicId: number | null }) {
           <div className="px-4 py-2.5 border-t border-slate-100 dark:border-slate-700 text-xs text-slate-500 flex flex-wrap gap-3">
             Who to offer these to:
             <Link href="/opportunities?category=missed_appointment" className="font-semibold text-brand hover:underline">Missed appointments</Link>
-            <Link href="/opportunities?category=overdue_follow_up" className="font-semibold text-brand hover:underline">Overdue follow-ups</Link>
-            <Link href="/opportunities?category=diabetes_follow_up" className="font-semibold text-brand hover:underline">Diabetes follow-ups</Link>
+            <Link href="/opportunities?category=cancelled_not_rebooked" className="font-semibold text-brand hover:underline">Cancelled, not rebooked</Link>
+            <Link href="/opportunities?category=lapsed_follow_up" className="font-semibold text-brand hover:underline">No visit in 3+ months</Link>
           </div>
         </Panel>
       ))}

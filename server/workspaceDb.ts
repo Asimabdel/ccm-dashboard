@@ -38,6 +38,10 @@ import {
   checkFlowTransition,
   clinicLocalToUtc,
   evaluateOpportunities,
+  evaluateScheduleOpportunities,
+  SEEN_STATUSES,
+  type OpportunityMatch,
+  type ScheduleVisit,
   findOpenings,
   minutesBetween,
   nameKey,
@@ -432,65 +436,100 @@ export async function commentTask(actor: WorkspaceActor, taskId: number, body: s
 // Schedule import
 // ---------------------------------------------------------------------------
 
-export function appointmentKey(clinicId: number | null, row: ParsedAppointmentRow): string {
-  const raw = [clinicId ?? "-", row.date, row.time, nameKey(row.patientName), (row.provider ?? "").toLowerCase().replace(/[^a-z]/g, "")].join("|");
+/**
+ * Stable identity of a schedule row across re-imports: same patient, same provider,
+ * same start time. The clinic is deliberately NOT part of it, so assigning a
+ * provider to a clinic later just updates the existing appointments.
+ */
+export function appointmentKey(row: ParsedAppointmentRow): string {
+  const raw = [row.date, row.time, nameKey(row.patientName), (row.provider ?? "").toLowerCase().replace(/[^a-z]/g, "")].join("|");
   return createHash("sha256").update(raw).digest("hex").slice(0, 48);
 }
 
 function matchClinicId(location: string | null, all: { id: number; name: string; location: string }[]): number | null {
   if (!location) return null;
-  const l = location.toLowerCase();
-  const hit = all.find((c) => l.includes(c.location.toLowerCase()) || l.includes(c.name.toLowerCase()) || c.name.toLowerCase().includes(l));
+  const l = location.toLowerCase().trim();
+  const hit = all.find((c) => l.includes(c.location.toLowerCase()) || l.includes(c.name.toLowerCase()) || (l.length >= 4 && c.name.toLowerCase().includes(l)));
   return hit?.id ?? null;
 }
 
 const ymd = (dt: Date | null) => (dt ? dt.toISOString().slice(0, 10) : null);
+/** "john q public" → "john public" (first + last word), for a second-chance match. */
+const firstLast = (key: string) => {
+  const w = key.split(" ").filter(Boolean);
+  return w.length >= 2 ? `${w[0]} ${w[w.length - 1]}` : key;
+};
 
-/** Build lookups once, then resolve clinic, provider and patient for each row. */
+/**
+ * Build lookups once, then resolve provider, patient and clinic for each row.
+ * Clinic comes from the file's location text when it names a clinic, else the
+ * provider's home clinic, else the linked patient's clinic, else the default
+ * picked for the file; otherwise it stays unassigned (managers still see it).
+ */
 export async function resolveScheduleRows(rows: ParsedAppointmentRow[], defaultClinicId: number | null) {
   const d = await db();
   const [allClinics, allProviders, allPatients] = await Promise.all([
     d.select({ id: clinics.id, name: clinics.name, location: clinics.location }).from(clinics),
-    d.select({ id: providers.id, name: providers.name, aliases: providers.aliases }).from(providers),
-    d.select({ id: patients.id, name: patients.name, dateOfBirth: patients.dateOfBirth }).from(patients),
+    d.select({ id: providers.id, name: providers.name, aliases: providers.aliases, clinicId: providers.clinicId }).from(providers),
+    d.select({ id: patients.id, name: patients.name, dateOfBirth: patients.dateOfBirth, clinicId: patients.clinicId }).from(patients),
   ]);
+  const providerClinic = new Map(allProviders.map((p) => [p.id, p.clinicId]));
+  const patientClinic = new Map(allPatients.map((p) => [p.id, p.clinicId]));
   const byName = new Map<string, { id: number; dob: string | null }[]>();
+  const byFirstLast = new Map<string, { id: number; dob: string | null }[]>();
   for (const p of allPatients) {
     const k = nameKey(p.name);
-    (byName.get(k) ?? byName.set(k, []).get(k)!).push({ id: p.id, dob: ymd(p.dateOfBirth) });
+    const entry = { id: p.id, dob: ymd(p.dateOfBirth) };
+    (byName.get(k) ?? byName.set(k, []).get(k)!).push(entry);
+    const fl = firstLast(k);
+    (byFirstLast.get(fl) ?? byFirstLast.set(fl, []).get(fl)!).push(entry);
   }
   const findPatient = (name: string, dob: string | null): number | null => {
-    const cands = byName.get(nameKey(name)) ?? [];
-    if (!cands.length) return null;
-    if (dob) {
-      const exact = cands.filter((c) => c.dob === dob);
-      if (exact.length === 1) return exact[0]!.id;
-      if (exact.length > 1) return null;
-      // Legacy rows may lack a DOB: accept a unique same-name patient with no DOB on file.
-      const noDob = cands.filter((c) => !c.dob);
-      return cands.length === 1 && noDob.length === 1 ? noDob[0]!.id : null;
+    const key = nameKey(name);
+    const cands = byName.get(key) ?? [];
+    if (cands.length) {
+      if (dob) {
+        const exact = cands.filter((c) => c.dob === dob);
+        if (exact.length === 1) return exact[0]!.id;
+        if (exact.length > 1) return null;
+        // Legacy rows may lack a DOB: accept a unique same-name patient with no DOB on file.
+        const noDob = cands.filter((c) => !c.dob);
+        return cands.length === 1 && noDob.length === 1 ? noDob[0]!.id : null;
+      }
+      return cands.length === 1 ? cands[0]!.id : null;
     }
-    return cands.length === 1 ? cands[0]!.id : null;
+    // Middle names/initials differ between systems: first + last name with an exact DOB.
+    if (!dob) return null;
+    const fl = (byFirstLast.get(firstLast(key)) ?? []).filter((c) => c.dob === dob);
+    return fl.length === 1 ? fl[0]!.id : null;
   };
   return rows.map((r) => {
-    const clinicId = matchClinicId(r.location, allClinics) ?? defaultClinicId;
     const providerId = matchProviderId(r.provider, allProviders);
-    return { ...r, clinicId, providerId, patientId: findPatient(r.patientName, r.dob), key: appointmentKey(clinicId, r) };
+    const patientId = findPatient(r.patientName, r.dob);
+    const clinicId =
+      matchClinicId(r.location, allClinics) ??
+      (providerId ? providerClinic.get(providerId) ?? null : null) ??
+      (patientId ? patientClinic.get(patientId) ?? null : null) ??
+      defaultClinicId ??
+      null;
+    return { ...r, clinicId, providerId, patientId, key: appointmentKey(r) };
   });
 }
+
+const FINAL_STATUSES = ["completed", "no_show", "cancelled"];
 
 export async function commitSchedule(
   actor: WorkspaceActor,
   input: { fileName: string | null; rows: ParsedAppointmentRow[]; defaultClinicId: number | null; cancelMissing: boolean },
 ) {
   const d = await db();
-  const resolved = await resolveScheduleRows(input.rows, input.defaultClinicId);
-  const noClinic = resolved.filter((r) => !r.clinicId);
-  if (noClinic.length) throw new WorkspaceError(`${noClinic.length} row(s) have no clinic — pick a default clinic for this file.`);
+  const resolvedAll = await resolveScheduleRows(input.rows, input.defaultClinicId);
   if (actor.clinicIds) {
-    const outside = resolved.filter((r) => !actor.clinicIds!.includes(r.clinicId!));
+    const outside = resolvedAll.filter((r) => !r.clinicId || !actor.clinicIds!.includes(r.clinicId));
     if (outside.length) throw new WorkspaceError("This file includes clinics you don't have access to.", "FORBIDDEN");
   }
+  // The same patient/provider/time listed twice counts once (the later line wins).
+  const resolved = Array.from(new Map(resolvedAll.map((r) => [r.key, r])).values());
   const dates = Array.from(new Set(resolved.map((r) => r.date))).sort();
   const [imp] = await d.insert(scheduleImports).values({
     fileName: input.fileName?.slice(0, 255) ?? null,
@@ -502,12 +541,15 @@ export async function commitSchedule(
   const importId = Number((imp as unknown as { insertId: number }).insertId);
 
   const keys = resolved.map((r) => r.key);
-  const existing = keys.length ? await d.select().from(appointments).where(inArray(appointments.externalKey, keys)) : [];
+  const existing: (typeof appointments.$inferSelect)[] = [];
+  for (let i = 0; i < keys.length; i += 1000) {
+    existing.push(...(await d.select().from(appointments).where(inArray(appointments.externalKey, keys.slice(i, i + 1000)))));
+  }
   const existingByKey = new Map(existing.map((e) => [e.externalKey, e]));
-  let created = 0;
+  const inserts: (typeof appointments.$inferInsert)[] = [];
   let updated = 0;
+  let unchanged = 0;
   for (const r of resolved) {
-    const startsAt = clinicLocalToUtc(r.date, r.time);
     const base = {
       clinicId: r.clinicId,
       patientId: r.patientId,
@@ -517,41 +559,55 @@ export async function commitSchedule(
       providerId: r.providerId,
       providerName: r.provider,
       date: r.date,
-      startsAt,
+      startsAt: clinicLocalToUtc(r.date, r.time),
       durationMin: r.durationMin,
       visitType: r.visitType,
       reason: r.reason,
-      importId,
     };
     const prev = existingByKey.get(r.key);
-    if (prev) {
-      // Keep statuses already set in MyPCP; only adopt the file's status while still "scheduled".
-      const status = prev.status === "scheduled" ? r.status : prev.status;
-      await d.update(appointments).set({ ...base, patientId: base.patientId ?? prev.patientId, status }).where(eq(appointments.id, prev.id));
-      updated++;
-    } else {
-      await d.insert(appointments).values({ ...base, status: r.status, externalKey: r.key });
-      created++;
+    if (!prev) {
+      inserts.push({ ...base, status: r.status, externalKey: r.key, importId });
+      continue;
     }
+    // Practice Fusion's final outcome (seen / no-show / cancelled) wins; otherwise keep a
+    // status already moved on the flow board and only adopt the file's while still "scheduled".
+    const status = FINAL_STATUSES.includes(r.status) || prev.status === "scheduled" ? r.status : prev.status;
+    const next = { ...base, patientId: base.patientId ?? prev.patientId, status };
+    const same =
+      next.clinicId === prev.clinicId && next.patientId === prev.patientId && next.patientName === prev.patientName &&
+      ymd(next.dateOfBirth) === ymd(prev.dateOfBirth) && next.phoneNumber === prev.phoneNumber && next.providerId === prev.providerId &&
+      next.providerName === prev.providerName && next.durationMin === prev.durationMin && next.visitType === prev.visitType &&
+      next.reason === prev.reason && next.status === prev.status;
+    if (same) {
+      unchanged++;
+      continue;
+    }
+    await d.update(appointments).set({ ...next, importId }).where(eq(appointments.id, prev.id));
+    updated++;
   }
+  for (let i = 0; i < inserts.length; i += 400) await d.insert(appointments).values(inserts.slice(i, i + 400));
+  const created = inserts.length;
+
   let cancelled = 0;
   if (input.cancelMissing && dates.length) {
-    const clinicIds = Array.from(new Set(resolved.map((r) => r.clinicId!)));
+    const clinicIds = Array.from(new Set(resolved.map((r) => r.clinicId).filter((c): c is number => c != null)));
+    const clinicCond = clinicIds.length ? or(inArray(appointments.clinicId, clinicIds), isNull(appointments.clinicId)) : isNull(appointments.clinicId);
     const stale = await d
       .select({ id: appointments.id, key: appointments.externalKey })
       .from(appointments)
-      .where(and(inArray(appointments.date, dates), inArray(appointments.clinicId, clinicIds), eq(appointments.status, "scheduled")));
+      .where(and(inArray(appointments.date, dates), clinicCond, eq(appointments.status, "scheduled")));
     const keep = new Set(keys);
     const toCancel = stale.filter((s) => !keep.has(s.key)).map((s) => s.id);
-    if (toCancel.length) {
-      await d.update(appointments).set({ status: "cancelled" }).where(inArray(appointments.id, toCancel));
-      cancelled = toCancel.length;
+    for (let i = 0; i < toCancel.length; i += 1000) {
+      await d.update(appointments).set({ status: "cancelled" }).where(inArray(appointments.id, toCancel.slice(i, i + 1000)));
     }
+    cancelled = toCancel.length;
   }
   const linked = resolved.filter((r) => r.patientId).length;
   await d.update(scheduleImports).set({ createdCount: created, updatedCount: updated, linkedCount: linked }).where(eq(scheduleImports.id, importId));
-  await audit(actor, "import_schedule", { entityType: "scheduleImport", entityId: importId, description: `rows=${resolved.length}; created=${created}; updated=${updated}; cancelled=${cancelled}; dates=${dates[0]}..${dates[dates.length - 1]}` });
-  return { importId, created, updated, cancelled, linked, rows: resolved.length, dates };
+  await audit(actor, "import_schedule", { entityType: "scheduleImport", entityId: importId, description: `rows=${resolved.length}; created=${created}; updated=${updated}; unchanged=${unchanged}; cancelled=${cancelled}; dates=${dates[0]}..${dates[dates.length - 1]}` });
+  scheduleCache.clear();
+  return { importId, created, updated, unchanged, cancelled, linked, rows: resolved.length, dates };
 }
 
 export async function recentImports() {
@@ -609,8 +665,10 @@ export async function flowBoard(actor: WorkspaceActor, input: { clinicId?: numbe
       statusSince: tsField ? ((r as Record<string, unknown>)[tsField] as Date | null) : null,
     };
   });
-  const waiting = cards.filter((c) => WAITING_STATUSES.includes(c.status as FlowStatus) && c.arrivedAt);
-  const waits = waiting.map((c) => minutesBetween(c.arrivedAt!, now));
+  // Imported "In lobby" visits have no arrival time: they count as waiting, but only
+  // visits with a known arrival time feed the wait-time numbers.
+  const waiting = cards.filter((c) => WAITING_STATUSES.includes(c.status as FlowStatus));
+  const waits = waiting.filter((c) => c.arrivedAt).map((c) => minutesBetween(c.arrivedAt!, now));
   const seenWaits = cards.filter((c) => c.arrivedAt && c.withProviderAt).map((c) => minutesBetween(c.arrivedAt!, c.withProviderAt!));
   const allWaits = [...waits, ...seenWaits];
   return {
@@ -649,6 +707,7 @@ export async function moveAppointment(actor: WorkspaceActor, input: { appointmen
   if (input.to === "completed" && a.patientId) {
     await d.update(patients).set({ lastOfficeVisit: a.startsAt }).where(and(eq(patients.id, a.patientId), or(isNull(patients.lastOfficeVisit), lt(patients.lastOfficeVisit, a.startsAt))));
   }
+  scheduleCache.clear();
   await audit(actor, "update_appointment", { entityType: "appointment", entityId: a.id, description: `${a.status} -> ${input.to}` });
   return { from: a.status, to: input.to };
 }
@@ -695,142 +754,243 @@ export async function openings(actor: WorkspaceActor, input: { clinicId?: number
 // Opportunity Finder
 // ---------------------------------------------------------------------------
 
+/** Everyone on the imported schedule, keyed "p:<patientId>" (CCM roster) or "s:<name>|<dob>". */
+interface ScheduleSubject {
+  key: string;
+  patientId: number | null;
+  name: string;
+  dob: Date | null;
+  phone: string | null;
+  clinicId: number | null;
+  providerName: string | null;
+  visits: ScheduleVisit[];
+}
+
+// Schedule history is read on every Home / Opportunity Finder load; keep it for a
+// minute per Lambda instance. Imports and flow-board moves clear it.
+const scheduleCache = new Map<string, { at: number; subjects: Map<string, ScheduleSubject> }>();
+
+const subjectKeyFor = (patientId: number | null, name: string, dob: Date | null) => (patientId ? `p:${patientId}` : `s:${nameKey(name)}|${ymd(dob) ?? ""}`);
+
+async function loadScheduleSubjects(): Promise<Map<string, ScheduleSubject>> {
+  const hit = scheduleCache.get("all");
+  if (hit && Date.now() - hit.at < 60_000) return hit.subjects;
+  const d = await db();
+  const rows = await d
+    .select({
+      patientId: appointments.patientId,
+      patientName: appointments.patientName,
+      dateOfBirth: appointments.dateOfBirth,
+      phoneNumber: appointments.phoneNumber,
+      clinicId: appointments.clinicId,
+      providerName: appointments.providerName,
+      providerDisplay: providers.name,
+      startsAt: appointments.startsAt,
+      status: appointments.status,
+      visitType: appointments.visitType,
+    })
+    .from(appointments)
+    .leftJoin(providers, eq(appointments.providerId, providers.id))
+    .where(gte(appointments.date, addDays(localDateStr(), -400)));
+  const now = Date.now();
+  const subjects = new Map<string, ScheduleSubject & { latestAt: number }>();
+  for (const r of rows) {
+    const key = subjectKeyFor(r.patientId, r.patientName, r.dateOfBirth);
+    let s = subjects.get(key);
+    if (!s) {
+      s = { key, patientId: r.patientId, name: r.patientName, dob: r.dateOfBirth, phone: r.phoneNumber, clinicId: r.clinicId, providerName: r.providerDisplay ?? r.providerName, visits: [], latestAt: -Infinity };
+      subjects.set(key, s);
+    }
+    s.visits.push({ startsAt: r.startsAt, status: r.status, visitType: r.visitType });
+    // Contact details, clinic and provider come from the most recent visit so far (future ones only if nothing past).
+    const t = r.startsAt.getTime();
+    const rank = t <= now ? t : -t;
+    if (rank > s.latestAt) {
+      s.latestAt = rank;
+      s.name = r.patientName;
+      s.phone = r.phoneNumber ?? s.phone;
+      s.clinicId = r.clinicId ?? s.clinicId;
+      s.providerName = r.providerDisplay ?? r.providerName ?? s.providerName;
+    }
+  }
+  scheduleCache.set("all", { at: Date.now(), subjects });
+  return subjects;
+}
+
+function visitDates(visits: ScheduleVisit[], now: Date) {
+  let lastSeen: Date | null = null;
+  let nextBooked: Date | null = null;
+  for (const v of visits) {
+    if (v.startsAt <= now && SEEN_STATUSES.includes(v.status) && (!lastSeen || v.startsAt > lastSeen)) lastSeen = v.startsAt;
+    if (v.startsAt > now && v.status !== "cancelled" && v.status !== "no_show" && (!nextBooked || v.startsAt < nextBooked)) nextBooked = v.startsAt;
+  }
+  return { lastSeen, nextBooked };
+}
+
+interface OpportunityCandidate {
+  key: string;
+  patientId: number | null;
+  name: string;
+  dateOfBirth: Date | null;
+  phoneNumber: string | null;
+  clinicId: number | null;
+  clinicName: string | null;
+  providerId: number | null;
+  providerName: string | null;
+  lastVisit: Date | null;
+  nextVisit: Date | null;
+  matches: OpportunityMatch[];
+}
+
 async function loadOpportunityData(actor: WorkspaceActor, clinicId?: number | null) {
   const d = await db();
   const scope = scopeClinics(actor, clinicId);
   const now = new Date();
-  const pats = await d
-    .select({
-      id: patients.id,
-      name: patients.name,
-      dateOfBirth: patients.dateOfBirth,
-      phoneNumber: patients.phoneNumber,
-      clinicId: patients.clinicId,
-      clinicName: clinics.name,
-      providerId: patients.providerId,
-      providerName: providers.name,
-      chronicConditions: patients.chronicConditions,
-      bhiConditions: patients.bhiConditions,
-      ccmEnrollmentStatus: patients.ccmEnrollmentStatus,
-      bhiEnrollmentStatus: patients.bhiEnrollmentStatus,
-      rpmStatus: patients.rpmStatus,
-      rpmEnrolled: patients.rpmEnrolled,
-      lastOfficeVisit: patients.lastOfficeVisit,
-      nextAppointment: patients.nextAppointment,
-    })
-    .from(patients)
-    .leftJoin(clinics, eq(patients.clinicId, clinics.id))
-    .leftJoin(providers, eq(patients.providerId, providers.id))
-    .where(clinicFilter(patients.clinicId, scope));
-  const since60 = addDays(localDateStr(), -60);
-  const appts = await d
-    .select({ patientId: appointments.patientId, startsAt: appointments.startsAt, status: appointments.status, date: appointments.date })
-    .from(appointments)
-    .where(and(sql`${appointments.patientId} IS NOT NULL`, gte(appointments.date, since60)));
-  const nextBy = new Map<number, Date>();
-  const noShowBy = new Map<number, Date>();
-  const seenBy = new Map<number, Date>();
-  for (const a of appts) {
-    const pid = a.patientId!;
-    if (a.status === "scheduled" && a.startsAt > now) {
-      const cur = nextBy.get(pid);
-      if (!cur || a.startsAt < cur) nextBy.set(pid, a.startsAt);
-    }
-    if (a.status === "no_show") {
-      const cur = noShowBy.get(pid);
-      if (!cur || a.startsAt > cur) noShowBy.set(pid, a.startsAt);
-    }
-    if (a.status !== "scheduled" && a.status !== "no_show" && a.status !== "cancelled") {
-      const cur = seenBy.get(pid);
-      if (!cur || a.startsAt > cur) seenBy.set(pid, a.startsAt);
-    }
+  const [pats, subjects, clinicRows] = await Promise.all([
+    d
+      .select({
+        id: patients.id,
+        name: patients.name,
+        dateOfBirth: patients.dateOfBirth,
+        phoneNumber: patients.phoneNumber,
+        clinicId: patients.clinicId,
+        clinicName: clinics.name,
+        providerId: patients.providerId,
+        providerName: providers.name,
+        chronicConditions: patients.chronicConditions,
+        bhiConditions: patients.bhiConditions,
+        ccmEnrollmentStatus: patients.ccmEnrollmentStatus,
+        bhiEnrollmentStatus: patients.bhiEnrollmentStatus,
+        rpmStatus: patients.rpmStatus,
+        rpmEnrolled: patients.rpmEnrolled,
+        lastOfficeVisit: patients.lastOfficeVisit,
+        nextAppointment: patients.nextAppointment,
+      })
+      .from(patients)
+      .leftJoin(clinics, eq(patients.clinicId, clinics.id))
+      .leftJoin(providers, eq(patients.providerId, providers.id))
+      .where(clinicFilter(patients.clinicId, scope)),
+    loadScheduleSubjects(),
+    d.select({ id: clinics.id, name: clinics.name }).from(clinics),
+  ]);
+  const clinicName = new Map(clinicRows.map((c) => [c.id, c.name]));
+  const candidates: OpportunityCandidate[] = [];
+
+  // CCM roster: condition/enrollment rules plus the schedule rules on their visits.
+  for (const p of pats) {
+    const visits = subjects.get(`p:${p.id}`)?.visits ?? [];
+    const { lastSeen, nextBooked } = visitDates(visits, now);
+    const lastVisit = lastSeen && (!p.lastOfficeVisit || lastSeen > p.lastOfficeVisit) ? lastSeen : p.lastOfficeVisit;
+    const futureRoster = p.nextAppointment && p.nextAppointment > now ? p.nextAppointment : null;
+    const nextVisit = [nextBooked, futureRoster].filter((x): x is Date => !!x).sort((a, b) => a.getTime() - b.getTime())[0] ?? null;
+    const matches = [
+      ...evaluateScheduleOpportunities(visits, now),
+      ...evaluateOpportunities(
+        {
+          chronicConditions: p.chronicConditions ?? [],
+          bhiConditions: p.bhiConditions ?? [],
+          ccmEnrollmentStatus: p.ccmEnrollmentStatus,
+          bhiEnrollmentStatus: p.bhiEnrollmentStatus,
+          rpmStatus: p.rpmStatus,
+          rpmEnrolled: p.rpmEnrolled,
+          lastOfficeVisit: lastVisit,
+          nextVisit,
+        },
+        now,
+      ),
+    ];
+    if (!matches.length) continue;
+    candidates.push({ key: `p:${p.id}`, patientId: p.id, name: p.name, dateOfBirth: p.dateOfBirth, phoneNumber: p.phoneNumber, clinicId: p.clinicId, clinicName: p.clinicName, providerId: p.providerId, providerName: p.providerName, lastVisit, nextVisit, matches });
   }
+
+  // Everyone else on the schedule (not on the CCM roster): schedule rules only.
+  for (const s of Array.from(subjects.values())) {
+    if (s.patientId) continue;
+    if (scope !== null && (s.clinicId == null || !scope.includes(s.clinicId))) continue;
+    const matches = evaluateScheduleOpportunities(s.visits, now);
+    if (!matches.length) continue;
+    const { lastSeen, nextBooked } = visitDates(s.visits, now);
+    candidates.push({ key: s.key, patientId: null, name: s.name, dateOfBirth: s.dob, phoneNumber: s.phone, clinicId: s.clinicId, clinicName: s.clinicId ? clinicName.get(s.clinicId) ?? null : null, providerId: null, providerName: s.providerName, lastVisit: lastSeen, nextVisit: nextBooked, matches });
+  }
+
   const acted = await d
-    .select({ patientId: opportunityActions.patientId, category: opportunityActions.category, action: opportunityActions.action, createdAt: opportunityActions.createdAt })
+    .select({ patientId: opportunityActions.patientId, subjectKey: opportunityActions.subjectKey, category: opportunityActions.category, action: opportunityActions.action, createdAt: opportunityActions.createdAt })
     .from(opportunityActions)
     .where(gte(opportunityActions.createdAt, new Date(now.getTime() - 30 * 86_400_000)));
-  const actedKey = new Map(acted.map((a) => [`${a.patientId}|${a.category}`, a]));
-  return pats.map((p) => {
-    const futurePatientAppt = p.nextAppointment && p.nextAppointment > now ? p.nextAppointment : null;
-    const seen = seenBy.get(p.id);
-    const lastVisit = seen && (!p.lastOfficeVisit || seen > p.lastOfficeVisit) ? seen : p.lastOfficeVisit;
-    const nextVisit = [nextBy.get(p.id), futurePatientAppt].filter((x): x is Date => !!x).sort((a, b) => a.getTime() - b.getTime())[0] ?? null;
-    const matches = evaluateOpportunities(
-      {
-        chronicConditions: p.chronicConditions ?? [],
-        bhiConditions: p.bhiConditions ?? [],
-        ccmEnrollmentStatus: p.ccmEnrollmentStatus,
-        bhiEnrollmentStatus: p.bhiEnrollmentStatus,
-        rpmStatus: p.rpmStatus,
-        rpmEnrolled: p.rpmEnrolled,
-        lastOfficeVisit: lastVisit,
-        nextVisit,
-        lastNoShow: noShowBy.get(p.id) ?? null,
-      },
-      now,
-    );
-    return { p, lastVisit, nextVisit, matches, acted: (cat: string) => actedKey.get(`${p.id}|${cat}`) ?? null };
-  });
+  const actedKey = new Map(acted.map((a) => [`${a.subjectKey ?? `p:${a.patientId}`}|${a.category}`, a]));
+  return candidates.map((c) => ({ ...c, acted: (cat: string) => actedKey.get(`${c.key}|${cat}`) ?? null }));
 }
 
 export async function opportunitySummary(actor: WorkspaceActor, clinicId?: number | null) {
   const data = await loadOpportunityData(actor, clinicId);
   const counts: Record<string, number> = {};
-  const unique = new Set<number>();
-  for (const { p, matches, acted } of data) {
-    for (const m of matches) {
-      if (acted(m.category)) continue;
+  const unique = new Set<string>();
+  for (const c of data) {
+    for (const m of c.matches) {
+      if (c.acted(m.category)) continue;
       counts[m.category] = (counts[m.category] ?? 0) + 1;
-      unique.add(p.id);
+      unique.add(c.key);
     }
   }
-  return { counts, uniquePatients: unique.size };
+  // How far ahead the imported schedule reaches: "nothing booked" is only reliable up to here.
+  const [range] = await (await db()).select({ last: sql<string | null>`MAX(${appointments.date})` }).from(appointments);
+  return { counts, uniquePatients: unique.size, scheduleThrough: range?.last ?? null };
 }
+
+const OPPORTUNITY_LIST_LIMIT = 1000;
 
 export async function opportunityList(actor: WorkspaceActor, input: { category: OpportunityCategory; clinicId?: number | null; providerId?: number | null; includeActioned: boolean }) {
   const data = await loadOpportunityData(actor, input.clinicId);
   const out = [];
-  for (const { p, lastVisit, nextVisit, matches, acted } of data) {
-    const m = matches.find((x) => x.category === input.category);
+  for (const c of data) {
+    const m = c.matches.find((x) => x.category === input.category);
     if (!m) continue;
-    if (input.providerId && p.providerId !== input.providerId) continue;
-    const a = acted(input.category);
+    if (input.providerId && c.providerId !== input.providerId) continue;
+    const a = c.acted(input.category);
     if (a && !input.includeActioned) continue;
     out.push({
-      patientId: p.id,
-      name: p.name,
-      dateOfBirth: p.dateOfBirth,
-      phoneNumber: p.phoneNumber,
-      clinicId: p.clinicId,
-      clinicName: p.clinicName,
-      providerName: p.providerName,
-      lastOfficeVisit: lastVisit,
-      nextVisit,
+      key: c.key,
+      patientId: c.patientId,
+      name: c.name,
+      dateOfBirth: c.dateOfBirth,
+      phoneNumber: c.phoneNumber,
+      clinicId: c.clinicId,
+      clinicName: c.clinicName,
+      providerName: c.providerName,
+      lastOfficeVisit: c.lastVisit,
+      nextVisit: c.nextVisit,
       reason: m.reason,
       score: m.score,
       lastAction: a?.action ?? null,
       lastActionAt: a?.createdAt ?? null,
     });
   }
-  return out.sort((a, b) => b.score - a.score);
+  out.sort((a, b) => b.score - a.score);
+  return { total: out.length, rows: out.slice(0, OPPORTUNITY_LIST_LIMIT) };
 }
 
 export async function actOnOpportunities(
   actor: WorkspaceActor,
-  input: { category: OpportunityCategory; patientIds: number[]; action: "reviewed" | "task_created" | "dismissed"; assigneeId?: number | null; taskTitle: string; taskCategory: TaskCategory },
+  input: { category: OpportunityCategory; keys: string[]; action: "reviewed" | "task_created" | "dismissed"; assigneeId?: number | null; taskTitle: string; taskCategory: TaskCategory },
 ) {
   const d = await db();
-  const rows = await d.select({ id: patients.id, name: patients.name, clinicId: patients.clinicId }).from(patients).where(inArray(patients.id, input.patientIds));
-  const visible = actor.clinicIds ? rows.filter((r) => r.clinicId && actor.clinicIds!.includes(r.clinicId)) : rows;
+  // Only people this user can see in the Opportunity Finder can be acted on.
+  const byKey = new Map((await loadOpportunityData(actor, null)).map((c) => [c.key, c]));
+  const targets = input.keys.map((k) => byKey.get(k)).filter((c): c is NonNullable<typeof c> => !!c);
   let tasks = 0;
-  for (const p of visible) {
+  const rows: (typeof opportunityActions.$inferInsert)[] = [];
+  for (const c of targets) {
     let taskId: number | null = null;
     if (input.action === "task_created") {
+      const reason = c.matches.find((m) => m.category === input.category)?.reason;
+      const details = c.patientId
+        ? ""
+        : ` Not on the CCM roster. DOB ${c.dateOfBirth ? c.dateOfBirth.toISOString().slice(0, 10) : "unknown"}${c.phoneNumber ? `, phone ${c.phoneNumber}` : ""}.`;
       const t = await createTask(actor, {
-        title: `${input.taskTitle} — ${p.name}`,
-        description: "Created from Opportunity Finder. No one has contacted the patient yet.",
-        patientId: p.id,
-        clinicId: p.clinicId,
+        title: `${input.taskTitle} — ${c.name}`,
+        description: `Created from Opportunity Finder${reason ? ` (${reason})` : ""}.${details} No one has contacted the patient yet.`,
+        patientId: c.patientId,
+        clinicId: c.clinicId,
         assignedUserId: input.assigneeId ?? null,
         assignedRole: input.assigneeId ? null : "staff",
         priority: "normal",
@@ -842,10 +1002,11 @@ export async function actOnOpportunities(
       taskId = t.id;
       tasks++;
     }
-    await d.insert(opportunityActions).values({ patientId: p.id, category: input.category, action: input.action, userId: actor.id, taskId });
+    rows.push({ patientId: c.patientId, subjectKey: c.key, category: input.category, action: input.action, userId: actor.id, taskId });
   }
-  await audit(actor, "opportunity_action", { entityType: "opportunity", description: `${input.category}: ${input.action} x${visible.length}` });
-  return { count: visible.length, tasks };
+  for (let i = 0; i < rows.length; i += 400) await d.insert(opportunityActions).values(rows.slice(i, i + 400));
+  await audit(actor, "opportunity_action", { entityType: "opportunity", description: `${input.category}: ${input.action} x${targets.length}` });
+  return { count: targets.length, tasks };
 }
 
 // ---------------------------------------------------------------------------
@@ -891,10 +1052,11 @@ export async function homeDashboard(actor: WorkspaceActor, input: { clinicId?: n
     };
   }
 
-  let opportunities: null | { uniquePatients: number; missed: number; overdue: number } = null;
+  let opportunities: null | { uniquePatients: number; missed: number; cancelled: number; newNoReturn: number; lapsed: number; overdue: number } = null;
   if (input.includeOpportunities) {
     const s = await opportunitySummary(actor, input.clinicId);
-    opportunities = { uniquePatients: s.uniquePatients, missed: s.counts.missed_appointment ?? 0, overdue: s.counts.overdue_follow_up ?? 0 };
+    const n = (k: OpportunityCategory) => s.counts[k] ?? 0;
+    opportunities = { uniquePatients: s.uniquePatients, missed: n("missed_appointment"), cancelled: n("cancelled_not_rebooked"), newNoReturn: n("new_patient_no_return"), lapsed: n("lapsed_follow_up"), overdue: n("overdue_follow_up") };
   }
 
   const tomorrowOpenings = await openings(actor, { clinicId: input.clinicId, days: 3 });

@@ -163,8 +163,11 @@ export function minutesBetween(start: Date, end: Date): number {
 // ---------------------------------------------------------------------------
 
 /** Offset (minutes) of CLINIC_TZ from UTC at the given instant, e.g. -300 for CDT. */
+// Built once: creating an Intl formatter is slow, and big schedule imports convert thousands of times.
+let clinicPartsFormatter: Intl.DateTimeFormat | null = null;
+
 function tzOffsetMinutes(at: Date): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
+  clinicPartsFormatter ??= new Intl.DateTimeFormat("en-US", {
     timeZone: CLINIC_TZ,
     hourCycle: "h23",
     year: "numeric",
@@ -173,7 +176,8 @@ function tzOffsetMinutes(at: Date): number {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-  }).formatToParts(at);
+  });
+  const parts = clinicPartsFormatter.formatToParts(at);
   const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
   const asUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
   return Math.round((asUtc - at.getTime()) / 60000);
@@ -241,7 +245,7 @@ const FIELD_ALIASES: Record<ScheduleField, string[]> = {
   lastName: ["patient last name", "last name", "last", "lastname"],
   dob: ["dob", "date of birth", "birth date", "patient dob", "birthdate", "patient date of birth"],
   phone: ["phone", "patient phone", "mobile", "cell", "home phone", "phone number", "primary phone", "mobile phone", "cell phone"],
-  provider: ["provider", "rendering provider", "doctor", "physician", "provider name", "scheduled provider", "resource", "practitioner"],
+  provider: ["provider", "rendering provider", "doctor", "physician", "provider name", "scheduled provider", "resource", "practitioner", "seen by", "scheduled with"],
   location: ["facility", "location", "service location", "clinic", "office", "site", "facility name"],
   visitType: ["appointment type", "type", "visit type", "appt type", "event type", "appointment reason type"],
   reason: ["reason", "chief complaint", "reason for visit", "notes", "comments", "description", "appointment notes"],
@@ -288,12 +292,22 @@ export function parseCsvRows(text: string): string[][] {
 export function detectScheduleMapping(rows: string[][]): { headerRow: number; headers: string[]; mapping: ScheduleMapping } {
   for (let r = 0; r < Math.min(rows.length, 10); r++) {
     const headers = rows[r]!.map((h) => h.trim());
-    const lower = headers.map((h) => h.toLowerCase().replace(/\s+/g, " "));
+    // "AppointmentTime" / "Seen_By" / "Mobile  Phone" → "appointment time" / "seen by" / "mobile phone"
+    const lower = headers.map((h) => h.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_\s]+/g, " ").toLowerCase().trim());
     const mapping: ScheduleMapping = {};
     (Object.keys(FIELD_ALIASES) as ScheduleField[]).forEach((f) => {
       const idx = lower.findIndex((h, i) => FIELD_ALIASES[f].includes(h) && !Object.values(mapping).includes(i));
       if (idx >= 0) mapping[f] = idx;
     });
+    // Practice Fusion's "AppointmentTime" holds the date too: treat a "time" column whose values
+    // carry a date as the combined date + time column.
+    if (mapping.date == null && mapping.datetime == null && mapping.time != null) {
+      const sample = rows.slice(r + 1, r + 6).map((x) => x[mapping.time!] ?? "").find((v) => v.trim());
+      if (sample && parseDateValue(sample)) {
+        mapping.datetime = mapping.time;
+        delete mapping.time;
+      }
+    }
     const hasWhen = mapping.datetime != null || mapping.date != null;
     const hasWho = mapping.patientName != null || mapping.lastName != null;
     if (hasWhen && hasWho) return { headerRow: r, headers, mapping };
@@ -345,7 +359,7 @@ export function mapScheduleStatus(raw: string | undefined): FlowStatus {
   if (/with provider|in progress|in session/.test(s)) return "with_provider";
   if (/room|exam/.test(s)) return "roomed";
   if (/checked?[\s-]?in/.test(s)) return "checked_in";
-  if (/arriv/.test(s)) return "arrived";
+  if (/arriv|lobby/.test(s)) return "arrived";
   return "scheduled";
 }
 
@@ -472,6 +486,9 @@ const toHHMM = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${
  * Gaps of at least one slot in each provider's day, between CLINIC_DAY_START and
  * CLINIC_DAY_END, ignoring cancelled / no-show visits (those slots are free).
  * Only days where the provider has at least one appointment are considered.
+ * Grouped per provider (not per clinic): a provider can't be in two places, and
+ * video visits have no clinic of their own. The opening takes the clinic of that
+ * provider's first visit of the day.
  */
 export function findOpenings(
   appts: { date: string; time: string; durationMin: number; clinicId: number | null; providerKey: string; providerName: string; status: string }[],
@@ -479,7 +496,7 @@ export function findOpenings(
   const groups = new Map<string, typeof appts>();
   for (const a of appts) {
     if (a.status === "cancelled" || a.status === "no_show") continue;
-    const k = `${a.date}|${a.clinicId}|${a.providerKey}`;
+    const k = `${a.date}|${a.providerKey}`;
     (groups.get(k) ?? groups.set(k, []).get(k)!).push(a);
   }
   const out: Opening[] = [];
@@ -507,9 +524,31 @@ export function findOpenings(
 // ---------------------------------------------------------------------------
 
 export const OPPORTUNITY_INFO = {
+  // Schedule-based: work for everyone on the imported Practice Fusion schedule.
+  missed_appointment: {
+    label: "Missed appointment",
+    description: "No-show in the last 60 days and nothing booked since.",
+    action: "Call to reschedule",
+  },
+  cancelled_not_rebooked: {
+    label: "Cancelled, not rebooked",
+    description: "Cancelled a visit in the last 45 days and has nothing booked since.",
+    action: "Call to rebook the visit",
+  },
+  new_patient_no_return: {
+    label: "New patient, no follow-up",
+    description: "Seen as a new patient 3 weeks to 6 months ago, never came back and has nothing booked.",
+    action: "Call to schedule a follow-up visit",
+  },
+  lapsed_follow_up: {
+    label: "No visit in 3+ months",
+    description: "Last seen 3 to 12 months ago with nothing booked since.",
+    action: "Call to schedule a follow-up visit",
+  },
+  // Roster-based: use the CCM roster's conditions and enrollment.
   overdue_follow_up: {
-    label: "Overdue follow-up",
-    description: "Chronic-condition patients with no office visit in 6+ months and nothing scheduled.",
+    label: "Chronic care overdue",
+    description: "CCM-roster patients with a chronic condition, no visit in 6+ months and nothing scheduled.",
     action: "Call to schedule a follow-up visit",
   },
   diabetes_follow_up: {
@@ -521,11 +560,6 @@ export const OPPORTUNITY_INFO = {
     label: "Hypertension follow-up",
     description: "Hypertension on the condition list, no visit in 4+ months, nothing scheduled.",
     action: "Offer a blood-pressure follow-up appointment",
-  },
-  missed_appointment: {
-    label: "Missed appointment",
-    description: "No-show in the last 60 days with no new appointment booked.",
-    action: "Call to reschedule",
   },
   ccm_eligible: {
     label: "CCM re-engagement",
@@ -556,7 +590,6 @@ export interface OpportunityPatient {
   rpmEnrolled: boolean | null;
   lastOfficeVisit: Date | null;
   nextVisit: Date | null;
-  lastNoShow: Date | null;
 }
 
 export interface OpportunityMatch {
@@ -578,7 +611,7 @@ function sinceText(days: number | null) {
   return `last visit ${Math.round(days / 30)} months ago`;
 }
 
-/** Transparent rules — suggestions for staff review, never automatic actions. */
+/** Transparent rules on the CCM roster — suggestions for staff review, never automatic actions. */
 export function evaluateOpportunities(p: OpportunityPatient, now: Date = new Date()): OpportunityMatch[] {
   const out: OpportunityMatch[] = [];
   const since = p.lastOfficeVisit ? Math.floor((now.getTime() - p.lastOfficeVisit.getTime()) / DAY) : null;
@@ -595,12 +628,6 @@ export function evaluateOpportunities(p: OpportunityPatient, now: Date = new Dat
   if (has(chronic, HYPERTENSION) && unscheduled && (since == null || since > 120)) {
     out.push({ category: "hypertension_follow_up", reason: `Hypertension on file; ${sinceText(since)}`, score: 55 });
   }
-  // A later visit means they already came back in.
-  const seenSince = !!(p.lastNoShow && p.lastOfficeVisit && p.lastOfficeVisit.getTime() > p.lastNoShow.getTime());
-  if (p.lastNoShow && unscheduled && !seenSince) {
-    const d = Math.floor((now.getTime() - p.lastNoShow.getTime()) / DAY);
-    if (d <= 60) out.push({ category: "missed_appointment", reason: `No-show ${d === 0 ? "today" : `${d} days ago`}; not rescheduled`, score: 70 - d / 2 });
-  }
   if (chronic.length >= 2 && p.ccmEnrollmentStatus !== "active" && p.ccmEnrollmentStatus !== "declined") {
     out.push({ category: "ccm_eligible", reason: `${chronic.length} chronic conditions; CCM ${p.ccmEnrollmentStatus ?? "not enrolled"}`, score: 40 + chronic.length * 3 });
   }
@@ -615,6 +642,66 @@ export function evaluateOpportunities(p: OpportunityPatient, now: Date = new Dat
     } else if (p.ccmEnrollmentStatus === "active" && (has(chronic, HYPERTENSION) || has(chronic, DIABETES) || has(chronic, HEART_FAILURE))) {
       out.push({ category: "rpm_eligible", reason: "Active in CCM with a condition suited to home monitoring", score: 35 });
     }
+  }
+  return out;
+}
+
+/** One appointment in a patient's imported schedule history. */
+export interface ScheduleVisit {
+  startsAt: Date;
+  status: string;
+  visitType: string | null;
+}
+
+/** Statuses that mean the patient actually came in (or is in clinic now). */
+export const SEEN_STATUSES = ["arrived", "checked_in", "roomed", "with_provider", "checkout", "completed"];
+
+const daysBetween = (a: Date, b: Date) => Math.floor((b.getTime() - a.getTime()) / DAY);
+const agoText = (d: number) => (d <= 0 ? "today" : d === 1 ? "yesterday" : `${d} days ago`);
+const latest = (vs: ScheduleVisit[]) => vs.reduce<ScheduleVisit | null>((m, v) => (!m || v.startsAt > m.startsAt ? v : m), null);
+
+/**
+ * Schedule-based rules, run on one person's appointment history (CCM roster or not).
+ * "Rebooked" means any later appointment that wasn't cancelled or a no-show.
+ */
+export function evaluateScheduleOpportunities(visits: ScheduleVisit[], now: Date = new Date()): OpportunityMatch[] {
+  const out: OpportunityMatch[] = [];
+  const kept = (v: ScheduleVisit) => v.status !== "cancelled" && v.status !== "no_show";
+  const bookedAfter = (t: Date) => visits.some((v) => v.startsAt > t && kept(v));
+  const upcoming = visits.some((v) => v.startsAt > now && kept(v));
+  const seen = visits.filter((v) => v.startsAt <= now && SEEN_STATUSES.includes(v.status));
+  const lastSeen = latest(seen);
+
+  const noShow = latest(visits.filter((v) => v.status === "no_show" && v.startsAt <= now));
+  let missed = false;
+  if (noShow && !bookedAfter(noShow.startsAt)) {
+    const d = daysBetween(noShow.startsAt, now);
+    if (d <= 60) {
+      missed = true;
+      out.push({ category: "missed_appointment", reason: `No-show ${agoText(d)}; nothing booked since`, score: 75 - d / 2 });
+    }
+  }
+
+  const cancelled = latest(visits.filter((v) => v.status === "cancelled" && v.startsAt <= now));
+  if (!missed && cancelled && !bookedAfter(cancelled.startsAt)) {
+    const d = daysBetween(cancelled.startsAt, now);
+    if (d <= 45) out.push({ category: "cancelled_not_rebooked", reason: `Cancelled visit ${agoText(d)}; nothing booked since`, score: 60 - d / 2 });
+  }
+
+  let newNoReturn = false;
+  const firstNew = seen.filter((v) => /new/i.test(v.visitType ?? "")).sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime())[0];
+  if (firstNew && !upcoming && !seen.some((v) => v.startsAt > firstNew.startsAt)) {
+    const d = daysBetween(firstNew.startsAt, now);
+    if (d >= 21 && d <= 180) {
+      newNoReturn = true;
+      out.push({ category: "new_patient_no_return", reason: `New patient seen ${d} days ago; no follow-up since`, score: 65 - d / 6 });
+    }
+  }
+
+  // The catch-all: only when no more specific schedule reason applies.
+  if (!out.length && lastSeen && !bookedAfter(lastSeen.startsAt)) {
+    const d = daysBetween(lastSeen.startsAt, now);
+    if (d >= 90 && d <= 365) out.push({ category: "lapsed_follow_up", reason: `Last seen ${Math.round(d / 30)} months ago; nothing booked`, score: 50 + Math.min(30, (d - 90) / 7) });
   }
   return out;
 }
