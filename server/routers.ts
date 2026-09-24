@@ -77,6 +77,7 @@ import {
 } from "../drizzle/schema";
 import { ccmNotesRouter } from "./routers/ccmNotes";
 import { workforceRouter } from "./routers/workforce";
+import { workspaceRouter } from "./routers/workspace";
 import { seedDatabase, isSeeded, currentMonth } from "./seed";
 import { ensureMonthlyTask, ensureMonthlyTasksForPatient, deletePatient, getUpcomingAppointments } from "./db";
 import {
@@ -89,7 +90,7 @@ import {
 } from "./db";
 import { getApcmOverview, applyStandardApcmCarePlan } from "./db";
 import { parsePatientCsv, findInBatchDuplicates, matchProviderId, matchWorklistStatus } from "../shared/csvImport";
-import { clinics, providers } from "../drizzle/schema";
+import { clinics, providers, appointments, workTasks } from "../drizzle/schema";
 
 // ---- Role guards ----
 function requireRole(ctx: any, roles: string[]) {
@@ -181,6 +182,7 @@ export const appRouter = router({
   system: systemRouter,
   ccmNotesAI: ccmNotesRouter,
   workforce: workforceRouter,
+  workspace: workspaceRouter,
 
   auth: router({
     me: publicProcedure.query((opts) => sanitizeUser(opts.ctx.user)),
@@ -1393,6 +1395,11 @@ export const appRouter = router({
       if (assignedPatients.length || assignedProviders.length) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "This clinic is assigned to patients or providers. Reassign them before removing it." });
       }
+      const [hasAppt] = await db.select({ id: appointments.id }).from(appointments).where(eq(appointments.clinicId, input)).limit(1);
+      const [hasTask] = await db.select({ id: workTasks.id }).from(workTasks).where(eq(workTasks.clinicId, input)).limit(1);
+      if (hasAppt || hasTask) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This clinic has appointments or tasks in the Workspace, so it can't be removed." });
+      }
       await db.delete(clinics).where(eq(clinics.id, input));
       return { success: true };
     }),
@@ -1441,6 +1448,8 @@ export const appRouter = router({
       if (assignedPatients.length) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "This provider is assigned to patients. Reassign them before removing it." });
       }
+      // Imported appointments keep the provider's name as text.
+      await db.update(appointments).set({ providerId: null }).where(eq(appointments.providerId, input));
       await db.delete(providers).where(eq(providers.id, input));
       return { success: true };
     }),

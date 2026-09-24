@@ -6,29 +6,54 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ----------------------------------------------------------------------------
-   Tailwind v4 theme — Scandinavian minimalist palette
-   Pale cool gray bg, bold black sans typography, soft pastel blue & blush pink
+   Tailwind v4 theme — MyPCP Workspace palette
+   Calm near-white canvas, charcoal ink, one warm accent (brand) used sparingly,
+   tone colors reserved for status meaning.
 ---------------------------------------------------------------------------- */
 @theme {
-  --color-background: hsl(0 0% 100%);
-  --color-foreground: hsl(220 13% 15%);
-  --color-card: hsl(0 0% 100%);
-  --color-card-foreground: hsl(220 13% 15%);
-  --color-popover: hsl(0 0% 100%);
-  --color-popover-foreground: hsl(220 13% 15%);
-  --color-primary: hsl(17 66% 52%);
-  --color-primary-foreground: hsl(0 0% 100%);
-  --color-secondary: hsl(340 100% 71%);
-  --color-secondary-foreground: hsl(220 13% 15%);
-  --color-muted: hsl(33 30% 90%);
-  --color-muted-foreground: hsl(25 25% 42%);
-  --color-accent: hsl(17 66% 52%);
-  --color-accent-foreground: hsl(0 0% 100%);
-  --color-destructive: hsl(0 84% 60%);
-  --color-destructive-foreground: hsl(0 0% 100%);
-  --color-border: hsl(33 32% 88%);
-  --color-input: hsl(33 32% 88%);
-  --color-ring: hsl(17 66% 52%);
+  --color-background: oklch(0.985 0.002 75);
+  --color-foreground: oklch(0.2 0.006 265);
+  --color-card: oklch(1 0 0);
+  --color-card-foreground: oklch(0.2 0.006 265);
+  --color-popover: oklch(1 0 0);
+  --color-popover-foreground: oklch(0.2 0.006 265);
+  --color-primary: oklch(0.24 0.008 265);
+  --color-primary-foreground: oklch(0.985 0 0);
+  --color-secondary: oklch(0.96 0.003 75);
+  --color-secondary-foreground: oklch(0.24 0.008 265);
+  --color-muted: oklch(0.962 0.003 75);
+  --color-muted-foreground: oklch(0.5 0.01 265);
+  --color-accent: oklch(0.955 0.004 75);
+  --color-accent-foreground: oklch(0.24 0.008 265);
+  --color-destructive: oklch(0.577 0.215 27);
+  --color-destructive-foreground: oklch(0.985 0 0);
+  --color-border: oklch(0.915 0.004 75);
+  --color-input: oklch(0.9 0.004 75);
+  --color-ring: oklch(0.66 0.14 45);
+
+  /* Workspace tokens */
+  --color-canvas: oklch(0.985 0.002 75);
+  --color-ink: oklch(0.24 0.008 265);
+  --color-brand: oklch(0.62 0.155 45);
+  --color-brand-soft: oklch(0.96 0.03 60);
+  --color-tone-info: oklch(0.5 0.13 245);
+  --color-tone-info-soft: oklch(0.96 0.025 245);
+  --color-tone-success: oklch(0.5 0.12 160);
+  --color-tone-success-soft: oklch(0.96 0.03 160);
+  --color-tone-warning: oklch(0.55 0.13 65);
+  --color-tone-warning-soft: oklch(0.965 0.045 85);
+  --color-tone-danger: oklch(0.55 0.19 25);
+  --color-tone-danger-soft: oklch(0.965 0.025 25);
+  --color-tone-violet: oklch(0.5 0.16 295);
+  --color-tone-violet-soft: oklch(0.965 0.025 295);
+
+  /* Light end of the gray ramp → warm-neutral (surfaces, hairlines, muted text).
+     The dark end keeps Tailwind's slate so dark mode is unchanged. */
+  --color-slate-50: oklch(0.985 0.002 75);
+  --color-slate-100: oklch(0.962 0.003 75);
+  --color-slate-200: oklch(0.93 0.004 75);
+  --color-slate-300: oklch(0.87 0.005 75);
+  --color-slate-400: oklch(0.64 0.009 265);
 
   --color-blue-accent: hsl(22 80% 88%);
   --color-pink-accent: hsl(345 80% 92%);
@@ -44,25 +69,25 @@
 
 /* shadcn/ui compatibility — keep semantic CSS variables resolvable */
 :root {
-  --background: 0 0% 100%;
-  --foreground: 220 13% 15%;
+  --background: 30 20% 98%;
+  --foreground: 225 9% 9%;
   --card: 0 0% 100%;
-  --card-foreground: 220 13% 15%;
+  --card-foreground: 225 9% 9%;
   --popover: 0 0% 100%;
-  --popover-foreground: 220 13% 15%;
-  --primary: 17 66% 52%;
+  --popover-foreground: 225 9% 9%;
+  --primary: 220 9% 13%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 340 100% 71%;
-  --secondary-foreground: 220 13% 15%;
-  --muted: 33 30% 90%;
-  --muted-foreground: 25 25% 38%;
-  --accent: 17 66% 52%;
-  --accent-foreground: 0 0% 100%;
-  --destructive: 0 84% 60%;
+  --secondary: 20 11% 95%;
+  --secondary-foreground: 220 9% 13%;
+  --muted: 30 15% 95%;
+  --muted-foreground: 220 4% 39%;
+  --accent: 36 16% 94%;
+  --accent-foreground: 220 9% 13%;
+  --destructive: 358 62% 49%;
   --destructive-foreground: 0 0% 100%;
-  --border: 33 32% 88%;
-  --input: 33 32% 88%;
-  --ring: 17 66% 52%;
+  --border: 30 7% 89%;
+  --input: 45 6% 87%;
+  --ring: 19 65% 55%;
   --radius: 0.5rem;
 }
 
@@ -77,8 +102,8 @@
   }
 
   body {
-    background-color: #faf6f0; /* warm cream */
-    color: #3c2a1c; /* warm ink */
+    background-color: #fbfaf9; /* near-white canvas */
+    color: #151619; /* charcoal ink */
     font-family: var(--font-sans);
     font-weight: 400;
     font-size: 15px;
@@ -110,7 +135,7 @@
   }
   input::placeholder,
   textarea::placeholder {
-    color: #a98b70;
+    color: #898c92;
     opacity: 1;
   }
   /* Native select dropdown options should be solid and readable */
@@ -120,9 +145,9 @@
   }
 
   ::-webkit-scrollbar { width: 0.5rem; height: 0.5rem; }
-  ::-webkit-scrollbar-track { background-color: #faf6f0; }
-  ::-webkit-scrollbar-thumb { background-color: #dbc7ab; border-radius: 9999px; }
-  ::-webkit-scrollbar-thumb:hover { background-color: #c9ae8b; }
+  ::-webkit-scrollbar-track { background-color: #fbfaf9; }
+  ::-webkit-scrollbar-thumb { background-color: #d6d4d1; border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover { background-color: #bcbec2; }
 }
 
 /* Customized utility defaults preserved from template */
@@ -165,64 +190,36 @@
 }
 
 /* ----------------------------------------------------------------------------
-   Warm-care polish + accent selection
+   Accent selection
 ---------------------------------------------------------------------------- */
-::selection { background-color: hsl(17 66% 52% / 0.18); }
+::selection { background-color: hsl(19 65% 55% / 0.18); }
 
 /* ----------------------------------------------------------------------------
-   WARM CARE SKIN (light theme)
-   Same remap technique as the dark theme below: the app's components use
-   slate/white utilities, so we retint the *light-intent* surface/text/border
-   classes to a warm cream/brown palette here instead of editing every page.
-   Coral replaces the dark-ink primary buttons. The `.dark` block later
-   overrides these (higher specificity), so dark mode is unaffected.
+   NEUTRAL WORKSPACE SKIN (light theme)
+   Pages use slate/white utilities. The light end of the slate ramp is redefined
+   in @theme above; here the dark-ink text ramp and "ink" buttons get the
+   Workspace charcoal. The `.dark` block later overrides these (higher
+   specificity), so dark mode is unaffected.
 ---------------------------------------------------------------------------- */
-.bg-slate-50 { background-color: #faf6f0; }
-.bg-slate-50\/50 { background-color: rgba(246, 240, 231, 0.5); }
-.bg-slate-50\/60 { background-color: rgba(246, 240, 231, 0.6); }
-.bg-slate-50\/70 { background-color: rgba(246, 240, 231, 0.7); }
-.bg-slate-100 { background-color: #f4ebdf; }
-.bg-slate-200 { background-color: #eadcc9; }
-.bg-slate-300 { background-color: #dbc7ab; }
-.hover\:bg-slate-50:hover { background-color: #faf6f0; }
-.hover\:bg-slate-50\/40:hover { background-color: rgba(246, 240, 231, 0.4); }
-.hover\:bg-slate-50\/60:hover { background-color: rgba(246, 240, 231, 0.6); }
-.hover\:bg-slate-50\/70:hover { background-color: rgba(246, 240, 231, 0.7); }
-.hover\:bg-slate-100:hover { background-color: #f4ebdf; }
-.hover\:bg-slate-200:hover { background-color: #eadcc9; }
+/* Ink actions → charcoal (they stay coral in dark mode, see .dark below) */
+.bg-slate-900 { background-color: #1d1f23; }
+.hover\:bg-slate-800:hover { background-color: #2c2e32; }
+.hover\:bg-slate-700:hover { background-color: #3b3d42; }
+.accent-slate-900 { accent-color: #1d1f23; }
 
-/* Ink actions → coral */
-.bg-slate-900 { background-color: #d85a30; }
-.hover\:bg-slate-800:hover { background-color: #bc4a24; }
-.hover\:bg-slate-700:hover { background-color: #a84120; }
-.accent-slate-900 { accent-color: #d85a30; }
-
-/* Warm text ramp */
-.text-slate-900 { color: #2e1d10; }
-.text-slate-800 { color: #422a18; }
-.text-slate-700 { color: #573823; }
-.text-slate-600 { color: #6e4a32; }
-.text-slate-500 { color: #8a6248; }
-.text-slate-400 { color: #a98b70; }
-.text-slate-300 { color: #c9b49b; }
-.text-slate-50 { color: #fdf9f3; }
-.hover\:text-slate-900:hover { color: #2e1d10; }
-.hover\:text-slate-800:hover { color: #422a18; }
-.hover\:text-slate-700:hover { color: #573823; }
-.hover\:text-slate-600:hover { color: #6e4a32; }
-.group:hover .group-hover\:text-slate-500 { color: #8a6248; }
-
-/* Warm hairlines */
-.border-slate-50 { border-color: #f6efe4; }
-.border-slate-100 { border-color: #f0e6d6; }
-.border-slate-200 { border-color: #e5d5be; }
-.border-slate-200\/70 { border-color: rgba(229, 213, 190, 0.7); }
-.border-slate-300 { border-color: #d6bf9e; }
-.border-slate-900 { border-color: #422a18; }
-.hover\:border-slate-200:hover { border-color: #e5d5be; }
-.hover\:border-slate-300:hover { border-color: #d6bf9e; }
-.divide-slate-50 > :not([hidden]) ~ :not([hidden]) { border-color: #f6efe4; }
-.placeholder\:text-slate-400::placeholder { color: #a98b70; }
+/* Charcoal text ramp */
+.text-slate-900 { color: #151619; }
+.text-slate-800 { color: #24262a; }
+.text-slate-700 { color: #3b3d42; }
+.text-slate-600 { color: #52555b; }
+.text-slate-500 { color: #66696f; }
+.text-slate-50 { color: #fbfaf9; }
+.hover\:text-slate-900:hover { color: #151619; }
+.hover\:text-slate-800:hover { color: #24262a; }
+.hover\:text-slate-700:hover { color: #3b3d42; }
+.hover\:text-slate-600:hover { color: #52555b; }
+.group:hover .group-hover\:text-slate-500 { color: #66696f; }
+.border-slate-900 { border-color: #24262a; }
 
 /* ----------------------------------------------------------------------------
    DARK PRO THEME
@@ -278,6 +275,10 @@
 
 /* Base document */
 .dark body { background-color: #0f172a; color: #e2e8f0; }
+/* Ink buttons stay coral in dark mode (charcoal would disappear on dark panels). */
+.dark .bg-slate-900 { background-color: #d85a30; }
+.dark .hover\:bg-slate-800:hover { background-color: #bc4a24; }
+.dark .hover\:bg-slate-700:hover { background-color: #a84120; }
 .dark ::selection { background-color: hsl(17 66% 52% / 0.30); }
 
 /* Light surfaces → dark panels (cards, sidebar, header, theads) */

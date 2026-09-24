@@ -230,10 +230,10 @@ export default function WorklistPage() {
                       <div className="flex items-center justify-end gap-2">
                         <button onClick={() => logNoAnswer.mutate({ id: r.task.id })} disabled={logNoAnswer.isPending}
                           title="Log a no-answer attempt (+1)"
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-amber-200 text-amber-700 text-xs font-semibold hover:bg-amber-50 active:scale-[0.97] disabled:opacity-50 transition">
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-amber-200 text-amber-700 text-xs font-semibold whitespace-nowrap hover:bg-amber-50 active:scale-[0.97] disabled:opacity-50 transition">
                           <PhoneOff size={13} /> No answer
                         </button>
-                        <button onClick={() => setLocation(`/workflow/${r.task.id}`)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[hsl(17_66%_52%)] text-white text-xs font-semibold hover:brightness-95">
+                        <button onClick={() => setLocation(`/workflow/${r.task.id}`)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-semibold whitespace-nowrap hover:bg-slate-800">
                           {worklistStatusValue(r.task.status) === "completed" ? <CheckCircle2 size={13} /> : <Phone size={13} />}
                           {worklistStatusValue(r.task.status) === "completed" ? "Review" : "Start Call"}
                         </button>

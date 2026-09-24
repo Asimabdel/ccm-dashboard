@@ -376,7 +376,7 @@ export type InsertBillingRecord = typeof billingRecords.$inferInsert;
 export const notifications = mysqlTable("notifications", {
   id: int("id").autoincrement().primaryKey(),
   userId: int("userId").references(() => users.id).notNull(),
-  type: mysqlEnum("type", ["urgent_symptom", "escalation", "missing_documentation", "not_reached", "billing_ready", "refill_request", "refill_decision", "workforce"]).notNull(),
+  type: mysqlEnum("type", ["urgent_symptom", "escalation", "missing_documentation", "not_reached", "billing_ready", "refill_request", "refill_decision", "workforce", "task"]).notNull(),
   title: varchar("title", { length: 255 }).notNull(),
   content: text("content"),
   relatedPatientId: int("relatedPatientId").references(() => patients.id),
@@ -436,6 +436,14 @@ export const auditLogs = mysqlTable("auditLogs", {
     "change_password",
     "reset_password",
     "manage_access",
+    // Workspace (clinic operations) — appended; see server/workspaceMigration.ts
+    "create_task",
+    "update_task",
+    "view_schedule",
+    "import_schedule",
+    "update_appointment",
+    "opportunity_action",
+    "manage_playbook",
   ]).notNull(),
   entityType: varchar("entityType", { length: 50 }),
   entityId: int("entityId"),
@@ -690,3 +698,171 @@ export const performanceNotes = mysqlTable("performanceNotes", {
 }));
 
 export type PerformanceNote = typeof performanceNotes.$inferSelect;
+
+// =============================================================================
+// WORKSPACE — clinic operations (tasks, appointments / patient flow,
+// opportunity actions, playbooks). Purely additive: created by
+// server/workspaceMigration.ts. Appointments deliberately do NOT create patient
+// rows (the patients table is the CCM roster — a new row would join the CCM
+// worklist); they carry the schedule's own name/DOB/phone and link to an
+// existing patient when name + DOB match.
+// =============================================================================
+
+export const WORK_TASK_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
+export const WORK_TASK_STATUSES = ["open", "in_progress", "waiting", "completed", "cancelled"] as const;
+export const WORK_TASK_CATEGORIES = [
+  "patient_call", "referral", "prior_auth", "lab_followup", "form", "medication_request",
+  "care_management", "rpm", "front_desk", "provider_request", "administrative", "other",
+] as const;
+
+/** A general work item for any role (not the monthly CCM worklist). */
+export const workTasks = mysqlTable("workTasks", {
+  id: int("id").autoincrement().primaryKey(),
+  title: varchar("title", { length: 255 }).notNull(),
+  description: text("description"),
+  patientId: int("patientId").references(() => patients.id),
+  clinicId: int("clinicId").references(() => clinics.id),
+  assignedUserId: int("assignedUserId").references(() => users.id),
+  /** Role queue (e.g. "front_desk") when not assigned to a person. */
+  assignedRole: varchar("assignedRole", { length: 40 }),
+  priority: mysqlEnum("priority", WORK_TASK_PRIORITIES).default("normal").notNull(),
+  status: mysqlEnum("status", WORK_TASK_STATUSES).default("open").notNull(),
+  category: mysqlEnum("category", WORK_TASK_CATEGORIES).default("other").notNull(),
+  /** Clinic-local calendar date "YYYY-MM-DD". */
+  dueDate: varchar("dueDate", { length: 10 }),
+  createdByUserId: int("createdByUserId").references(() => users.id).notNull(),
+  completedAt: datetime("completedAt"),
+  /** Where the task came from: "opportunity", "appointment", "manual"... */
+  sourceType: varchar("sourceType", { length: 40 }),
+  sourceRef: varchar("sourceRef", { length: 64 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  assigneeStatusIdx: index("workTasks_assignee_status_idx").on(t.assignedUserId, t.status),
+  statusDueIdx: index("workTasks_status_due_idx").on(t.status, t.dueDate),
+  patientIdx: index("workTasks_patient_idx").on(t.patientId),
+}));
+
+export type WorkTask = typeof workTasks.$inferSelect;
+
+export const workTaskActivities = mysqlTable("workTaskActivities", {
+  id: int("id").autoincrement().primaryKey(),
+  taskId: int("taskId").references(() => workTasks.id).notNull(),
+  userId: int("userId").references(() => users.id).notNull(),
+  type: mysqlEnum("type", ["created", "status_changed", "assigned", "due_date_changed", "priority_changed", "comment"]).notNull(),
+  body: text("body"),
+  meta: json("meta").$type<Record<string, string | null>>(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  taskIdx: index("workTaskActivities_task_idx").on(t.taskId),
+}));
+
+export type WorkTaskActivity = typeof workTaskActivities.$inferSelect;
+
+export const APPOINTMENT_STATUSES = [
+  "scheduled", "arrived", "checked_in", "roomed", "with_provider", "checkout", "completed", "no_show", "cancelled",
+] as const;
+
+/** One scheduled visit, imported from the Practice Fusion schedule export. */
+export const appointments = mysqlTable("appointments", {
+  id: int("id").autoincrement().primaryKey(),
+  clinicId: int("clinicId").references(() => clinics.id),
+  /** Linked when the schedule's name + DOB match an existing patient. */
+  patientId: int("patientId").references(() => patients.id),
+  patientName: varchar("patientName", { length: 255 }).notNull(),
+  dateOfBirth: datetime("dateOfBirth"),
+  phoneNumber: varchar("phoneNumber", { length: 30 }),
+  providerId: int("providerId").references(() => providers.id),
+  providerName: varchar("providerName", { length: 255 }),
+  /** Clinic-local calendar date "YYYY-MM-DD" (fast per-day lookups). */
+  date: varchar("date", { length: 10 }).notNull(),
+  startsAt: datetime("startsAt").notNull(),
+  durationMin: int("durationMin").default(20).notNull(),
+  visitType: varchar("visitType", { length: 120 }),
+  reason: varchar("reason", { length: 255 }),
+  status: mysqlEnum("status", APPOINTMENT_STATUSES).default("scheduled").notNull(),
+  room: varchar("room", { length: 40 }),
+  arrivedAt: datetime("arrivedAt"),
+  checkedInAt: datetime("checkedInAt"),
+  roomedAt: datetime("roomedAt"),
+  withProviderAt: datetime("withProviderAt"),
+  checkoutAt: datetime("checkoutAt"),
+  completedAt: datetime("completedAt"),
+  /** Stable key from clinic + start + patient + provider: re-imports update, never duplicate. */
+  externalKey: varchar("externalKey", { length: 64 }).notNull().unique(),
+  importId: int("importId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  clinicDateIdx: index("appointments_clinic_date_idx").on(t.clinicId, t.date),
+  patientIdx: index("appointments_patient_idx").on(t.patientId),
+  dateStatusIdx: index("appointments_date_status_idx").on(t.date, t.status),
+}));
+
+export type Appointment = typeof appointments.$inferSelect;
+
+export const appointmentStatusEvents = mysqlTable("appointmentStatusEvents", {
+  id: int("id").autoincrement().primaryKey(),
+  appointmentId: int("appointmentId").references(() => appointments.id).notNull(),
+  fromStatus: varchar("fromStatus", { length: 20 }).notNull(),
+  toStatus: varchar("toStatus", { length: 20 }).notNull(),
+  changedByUserId: int("changedByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  apptIdx: index("appointmentStatusEvents_appt_idx").on(t.appointmentId),
+}));
+
+/** One schedule upload (who, when, what it contained). */
+export const scheduleImports = mysqlTable("scheduleImports", {
+  id: int("id").autoincrement().primaryKey(),
+  fileName: varchar("fileName", { length: 255 }),
+  importedByUserId: int("importedByUserId").references(() => users.id).notNull(),
+  firstDate: varchar("firstDate", { length: 10 }),
+  lastDate: varchar("lastDate", { length: 10 }),
+  rowCount: int("rowCount").default(0).notNull(),
+  createdCount: int("createdCount").default(0).notNull(),
+  updatedCount: int("updatedCount").default(0).notNull(),
+  linkedCount: int("linkedCount").default(0).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+/** A human action on an Opportunity Finder suggestion (the rules run live). */
+export const opportunityActions = mysqlTable("opportunityActions", {
+  id: int("id").autoincrement().primaryKey(),
+  patientId: int("patientId").references(() => patients.id).notNull(),
+  category: varchar("category", { length: 40 }).notNull(),
+  action: mysqlEnum("action", ["reviewed", "task_created", "dismissed"]).notNull(),
+  userId: int("userId").references(() => users.id).notNull(),
+  taskId: int("taskId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  patientCategoryIdx: index("opportunityActions_patient_cat_idx").on(t.patientId, t.category),
+}));
+
+/** Practice knowledge base (SOPs / workflows). */
+export const playbooks = mysqlTable("playbooks", {
+  id: int("id").autoincrement().primaryKey(),
+  slug: varchar("slug", { length: 120 }).notNull().unique(),
+  title: varchar("title", { length: 255 }).notNull(),
+  category: varchar("category", { length: 80 }).notNull(),
+  description: text("description"),
+  ownerUserId: int("ownerUserId").references(() => users.id),
+  currentVersion: int("currentVersion").default(1).notNull(),
+  archived: boolean("archived").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Playbook = typeof playbooks.$inferSelect;
+
+export const playbookVersions = mysqlTable("playbookVersions", {
+  id: int("id").autoincrement().primaryKey(),
+  playbookId: int("playbookId").references(() => playbooks.id).notNull(),
+  version: int("version").notNull(),
+  steps: json("steps").$type<{ title: string; detail: string }[]>().notNull(),
+  changeNote: varchar("changeNote", { length: 255 }),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  playbookIdx: index("playbookVersions_playbook_idx").on(t.playbookId),
+}));

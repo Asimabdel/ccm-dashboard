@@ -5,16 +5,7 @@ import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { ArrowRight, Activity, ClipboardList, ShieldCheck, Mail, Lock, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-
-const ROLE_HOME: Record<string, string> = {
-  admin: "/admin",
-  staff: "/worklist",
-  provider: "/refill-requests",
-  billing: "/billing",
-  front_desk: "/follow-ups",
-  medical_assistant: "/my-day",
-  user: "/admin",
-};
+import { ROLE_HOME } from "@/lib/nav";
 
 export default function Home() {
   const { user, loading, isAuthenticated, refresh } = useAuth();
@@ -30,7 +21,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!loading && isAuthenticated && user) {
-      setLocation(ROLE_HOME[user.role] ?? "/admin");
+      setLocation(ROLE_HOME[user.role] ?? "/home");
     }
   }, [loading, isAuthenticated, user, setLocation]);
 
@@ -42,7 +33,7 @@ export default function Home() {
       if (res.mustChangePassword) {
         setLocation("/change-password?forced=1");
       } else {
-        setLocation(ROLE_HOME[role] ?? "/admin");
+        setLocation(ROLE_HOME[role] ?? "/home");
       }
     },
     onError: (err) => {
@@ -71,21 +62,21 @@ export default function Home() {
         <div>
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/70 border border-slate-200/70 backdrop-blur-sm mb-6 animate-fade-in-up">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <p className="text-xs font-medium tracking-[0.2em] uppercase text-slate-500">Chronic Care Management</p>
+            <p className="text-xs font-medium tracking-[0.2em] uppercase text-slate-500">MyPCP Workspace</p>
           </div>
           <h1 className="text-5xl md:text-6xl font-extrabold tracking-tight text-slate-900 leading-[1.05] max-w-2xl">
-            The operations hub for your CCM program.
+            One place to run the clinic day.
           </h1>
           <p className="mt-6 text-lg font-light text-slate-600 max-w-xl leading-relaxed">
-            Streamline patient outreach, documentation, staff coordination, billing
-            readiness, and provider communication - all in one calm, focused workspace.
+            Patient flow, team tasks, care management and outreach for every MyPCP
+            clinic, working alongside Practice Fusion.
           </p>
 
           <div className="mt-10 hidden lg:grid sm:grid-cols-3 gap-5">
             {[
-              { icon: ClipboardList, title: "Monthly Worklist", desc: "Auto-generated tasks with exact status and priority labels." },
-              { icon: Activity, title: "Guided Call Workflow", desc: "Structured script, care documentation, and AI-drafted CCM notes." },
-              { icon: ShieldCheck, title: "Role-based Access", desc: "Each role sees only its dashboard." },
+              { icon: ClipboardList, title: "My Work", desc: "Every task for you and your team, with due dates and owners." },
+              { icon: Activity, title: "Patient Flow", desc: "See who is waiting, roomed or with the provider, live." },
+              { icon: ShieldCheck, title: "Role-based Access", desc: "Each role sees only what their job needs." },
             ].map((f, i) => (
               <div
                 key={f.title}

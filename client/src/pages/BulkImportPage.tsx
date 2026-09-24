@@ -148,7 +148,7 @@ export default function BulkImportPage() {
               <button
                 disabled={commit.isPending || validCount === 0}
                 onClick={() => commit.mutate({ csv, defaultClinicId: defaultClinicId || undefined, defaultProviderId: defaultProviderId || undefined, defaultStaffId: defaultStaffId || undefined, skipExistingDuplicates: skipExisting, defaultEnrollBHI: enrollBHI || undefined })}
-                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[hsl(17_68%_47%)] text-white text-sm font-semibold hover:brightness-95 disabled:opacity-50 active:scale-[0.98] transition-transform">
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 disabled:opacity-50 active:scale-[0.98] transition-transform">
                 {commit.isPending ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
                 Import {validCount} valid {validCount === 1 ? "patient" : "patients"}
               </button>

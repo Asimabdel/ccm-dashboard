@@ -55,7 +55,8 @@ export function CommandPalette() {
 
   const patientsQ = trpc.patients.list.useQuery(
     { search: debounced },
-    { enabled: open && debounced.length >= 2 }
+    // MAs have no access to the CCM roster search (the server fences it too).
+    { enabled: open && debounced.length >= 2 && user?.role !== "medical_assistant" }
   );
   const patients = patientsQ.data || [];
 

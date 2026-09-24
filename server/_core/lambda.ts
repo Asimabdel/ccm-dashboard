@@ -38,5 +38,13 @@ export const handler = async (event: any, context: any) => {
     const { runWorkforceMigration } = await import("../workforceMigration");
     return { migrated: "workforce", applied: await runWorkforceMigration() };
   }
+  if (event && event.__migrate === "workspace-check" && !event.requestContext && !event.version) {
+    const { inspectWorkspace } = await import("../workspaceMigration");
+    return { check: "workspace", ...(await inspectWorkspace()) };
+  }
+  if (event && event.__migrate === "workspace" && !event.requestContext && !event.version) {
+    const { runWorkspaceMigration } = await import("../workspaceMigration");
+    return { migrated: "workspace", applied: await runWorkspaceMigration() };
+  }
   return httpHandler(event, context);
 };

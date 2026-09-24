@@ -19,6 +19,9 @@ import {
   monthlyGoals,
   refillRequests,
   reachOutContacts,
+  appointments,
+  workTasks,
+  opportunityActions,
   type InsertAuditLog,
   type User,
 } from "../drizzle/schema";
@@ -1171,6 +1174,11 @@ export async function deletePatient(patientId: number) {
   await db.delete(providerEscalations).where(eq(providerEscalations.patientId, patientId));
   await db.delete(ccmNotes).where(eq(ccmNotes.patientId, patientId));
   await db.delete(ccmTasks).where(eq(ccmTasks.patientId, patientId));
+  // Workspace rows: schedule entries and tasks stay (they came from the PF schedule / staff work),
+  // just unlinked from the removed roster record.
+  await db.update(appointments).set({ patientId: null }).where(eq(appointments.patientId, patientId));
+  await db.update(workTasks).set({ patientId: null }).where(eq(workTasks.patientId, patientId));
+  await db.delete(opportunityActions).where(eq(opportunityActions.patientId, patientId));
   await db.delete(patients).where(eq(patients.id, patientId));
 }
 
@@ -1305,7 +1313,7 @@ export async function recomputeBilling(taskId: number, month: string) {
 /** Create a notification */
 export async function createNotification(n: {
   userId: number;
-  type: "urgent_symptom" | "escalation" | "missing_documentation" | "not_reached" | "billing_ready" | "refill_request" | "refill_decision";
+  type: "urgent_symptom" | "escalation" | "missing_documentation" | "not_reached" | "billing_ready" | "refill_request" | "refill_decision" | "task";
   title: string;
   content?: string;
   relatedPatientId?: number | null;

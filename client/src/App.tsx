@@ -10,7 +10,12 @@ import CoordinatorDashboard from "./pages/CoordinatorDashboard";
 import PatientsPage from "./pages/PatientsPage";
 import InactivePatientsPage from "./pages/InactivePatientsPage";
 import DeclinedPatientsPage from "./pages/DeclinedPatientsPage";
-import PatientDetailPage from "./pages/PatientDetailPage";
+import Patient360Page from "./pages/Patient360Page";
+import WorkspaceHome from "./pages/WorkspaceHome";
+import MyWorkPage from "./pages/MyWorkPage";
+import PatientFlowPage from "./pages/PatientFlowPage";
+import OpportunitiesPage from "./pages/OpportunitiesPage";
+import PlaybooksPage from "./pages/PlaybooksPage";
 import WorklistPage from "./pages/WorklistPage";
 import CallWorkflowPage from "./pages/CallWorkflowPage";
 import StaffAssignmentPage from "./pages/StaffAssignmentPage";
@@ -36,13 +41,19 @@ function Router() {
     <Switch>
       <Route path="/" component={Home} />
       <Route path="/change-password" component={ChangePasswordPage} />
+      <Route path="/home" component={WorkspaceHome} />
+      <Route path="/my-work" component={MyWorkPage} />
+      <Route path="/patient-flow" component={PatientFlowPage} />
+      <Route path="/opportunities" component={OpportunitiesPage} />
+      <Route path="/playbooks" component={PlaybooksPage} />
+      <Route path="/playbooks/:slug" component={PlaybooksPage} />
       <Route path="/admin" component={AdminDashboard} />
       <Route path="/coordinator" component={CoordinatorDashboard} />
       <Route path="/patients" component={PatientsPage} />
       <Route path="/inactive-patients" component={InactivePatientsPage} />
       <Route path="/declined-patients" component={DeclinedPatientsPage} />
       <Route path="/patients/import" component={BulkImportPage} />
-      <Route path="/patients/:id" component={PatientDetailPage} />
+      <Route path="/patients/:id" component={Patient360Page} />
       <Route path="/audit" component={AuditLogPage} />
       <Route path="/team" component={TeamAccessPage} />
       <Route path="/clinics" component={ClinicsPage} />

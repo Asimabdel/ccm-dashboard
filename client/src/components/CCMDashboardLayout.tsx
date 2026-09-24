@@ -3,18 +3,21 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import {
-  LogOut, Menu, X, Bell, ChevronDown, Check, Clock, Search, Sun, Moon,
+  LogOut, Menu, Bell, ChevronDown, Check, Clock, Search, Sun, Moon, PanelLeftClose, PanelLeftOpen, X, Building2, KeyRound,
 } from "lucide-react";
-import { NAV, ROLES } from "@/lib/nav";
+import { NAV_GROUPS, ROLES, ROLE_HOME, type Role } from "@/lib/nav";
 import { useTheme } from "@/contexts/ThemeContext";
 import { CommandPalette } from "@/components/CommandPalette";
 import { useIdleLogout } from "@/hooks/useIdleLogout";
+import { useIsMobile } from "@/hooks/useMobile";
+import { useWorkspace } from "@/components/workspace/useWorkspace";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { fmtDate } from "@/lib/ccm";
+import { WORKSPACE_ROLE_LABELS } from "@shared/workspace";
 
 // Keyboard hint for the ⌘K command palette (Mac shows ⌘, others Ctrl).
 const KBD_HINT =
@@ -22,11 +25,57 @@ const KBD_HINT =
     ? "⌘K"
     : "Ctrl K";
 
-export function CCMDashboardLayout({ children, title }: { children: React.ReactNode; title?: string }) {
+const COLLAPSE_KEY = "ws.sidebarCollapsed";
+
+function readCollapsed() {
+  try {
+    return localStorage.getItem(COLLAPSE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Header clinic picker. Shown on Workspace pages that filter by clinic. */
+function ClinicPicker() {
+  const { clinics, clinicId, setClinicId, limitedToClinics } = useWorkspace();
+  if (clinics.length === 0) return null;
+  const current = clinics.find((c) => c.id === clinicId);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button className="flex items-center gap-2 h-9 px-3 rounded-lg text-sm font-medium border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 max-w-[150px] md:max-w-[220px]">
+          <Building2 size={15} className="text-slate-500 shrink-0" />
+          <span className="truncate">{current?.name ?? (limitedToClinics ? "My clinics" : "All clinics")}</span>
+          <ChevronDown size={14} className="shrink-0" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-60">
+        <DropdownMenuLabel>Clinic</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => setClinicId(null)} className="flex items-center justify-between">
+          {limitedToClinics ? "All my clinics" : "All clinics"} {!clinicId && <Check size={14} />}
+        </DropdownMenuItem>
+        {clinics.map((c) => (
+          <DropdownMenuItem key={c.id} onClick={() => setClinicId(c.id)} className="flex items-center justify-between">
+            <span className="truncate">{c.name}</span> {clinicId === c.id && <Check size={14} />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * App shell. `title` is shown as the page heading unless the page draws its own
+ * header (`pageTitle={false}`); `clinicPicker` adds the clinic filter to the top bar.
+ */
+export function CCMDashboardLayout({ children, title, clinicPicker = false, pageTitle = true }: { children: React.ReactNode; title?: string; clinicPicker?: boolean; pageTitle?: boolean }) {
   const { user, logout, refresh } = useAuth();
   const { theme, toggleTheme, switchable } = useTheme();
   const [location, setLocation] = useLocation();
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const isMobile = useIsMobile();
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const utils = trpc.useUtils();
   const { warning, secondsLeft, stayLoggedIn, logoutNow } = useIdleLogout({ enabled: !!user });
 
@@ -38,7 +87,7 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
     onSuccess: async () => {
       await refresh();
       await utils.invalidate();
-      setLocation(NAV[currentRole]?.[0]?.path ?? "/");
+      setLocation("/home");
     },
   });
 
@@ -50,117 +99,162 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
     }
   }, [user, location, setLocation]);
 
+  useEffect(() => setMobileOpen(false), [location]);
+
   if (!user) return null;
 
-  const currentRole = (user.role in NAV ? user.role : "admin") as keyof typeof NAV;
-  const items = NAV[currentRole] || [];
+  const currentRole = (user.role in NAV_GROUPS ? user.role : "admin") as Role;
+  const groups = NAV_GROUPS[currentRole] || [];
   const unread = (notifications || []).filter((n) => !n.read);
+  const rail = !isMobile && collapsed;
+  const initials = (user.name || user.email || "?").replace(/\(.*?\)/g, "").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+
+  const toggleCollapsed = () => {
+    const next = !collapsed;
+    setCollapsed(next);
+    try {
+      localStorage.setItem(COLLAPSE_KEY, next ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  };
 
   const handleLogout = async () => {
     await logout();
     setLocation("/");
   };
 
-  return (
-    <div className="flex h-screen bg-white dark:bg-slate-900">
-      {/* Sidebar */}
-      <aside
-        className={cn(
-          "transition-all duration-300 flex flex-col bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700",
-          sidebarOpen ? "w-64" : "w-20"
-        )}
-      >
-        <div className="p-4 flex items-center justify-between border-b border-slate-100 dark:border-slate-700">
-          <div className={cn(!sidebarOpen && "hidden", "flex items-center gap-2.5")}>
-            <div className="w-9 h-9 bg-gradient-to-br from-[hsl(17_70%_56%)] to-[hsl(24_76%_42%)] rounded-xl flex items-center justify-center shadow-glow-primary">
-              <span className="text-white font-bold text-xs">CCM</span>
+  const isActive = (path: string) => location === path || (path !== "/" && location.startsWith(path + "/"));
+
+  const sidebar = (
+    <aside
+      className={cn(
+        "flex flex-col bg-[#17181b] text-slate-300 h-full transition-[width] duration-200",
+        isMobile ? "w-72" : rail ? "w-[72px]" : "w-64",
+      )}
+    >
+      <div className={cn("flex items-center h-14 px-4 border-b border-white/5", rail ? "justify-center" : "justify-between")}>
+        <button onClick={() => setLocation(ROLE_HOME[user.role] ?? "/home")} className="flex items-center gap-2.5 min-w-0">
+          <div className="w-8 h-8 bg-brand rounded-lg flex items-center justify-center shrink-0">
+            <span className="text-white font-bold text-sm">M</span>
+          </div>
+          {!rail && (
+            <div className="leading-tight text-left min-w-0">
+              <span className="block text-sm font-bold tracking-wide text-white truncate">MYPCP</span>
+              <span className="block text-[11px] text-slate-400 font-medium">Workspace</span>
             </div>
-            <div className="leading-tight">
-              <span className="block font-bold tracking-tight text-slate-900 dark:text-slate-50">Care Hub</span>
-              <span className="block text-[10px] uppercase tracking-widest text-slate-400 font-medium">Operations</span>
+          )}
+        </button>
+        {isMobile && (
+          <button onClick={() => setMobileOpen(false)} className="p-1.5 rounded-lg hover:bg-white/10" aria-label="Close menu">
+            <X size={18} />
+          </button>
+        )}
+      </div>
+
+      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5 [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.14)_transparent]">
+        {groups.map((g) => (
+          <div key={g.label}>
+            {!rail && <p className="px-3 mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">{g.label}</p>}
+            {rail && <div className="mx-3 mb-2 h-px bg-white/5" />}
+            <div className="space-y-0.5">
+              {g.items.map((item) => {
+                const Icon = item.icon;
+                const active = isActive(item.path);
+                return (
+                  <button
+                    key={item.path}
+                    onClick={() => setLocation(item.path)}
+                    title={item.label}
+                    aria-current={active ? "page" : undefined}
+                    className={cn(
+                      "w-full flex items-center gap-3 rounded-lg text-sm transition-colors relative",
+                      rail ? "justify-center h-10" : "px-3 py-2",
+                      active ? "bg-white/[0.08] text-white font-medium" : "text-slate-400 hover:bg-white/[0.05] hover:text-slate-100",
+                    )}
+                  >
+                    {active && <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r bg-brand" />}
+                    <Icon size={17} className={cn("shrink-0", active && "text-white")} />
+                    {!rail && <span className="truncate">{item.label}</span>}
+                  </button>
+                );
+              })}
             </div>
           </div>
-          <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg">
-            {sidebarOpen ? <X size={18} /> : <Menu size={18} />}
-          </button>
-        </div>
+        ))}
+      </nav>
 
-        <nav className="flex-1 overflow-y-auto p-3 space-y-0.5">
-          {items.map((item) => {
-            const Icon = item.icon;
-            const active = location === item.path || (item.path !== "/" && location.startsWith(item.path + "/"));
-            return (
-              <button
-                key={item.path}
-                onClick={() => setLocation(item.path)}
-                className={cn(
-                  "group w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 active:scale-[0.98] relative",
-                  active
-                    ? "bg-gradient-to-r from-[hsl(17_66%_52%)] to-[hsl(20_72%_46%)] text-white shadow-glow-primary"
-                    : "text-slate-500 dark:text-slate-300 hover:bg-slate-100/80 dark:hover:bg-slate-700 hover:text-slate-900"
-                )}
-                title={item.label}
-              >
-                <Icon size={18} className={cn("shrink-0 transition-transform duration-200", !active && "group-hover:scale-110")} />
-                {sidebarOpen && <span className="truncate">{item.label}</span>}
-              </button>
-            );
-          })}
-        </nav>
-
-        <div className="p-3 border-t border-slate-100 dark:border-slate-700">
+      <div className="p-3 border-t border-white/5 space-y-1">
+        {!rail && (
+          <div className="px-3 py-2">
+            <p className="text-sm font-medium text-slate-100 truncate">{user.name || user.email}</p>
+            <p className="text-[11px] text-slate-500 truncate">{WORKSPACE_ROLE_LABELS[user.role] ?? user.role}</p>
+          </div>
+        )}
+        <button
+          onClick={handleLogout}
+          title="Sign out"
+          className={cn("w-full flex items-center gap-3 rounded-lg text-sm text-slate-400 hover:bg-white/[0.05] hover:text-slate-100", rail ? "justify-center h-10" : "px-3 py-2")}
+        >
+          <LogOut size={17} />
+          {!rail && <span>Sign out</span>}
+        </button>
+        {!isMobile && (
           <button
-            onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+            onClick={toggleCollapsed}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className={cn("w-full flex items-center gap-3 rounded-lg text-sm text-slate-500 hover:bg-white/[0.05] hover:text-slate-200", rail ? "justify-center h-10" : "px-3 py-2")}
           >
-            <LogOut size={18} />
-            {sidebarOpen && <span>Logout</span>}
+            {collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+            {!rail && <span>Collapse</span>}
           </button>
+        )}
+      </div>
+    </aside>
+  );
+
+  return (
+    <div className="flex h-screen bg-slate-50/60 dark:bg-slate-900">
+      {/* Sidebar: fixed rail/full on desktop, off-canvas drawer on phones */}
+      {!isMobile && sidebar}
+      {isMobile && mobileOpen && (
+        <div className="fixed inset-0 z-40 flex">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setMobileOpen(false)} />
+          <div className="relative z-10 h-full">{sidebar}</div>
         </div>
-      </aside>
+      )}
 
       {/* Main */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="bg-white/90 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 px-6 py-3 flex items-center justify-between backdrop-blur-md sticky top-0 z-20">
-          <div>
-            <p className="text-[11px] uppercase tracking-widest font-light text-slate-400">Chronic Care Management</p>
-            <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-slate-50">
-              {title || `${ROLES.find((r) => r.value === currentRole)?.label ?? "Dashboard"}`}
-            </h1>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {/* Light / dark theme toggle */}
-            {switchable && (
-              <button
-                onClick={toggleTheme}
-                aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-                title={theme === "dark" ? "Light mode" : "Dark mode"}
-                className="p-2.5 rounded-xl bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-200 transition-colors"
-              >
-                {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
-              </button>
-            )}
-
-            {/* ⌘K command palette trigger */}
-            <button
-              onClick={() => window.dispatchEvent(new Event("open-command-palette"))}
-              className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
-              title={`Search (${KBD_HINT})`}
-            >
-              <Search size={16} className="text-slate-400" />
-              <span className="hidden md:inline text-slate-400">Search…</span>
-              <kbd className="hidden md:inline-flex items-center text-[10px] font-medium text-slate-400 border border-slate-200 dark:border-slate-600 rounded px-1.5 py-0.5">
-                {KBD_HINT}
-              </kbd>
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        <header className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 px-3 md:px-6 h-14 flex items-center gap-2 md:gap-3 sticky top-0 z-20">
+          {isMobile && (
+            <button onClick={() => setMobileOpen(true)} className="p-2 -ml-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700" aria-label="Open menu">
+              <Menu size={20} />
             </button>
+          )}
+
+          {/* ⌘K command palette — a wide search field, as in the Workspace design */}
+          <button
+            onClick={() => window.dispatchEvent(new Event("open-command-palette"))}
+            className="flex-1 min-w-0 max-w-md flex items-center gap-2 h-9 px-3 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm text-left hover:border-slate-300 transition-colors"
+            title={`Search (${KBD_HINT})`}
+          >
+            <Search size={16} className="text-slate-400 shrink-0" />
+            <span className="flex-1 truncate text-slate-400">Find anything…</span>
+            <kbd className="hidden sm:inline-flex items-center text-[10px] font-medium text-slate-400 border border-slate-200 dark:border-slate-600 rounded px-1.5 py-0.5">
+              {KBD_HINT}
+            </kbd>
+          </button>
+
+          <div className="ml-auto flex items-center gap-1 md:gap-1.5 shrink-0">
+            {clinicPicker && <ClinicPicker />}
 
             {/* Role switcher (admin-only preview) */}
             {user.role === "admin" && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600">
-                  <span className="hidden sm:inline">View as:</span>
+                <button className="hidden md:flex items-center gap-2 h-9 px-3 rounded-lg text-sm font-medium border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700">
+                  <span className="hidden xl:inline text-slate-500">View as:</span>
                   <span className="font-semibold capitalize">{currentRole.replace("_", " ")}</span>
                   <ChevronDown size={14} />
                 </button>
@@ -182,13 +276,25 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
             </DropdownMenu>
             )}
 
+            {/* Light / dark theme toggle */}
+            {switchable && (
+              <button
+                onClick={toggleTheme}
+                aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+                title={theme === "dark" ? "Light mode" : "Dark mode"}
+                className="hidden sm:inline-flex p-2 rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors"
+              >
+                {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+              </button>
+            )}
+
             {/* Notifications */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="relative p-2.5 rounded-xl bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600">
+                <button className="relative p-2 rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700" aria-label="Notifications">
                   <Bell size={18} />
                   {unread.length > 0 && (
-                    <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-rose-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+                    <span className="absolute -top-0.5 -right-0.5 min-w-[17px] h-[17px] px-1 bg-brand text-white text-[10px] font-bold rounded-full flex items-center justify-center">
                       {unread.length}
                     </span>
                   )}
@@ -207,14 +313,17 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
                   {(notifications || []).slice(0, 12).map((n) => (
                     <button
                       key={n.id}
-                      onClick={() => !n.read && markRead.mutate(n.id)}
+                      onClick={() => {
+                        if (!n.read) markRead.mutate(n.id);
+                        if (n.type === "task") setLocation("/my-work");
+                      }}
                       className={cn(
                         "w-full text-left px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-700 border-b border-slate-50 dark:border-slate-700/50",
-                        !n.read && "bg-blue-50/60 dark:bg-blue-900/20"
+                        !n.read && "bg-slate-50 dark:bg-blue-900/20"
                       )}
                     >
                       <div className="flex items-start gap-2">
-                        {!n.read && <span className="mt-1.5 w-2 h-2 rounded-full bg-[hsl(17_66%_52%)] shrink-0" />}
+                        {!n.read && <span className="mt-1.5 w-2 h-2 rounded-full bg-brand shrink-0" />}
                         <div className={cn(n.read && "pl-4")}>
                           <p className="text-sm font-medium text-slate-800 dark:text-slate-100">{n.title}</p>
                           {n.content && <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{n.content}</p>}
@@ -226,10 +335,41 @@ export function CCMDashboardLayout({ children, title }: { children: React.ReactN
                 </div>
               </DropdownMenuContent>
             </DropdownMenu>
+
+            {/* Account */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="ml-0.5 w-8 h-8 rounded-full bg-brand text-white text-xs font-semibold flex items-center justify-center hover:opacity-90" aria-label="Account menu">
+                  {initials}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-60">
+                <DropdownMenuLabel>
+                  <p className="text-sm font-semibold truncate">{user.name || user.email}</p>
+                  <p className="text-xs font-normal text-slate-500 truncate">{WORKSPACE_ROLE_LABELS[user.role] ?? user.role}</p>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => setLocation("/change-password")}>
+                  <KeyRound size={14} className="mr-2" /> Change password
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleLogout}>
+                  <LogOut size={14} className="mr-2" /> Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </header>
 
-        <main className="flex-1 overflow-auto p-6 bg-slate-50/60 dark:bg-slate-900"><div className="animate-fade-in-up">{children}</div></main>
+        <main className="flex-1 overflow-auto p-4 md:p-6">
+          <div className="animate-fade-in-up max-w-[1500px] mx-auto">
+            {pageTitle && (
+              <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-50 mb-5">
+                {title || `${ROLES.find((r) => r.value === currentRole)?.label ?? "Dashboard"}`}
+              </h1>
+            )}
+            {children}
+          </div>
+        </main>
       </div>
 
       <CommandPalette />

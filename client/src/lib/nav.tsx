@@ -3,6 +3,7 @@ import {
   LayoutDashboard, Users, ClipboardList, UserCog, AlertTriangle, Receipt,
   BarChart3, PhoneCall, CalendarClock, ShieldCheck, Building2, Stethoscope, Target,
   UserMinus, Ban, Pill, PhoneOutgoing, Activity, Sunrise, CalendarDays, BriefcaseBusiness,
+  Home, ListTodo, Waypoints, Radar, BookOpen,
 } from "lucide-react";
 
 export interface NavItem {
@@ -11,64 +12,115 @@ export interface NavItem {
   icon: React.ElementType;
 }
 
+export interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
+
 export type Role = "admin" | "staff" | "provider" | "billing" | "front_desk" | "medical_assistant";
 
-// Every employee gets the self-service time clock + schedule pages.
-const MY_WORK: NavItem[] = [
-  { label: "My Day", path: "/my-day", icon: Sunrise },
-  { label: "My Schedule", path: "/my-schedule", icon: CalendarDays },
-];
+const HOME: NavItem = { label: "Home", path: "/home", icon: Home };
+const MY_WORK: NavItem = { label: "My Work", path: "/my-work", icon: ListTodo };
+const FLOW: NavItem = { label: "Patient Flow", path: "/patient-flow", icon: Waypoints };
+const OPPORTUNITIES: NavItem = { label: "Opportunities", path: "/opportunities", icon: Radar };
+const PATIENTS: NavItem = { label: "Patients", path: "/patients", icon: Users };
+const PLAYBOOKS: NavItem = { label: "Playbooks", path: "/playbooks", icon: BookOpen };
 
-/** Role-based navigation. Shared by the sidebar (CCMDashboardLayout) and the ⌘K command palette. */
-export const NAV: Record<Role, NavItem[]> = {
+// Every employee with a shift gets the self-service time clock + schedule pages.
+const ME: NavGroup = {
+  label: "Me",
+  items: [
+    { label: "My Day", path: "/my-day", icon: Sunrise },
+    { label: "My Schedule", path: "/my-schedule", icon: CalendarDays },
+  ],
+};
+
+/** Role-based, grouped navigation for the Workspace sidebar. */
+export const NAV_GROUPS: Record<Role, NavGroup[]> = {
   admin: [
-    { label: "Dashboard", path: "/admin", icon: LayoutDashboard },
-    { label: "Patients", path: "/patients", icon: Users },
-    { label: "Monthly Worklist", path: "/worklist", icon: ClipboardList },
-    { label: "Inactive Patients", path: "/inactive-patients", icon: UserMinus },
-    { label: "Declined CCM", path: "/declined-patients", icon: Ban },
-    { label: "Staff Assignment", path: "/assignment", icon: UserCog },
-    { label: "APCM", path: "/apcm", icon: Activity },
-    { label: "Reach Out", path: "/reach-out", icon: PhoneOutgoing },
-    { label: "Escalations", path: "/escalations", icon: AlertTriangle },
-    { label: "Refill Requests", path: "/refill-requests", icon: Pill },
-    { label: "Billing", path: "/billing", icon: Receipt },
-    { label: "Follow-ups", path: "/follow-ups", icon: CalendarClock },
-    { label: "Reports", path: "/reports", icon: BarChart3 },
-    { label: "Coordinators", path: "/coordinator", icon: Target },
-    { label: "Providers", path: "/providers", icon: Stethoscope },
-    { label: "Clinics", path: "/clinics", icon: Building2 },
-    { label: "Workforce", path: "/workforce", icon: BriefcaseBusiness },
-    { label: "Team & Access", path: "/team", icon: UserCog },
-    { label: "Audit Log", path: "/audit", icon: ShieldCheck },
+    { label: "Workspace", items: [HOME, MY_WORK, FLOW, OPPORTUNITIES, PATIENTS, PLAYBOOKS] },
+    {
+      label: "Care Management",
+      items: [
+        { label: "CCM Dashboard", path: "/admin", icon: LayoutDashboard },
+        { label: "Monthly Worklist", path: "/worklist", icon: ClipboardList },
+        { label: "Staff Assignment", path: "/assignment", icon: UserCog },
+        { label: "APCM", path: "/apcm", icon: Activity },
+        { label: "Reach Out", path: "/reach-out", icon: PhoneOutgoing },
+        { label: "Escalations", path: "/escalations", icon: AlertTriangle },
+        { label: "Refill Requests", path: "/refill-requests", icon: Pill },
+        { label: "Follow-ups", path: "/follow-ups", icon: CalendarClock },
+        { label: "Inactive Patients", path: "/inactive-patients", icon: UserMinus },
+        { label: "Declined CCM", path: "/declined-patients", icon: Ban },
+        { label: "Coordinators", path: "/coordinator", icon: Target },
+      ],
+    },
+    {
+      label: "Revenue",
+      items: [
+        { label: "Billing", path: "/billing", icon: Receipt },
+        { label: "Reports", path: "/reports", icon: BarChart3 },
+      ],
+    },
+    {
+      label: "Admin",
+      items: [
+        { label: "Providers", path: "/providers", icon: Stethoscope },
+        { label: "Clinics", path: "/clinics", icon: Building2 },
+        { label: "Workforce", path: "/workforce", icon: BriefcaseBusiness },
+        { label: "Team & Access", path: "/team", icon: UserCog },
+        { label: "Audit Log", path: "/audit", icon: ShieldCheck },
+      ],
+    },
   ],
   staff: [
-    { label: "My Dashboard", path: "/coordinator", icon: LayoutDashboard },
-    { label: "My Worklist", path: "/worklist", icon: ClipboardList },
-    { label: "Patients", path: "/patients", icon: Users },
-    { label: "APCM", path: "/apcm", icon: Activity },
-    { label: "Reach Out", path: "/reach-out", icon: PhoneOutgoing },
-    { label: "Inactive Patients", path: "/inactive-patients", icon: UserMinus },
-    { label: "Declined CCM", path: "/declined-patients", icon: Ban },
-    { label: "Call Workflow", path: "/workflow", icon: PhoneCall },
-    ...MY_WORK,
+    { label: "Workspace", items: [HOME, MY_WORK, FLOW, OPPORTUNITIES, PATIENTS, PLAYBOOKS] },
+    {
+      label: "Care Management",
+      items: [
+        { label: "CCM Dashboard", path: "/coordinator", icon: LayoutDashboard },
+        { label: "My Worklist", path: "/worklist", icon: ClipboardList },
+        { label: "Call Workflow", path: "/workflow", icon: PhoneCall },
+        { label: "APCM", path: "/apcm", icon: Activity },
+        { label: "Reach Out", path: "/reach-out", icon: PhoneOutgoing },
+        { label: "Inactive Patients", path: "/inactive-patients", icon: UserMinus },
+        { label: "Declined CCM", path: "/declined-patients", icon: Ban },
+      ],
+    },
+    ME,
   ],
   provider: [
-    { label: "Refill Requests", path: "/refill-requests", icon: Pill },
-    { label: "Escalations", path: "/escalations", icon: AlertTriangle },
-    { label: "Patients", path: "/patients", icon: Users },
+    { label: "Workspace", items: [HOME, MY_WORK, FLOW, OPPORTUNITIES, PATIENTS, PLAYBOOKS] },
+    {
+      label: "Care Management",
+      items: [
+        { label: "Refill Requests", path: "/refill-requests", icon: Pill },
+        { label: "Escalations", path: "/escalations", icon: AlertTriangle },
+      ],
+    },
   ],
   billing: [
-    { label: "Billing Records", path: "/billing", icon: Receipt },
-    { label: "Reports", path: "/reports", icon: BarChart3 },
+    { label: "Workspace", items: [HOME, MY_WORK, PLAYBOOKS] },
+    {
+      label: "Revenue",
+      items: [
+        { label: "Billing Records", path: "/billing", icon: Receipt },
+        { label: "Reports", path: "/reports", icon: BarChart3 },
+      ],
+    },
   ],
   front_desk: [
-    { label: "Follow-ups", path: "/follow-ups", icon: CalendarClock },
-    { label: "Patients", path: "/patients", icon: Users },
+    { label: "Workspace", items: [HOME, MY_WORK, FLOW, OPPORTUNITIES, PATIENTS, PLAYBOOKS] },
+    { label: "Care Management", items: [{ label: "Follow-ups", path: "/follow-ups", icon: CalendarClock }] },
   ],
-  // Workforce-only role: no patient pages (the server fences these accounts too).
-  medical_assistant: [...MY_WORK],
+  // MAs get operational pages only; the server fences CCM/billing data away from them.
+  medical_assistant: [{ label: "Workspace", items: [HOME, FLOW, MY_WORK, PLAYBOOKS] }, ME],
 };
+
+/** Flat list per role — used by the ⌘K command palette. */
+export const NAV: Record<Role, NavItem[]> = Object.fromEntries(
+  Object.entries(NAV_GROUPS).map(([role, groups]) => [role, groups.flatMap((g) => g.items)]),
+) as Record<Role, NavItem[]>;
 
 export const ROLES = [
   { value: "admin", label: "Admin / Practice Manager" },
@@ -77,3 +129,17 @@ export const ROLES = [
   { value: "billing", label: "Billing" },
   { value: "front_desk", label: "Front Desk" },
 ] as const;
+
+/**
+ * Where each role lands after signing in. Existing roles keep the page they
+ * already start their day on; Home is one click away in the sidebar.
+ */
+export const ROLE_HOME: Record<string, string> = {
+  admin: "/home",
+  staff: "/worklist",
+  provider: "/refill-requests",
+  billing: "/billing",
+  front_desk: "/follow-ups",
+  medical_assistant: "/home",
+  user: "/home",
+};

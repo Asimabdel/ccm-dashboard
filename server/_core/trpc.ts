@@ -28,7 +28,8 @@ export const publicProcedure = t.procedure;
 // Workforce-only roles (e.g. medical assistants using the schedule / time clock)
 // are fenced to these routers at the middleware level, so no patient (PHI)
 // procedure is reachable for them even if it lacks its own role check.
-const WORKFORCE_ONLY_ALLOWED_PREFIXES = ["auth.", "workforce.", "notifications.", "system."];
+// (workspace.* checks capabilities per procedure and scopes MAs to their clinics.)
+const WORKFORCE_ONLY_ALLOWED_PREFIXES = ["auth.", "workforce.", "workspace.", "notifications.", "system."];
 
 const requireUser = t.middleware(async opts => {
   const { ctx, next, path } = opts;

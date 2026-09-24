@@ -277,11 +277,12 @@ function monthLabel(m: string) {
 
 const COMPLETED_STATUSES = ["completed", "ready_for_billing", "billed", "needs_provider_review"];
 
-export default function PatientDetailPage() {
+/** The CCM record. `embedded` renders it inside Patient 360 (no page chrome). */
+export default function PatientDetailPage({ embedded = false, patientId }: { embedded?: boolean; patientId?: number } = {}) {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
   const params = useParams();
   const [, setLocation] = useLocation();
-  const id = Number(params.id);
+  const id = patientId ?? Number(params.id);
   const detail = trpc.patients.detail.useQuery(id, { enabled: !!user && !!id });
   const utils = trpc.useUtils();
   const canEdit = !!user && ["admin", "staff", "front_desk"].includes(user.role);
@@ -298,17 +299,13 @@ export default function PatientDetailPage() {
   });
 
   if (loading || !user) {
-    return <div className="min-h-screen flex items-center justify-center bg-white"><Loader2 className="animate-spin text-slate-400" /></div>;
+    return embedded ? null : <div className="min-h-screen flex items-center justify-center bg-white"><Loader2 className="animate-spin text-slate-400" /></div>;
   }
 
   const d = detail.data;
 
-  return (
-    <CCMDashboardLayout title="Patient Profile">
-      <button onClick={() => setLocation("/patients")} className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800 mb-4">
-        <ArrowLeft size={16} /> Back to Patients
-      </button>
-
+  const body = (
+    <>
       {detail.isLoading && <div className="py-20 text-center"><Loader2 className="animate-spin text-slate-300 mx-auto" /></div>}
       {!detail.isLoading && !d && <p className="text-slate-400 font-light">Patient not found.</p>}
 
@@ -318,7 +315,11 @@ export default function PatientDetailPage() {
           <div className="bg-white rounded-3xl p-6 border border-slate-100">
             <div className="flex items-start justify-between flex-wrap gap-4">
               <div>
-                <h2 className="text-2xl font-extrabold tracking-tight text-slate-900">{d.patient.name}</h2>
+                {embedded ? (
+                  <h2 className="text-lg font-bold tracking-tight text-slate-900">Care management record</h2>
+                ) : (
+                  <h2 className="text-2xl font-extrabold tracking-tight text-slate-900">{d.patient.name}</h2>
+                )}
                 <div className="mt-2 flex flex-wrap items-center gap-4 text-sm text-slate-500">
                   <span className="flex items-center gap-1.5"><Phone size={14} /> {d.patient.phoneNumber}</span>
                   <span className="flex items-center gap-1.5"><Calendar size={14} /> {fmtDate(d.patient.dateOfBirth)}</span>
@@ -493,6 +494,16 @@ export default function PatientDetailPage() {
           </AlertDialog>
         </div>
       )}
+    </>
+  );
+
+  if (embedded) return body;
+  return (
+    <CCMDashboardLayout title="Patient Profile">
+      <button onClick={() => setLocation("/patients")} className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800 mb-4">
+        <ArrowLeft size={16} /> Back to Patients
+      </button>
+      {body}
     </CCMDashboardLayout>
   );
 }
