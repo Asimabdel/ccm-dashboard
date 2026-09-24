@@ -6,7 +6,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, ne, sql } from "drizzle-orm";
 import {
   getPatientById,
   getCCMTaskById,
@@ -302,7 +302,18 @@ export const appRouter = router({
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { id, ...updateData } = input;
-        await db.update(users).set({ ...updateData, updatedAt: new Date() }).where(eq(users.id, id));
+        const set: Record<string, unknown> = { ...updateData, updatedAt: new Date() };
+        if (updateData.email) {
+          // Password sign-in looks emails up lowercased, so store them that way.
+          const email = updateData.email.trim().toLowerCase();
+          const [taken] = await db.select({ id: users.id, name: users.name }).from(users).where(and(eq(users.email, email), ne(users.id, id))).limit(1);
+          if (taken) throw new TRPCError({ code: "BAD_REQUEST", message: `That email is already used by ${taken.name ?? "another account"}.` });
+          set.email = email;
+          // A roster-only employee getting their first login becomes a regular local account.
+          const [row] = await db.select({ openId: users.openId }).from(users).where(eq(users.id, id)).limit(1);
+          if (row?.openId.startsWith("roster:")) set.openId = `local:${email}`;
+        }
+        await db.update(users).set(set).where(eq(users.id, id));
         void logAudit(ctx, "manage_access", { entityType: "user", entityId: id, description: `Updated user #${id}` });
         return { success: true };
       }),
