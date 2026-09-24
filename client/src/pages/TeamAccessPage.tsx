@@ -19,7 +19,7 @@ const ROLE_OPTIONS = [
   { value: "provider", label: "Provider" },
   { value: "billing", label: "Billing" },
   { value: "front_desk", label: "Front Desk" },
-  { value: "medical_assistant", label: "Medical Assistant (schedule & time clock only)" },
+  { value: "medical_assistant", label: "Medical Assistant (patient flow, tasks & time clock; no CCM data)" },
   { value: "user", label: "No access (pending)" },
 ] as const;
 

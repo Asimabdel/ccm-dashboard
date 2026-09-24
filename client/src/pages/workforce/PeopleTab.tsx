@@ -31,7 +31,7 @@ export function PeopleTab() {
       <div className="flex items-start justify-between gap-4 mb-4">
         <p className="text-sm text-slate-500 max-w-2xl">
           Your whole team. Give each employee a job role and home clinic so they show up on the schedule, get their checklist, and can be found for coverage.
-          To let someone clock in and see their schedule, give them a login on <Link href="/team" className="font-semibold text-slate-700 underline">Team &amp; Access</Link> — choose the <b>Medical Assistant</b> access level for MAs (schedule and time clock only, no patient data).
+          To let someone clock in and see their schedule, give them a login on <Link href="/team" className="font-semibold text-slate-700 underline">Team &amp; Access</Link> — choose the <b>Medical Assistant</b> access level for MAs (Patient Flow, their tasks, schedule and time clock for their home clinic; no CCM, BHI or billing data).
         </p>
         <button className={`${btnPrimary} shrink-0`} onClick={() => setAdding({ name: "", jobRoleId: null, homeClinicId: null })}><UserPlus size={15} /> Add employee</button>
       </div>
