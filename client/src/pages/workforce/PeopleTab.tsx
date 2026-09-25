@@ -51,7 +51,7 @@ export function PeopleTab() {
                 <tr key={p.userId} className="border-b border-slate-100 last:border-0">
                   <td className="px-4 py-3"><p className="font-semibold text-slate-800">{p.name ?? p.email}</p><p className="text-xs text-slate-400">{p.accessRole === "user" ? "No login yet" : `${p.email} · ${p.accessRole.replace("_", " ")}`}</p></td>
                   <td className="px-3 py-3 text-slate-700">{p.jobRoleName ?? <span className="text-slate-300">—</span>}</td>
-                  <td className="px-3 py-3 text-slate-700">{p.homeClinicName ?? <span className="text-slate-300">—</span>}{p.canFloat && <span className="ml-2 inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700"><Shuffle size={11} /> floats</span>}</td>
+                  <td className="px-3 py-3 text-slate-700">{p.homeClinicName ?? (p.profileId ? "Remote" : <span className="text-slate-300">—</span>)}{p.canFloat && <span className="ml-2 inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700"><Shuffle size={11} /> floats</span>}</td>
                   <td className="px-3 py-3 text-center">{p.usesTimeClock ? <span className="inline-flex flex-col items-center"><span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700"><Clock size={11} /> Hourly</span>{p.clockStartDate && p.clockStartDate > localDateStr() && <span className="text-[10px] text-slate-400">from {fmtDay(p.clockStartDate, { month: "short", day: "numeric" })}</span>}</span> : <span className="text-slate-300">—</span>}</td>
                   <td className="px-3 py-3 text-center text-slate-700">{p.profileId ? p.hoursPerWeek : <span className="text-slate-300">—</span>}</td>
                   <td className="px-3 py-3 text-center">
@@ -80,7 +80,7 @@ export function PeopleTab() {
             </Field>
             <Field label="Home clinic (optional)">
               <select value={adding.homeClinicId ?? ""} onChange={(e) => setAdding({ ...adding, homeClinicId: e.target.value ? Number(e.target.value) : null })} className={inputCls}>
-                <option value="">Remote (no clinic)</option>
+                <option value="">Remote</option>
                 {(clinics.data || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </Field>
@@ -101,7 +101,7 @@ export function PeopleTab() {
             </Field>
             <Field label="Home clinic">
               <select value={draft.homeClinicId ?? ""} onChange={(e) => setDraft({ ...draft, homeClinicId: e.target.value ? Number(e.target.value) : null })} className={inputCls}>
-                <option value="">Remote (no clinic)</option>
+                <option value="">Remote</option>
                 {(clinics.data || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </Field>

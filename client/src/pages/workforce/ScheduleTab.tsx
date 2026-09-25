@@ -134,7 +134,7 @@ export function ScheduleTab() {
               <Field label="Clinic">
                 <select value={draft.clinicId ?? ""} onChange={(e) => setDraft({ ...draft, clinicId: e.target.value ? Number(e.target.value) : null })} className={inputCls}>
                   {(clinics.data || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  <option value="">Remote (no clinic)</option>
+                  <option value="">Remote</option>
                 </select>
               </Field>
               <Field label="Date"><input type="date" required value={draft.date} onChange={(e) => setDraft({ ...draft, date: e.target.value })} className={inputCls} /></Field>
