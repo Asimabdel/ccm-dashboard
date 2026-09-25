@@ -8,6 +8,8 @@ import { addDays, fmtDay, fmtTime, localDateStr, weekDates, weekStart } from "@s
 const btn = "inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-600 hover:bg-slate-50 transition";
 const shortTime = (t: string) => fmtTime(t).replace(":00", "");
 const byName = <T extends { name: string }>(a: T, b: T) => a.name.localeCompare(b.name);
+// Clinics alphabetically, with remote work last.
+const clinicOrder = <T extends { name: string }>(a: T, b: T) => Number(a.name === "Remote") - Number(b.name === "Remote") || byName(a, b);
 
 /** Providers first, then everyone else — the two sections inside every clinic. */
 function splitByRole<T extends { isProvider: boolean }>(items: T[]) {
@@ -52,7 +54,7 @@ export default function TeamSchedulePage() {
     const groups = new Map<number | null, { name: string; rows: TodayRow[] }>();
     const add = (cid: number | null, row: TodayRow) => {
       if (clinicId !== "all" && cid !== clinicId) return;
-      const g = groups.get(cid) ?? { name: cid ? t.clinics.find((c) => c.id === cid)?.name ?? "Clinic" : "No clinic", rows: [] };
+      const g = groups.get(cid) ?? { name: cid ? t.clinics.find((c) => c.id === cid)?.name ?? "Clinic" : "Remote", rows: [] };
       if (!g.rows.some((r) => r.userId === row.userId)) g.rows.push(row);
       groups.set(cid, g);
     };
@@ -66,7 +68,7 @@ export default function TeamSchedulePage() {
     }
     return Array.from(groups.values())
       .map((g) => ({ ...g, rows: g.rows.sort((a, b) => Number(a.out) - Number(b.out) || byName(a, b)) }))
-      .sort(byName);
+      .sort(clinicOrder);
   }, [t, clinicId]);
   const todayWorking = todayGroups.reduce((n, g) => n + g.rows.filter((r) => !r.out).length, 0);
   const todayIn = todayGroups.reduce((n, g) => n + g.rows.filter((r) => r.isIn).length, 0);
@@ -88,10 +90,10 @@ export default function TeamSchedulePage() {
       .filter(([cid]) => clinicId === "all" || cid === clinicId)
       .map(([cid, ids]) => ({
         cid,
-        name: cid ? d.clinics.find((c) => c.id === cid)?.name ?? "Clinic" : "No clinic",
+        name: cid ? d.clinics.find((c) => c.id === cid)?.name ?? "Clinic" : "Remote",
         people: d.people.filter((p) => ids.has(p.userId)).sort(byName),
       }))
-      .sort(byName);
+      .sort(clinicOrder);
   }, [d, clinicId]);
 
   if (loading || !user) return <div className="min-h-screen flex items-center justify-center bg-white"><Loader2 className="animate-spin text-slate-400" /></div>;

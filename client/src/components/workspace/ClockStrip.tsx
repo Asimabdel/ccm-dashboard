@@ -39,7 +39,7 @@ export function ClockStrip() {
             {worked > 0 && <span className="font-normal text-slate-500"> · {fmtDuration(worked)} today</span>}
           </p>
           <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
-            {shift ? `Today: ${fmtTime(shift.startTime)} – ${fmtTime(shift.endTime)} at ${shift.clinicName}` : "Not on the schedule today"}
+            {shift ? `Today: ${fmtTime(shift.startTime)} – ${fmtTime(shift.endTime)} ${shift.clinicId ? `at ${shift.clinicName}` : "(remote)"}` : "Not on the schedule today"}
             {" · "}<Link href="/team-schedule" className="underline hover:text-slate-800">Who's working</Link>
           </p>
           {d.missedClockOuts.length > 0 && (

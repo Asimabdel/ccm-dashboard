@@ -210,6 +210,14 @@ async function upgradeOpportunityActions(db: Db): Promise<string[]> {
   return done;
 }
 
+/** Remote shifts: a shift may have no clinic (added 2026-09-25). */
+async function upgradeShifts(db: Db): Promise<string[]> {
+  const cols = await rows<{ n: string }>(db, sql`SELECT IS_NULLABLE AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'shifts' AND COLUMN_NAME = 'clinicId'`);
+  if (!cols.length || cols[0].n === "YES") return [];
+  await db.execute(sql.raw("ALTER TABLE `shifts` MODIFY COLUMN `clinicId` int NULL"));
+  return ["shifts.clinicId now nullable (remote shifts)"];
+}
+
 /** Time clock: hourly staff are marked on their profile (added 2026-09-24). */
 async function upgradeStaffProfiles(db: Db): Promise<string[]> {
   const cols = await rows<{ c: string }>(db, sql`SELECT COLUMN_NAME AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'staffProfiles'`);
@@ -285,6 +293,7 @@ export async function runWorkspaceMigration(): Promise<string[]> {
   }
   applied.push(...(await upgradeOpportunityActions(db)));
   applied.push(...(await upgradeStaffProfiles(db)));
+  applied.push(...(await upgradeShifts(db)));
   const seeded = await seedPlaybooksIfEmpty(db);
   if (seeded) applied.push(seeded);
   return applied;

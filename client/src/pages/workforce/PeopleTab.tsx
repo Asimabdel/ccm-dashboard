@@ -80,7 +80,7 @@ export function PeopleTab() {
             </Field>
             <Field label="Home clinic (optional)">
               <select value={adding.homeClinicId ?? ""} onChange={(e) => setAdding({ ...adding, homeClinicId: e.target.value ? Number(e.target.value) : null })} className={inputCls}>
-                <option value="">— none —</option>
+                <option value="">Remote (no clinic)</option>
                 {(clinics.data || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </Field>
@@ -101,12 +101,12 @@ export function PeopleTab() {
             </Field>
             <Field label="Home clinic">
               <select value={draft.homeClinicId ?? ""} onChange={(e) => setDraft({ ...draft, homeClinicId: e.target.value ? Number(e.target.value) : null })} className={inputCls}>
-                <option value="">— none —</option>
+                <option value="">Remote (no clinic)</option>
                 {(clinics.data || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </Field>
-            {draft.homeClinicId != null && draft.homeClinicId !== draft.originalClinicId && (
-              <label className="flex items-center gap-2 text-sm text-slate-700 -mt-1"><input type="checkbox" checked={draft.moveShifts} onChange={(e) => setDraft({ ...draft, moveShifts: e.target.checked })} /> Also move their upcoming shifts to this clinic</label>
+            {draft.homeClinicId !== draft.originalClinicId && (
+              <label className="flex items-center gap-2 text-sm text-slate-700 -mt-1"><input type="checkbox" checked={draft.moveShifts} onChange={(e) => setDraft({ ...draft, moveShifts: e.target.checked })} /> Also move their upcoming shifts {draft.homeClinicId ? "to this clinic" : "to remote"}</label>
             )}
             <div className="grid grid-cols-2 gap-3">
               <Field label="Target hours / week"><input type="number" min={0} max={80} value={draft.hoursPerWeek} onChange={(e) => setDraft({ ...draft, hoursPerWeek: Number(e.target.value) })} className={inputCls} /></Field>

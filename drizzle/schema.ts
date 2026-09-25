@@ -611,7 +611,8 @@ export type StaffProfile = typeof staffProfiles.$inferSelect;
 export const shifts = mysqlTable("shifts", {
   id: int("id").autoincrement().primaryKey(),
   userId: int("userId").references(() => users.id).notNull(),
-  clinicId: int("clinicId").references(() => clinics.id).notNull(),
+  // Null = a remote shift (e.g. a care coordinator working from home).
+  clinicId: int("clinicId").references(() => clinics.id),
   date: varchar("date", { length: 10 }).notNull(), // YYYY-MM-DD (clinic-local)
   startTime: varchar("startTime", { length: 5 }).notNull(), // HH:MM
   endTime: varchar("endTime", { length: 5 }).notNull(),

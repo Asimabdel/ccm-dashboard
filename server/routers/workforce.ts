@@ -64,7 +64,7 @@ export const workforceRouter = router({
       .query(async ({ input, ctx }) => { requireAdmin(ctx); return wf.getSchedule(input.from, input.to, input.clinicId); }),
     saveShift: protectedProcedure
       .input(z.object({
-        id: z.number().optional(), userId: z.number(), clinicId: z.number(), date: dateStr,
+        id: z.number().optional(), userId: z.number(), clinicId: z.number().nullable(), date: dateStr,
         startTime: timeStr, endTime: timeStr, note: z.string().max(500).nullish(),
       }))
       .mutation(async ({ input, ctx }) => { requireAdmin(ctx); return unwrap(await wf.saveShift({ ...input, createdByUserId: ctx.user.id })); }),

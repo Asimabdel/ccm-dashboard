@@ -138,7 +138,7 @@ export async function getMaClinicIds(userId: number): Promise<number[] | null> {
     .select({ clinicId: shifts.clinicId })
     .from(shifts)
     .where(and(eq(shifts.userId, userId), eq(shifts.date, localDateStr()), eq(shifts.status, "scheduled")));
-  todays.forEach((s) => set.add(s.clinicId));
+  todays.forEach((s) => { if (s.clinicId) set.add(s.clinicId); });
   return Array.from(set);
 }
 

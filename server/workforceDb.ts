@@ -13,6 +13,15 @@ import {
   periodKey, shiftMinutes, timeToMinutes, weekStart, type DutyFrequency,
 } from "../shared/workforce";
 
+/** Shifts without a clinic are remote (e.g. a care coordinator working from home). */
+export const REMOTE_LABEL = "Remote";
+
+async function clinicLabel(db: Awaited<ReturnType<typeof requireDb>>, clinicId: number | null) {
+  if (!clinicId) return REMOTE_LABEL;
+  const [clinic] = await db.select({ name: clinics.name }).from(clinics).where(eq(clinics.id, clinicId));
+  return clinic?.name ?? "clinic";
+}
+
 async function requireDb() {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -145,10 +154,12 @@ export async function saveProfile(input: {
   else await db.insert(staffProfiles).values({ userId: input.userId, ...values });
 
   const oldClinicId = existing[0]?.homeClinicId ?? null;
-  if (!input.moveUpcomingShifts || !input.homeClinicId || input.homeClinicId === oldClinicId) return { movedShifts: 0 };
-  // Coverage shifts stay where the gap was; with no previous home clinic, every upcoming shift moves.
+  if (!input.moveUpcomingShifts || input.homeClinicId === oldClinicId) return { movedShifts: 0 };
+  // Coverage shifts stay where the gap was. No home clinic (remote) moves their remote shifts,
+  // or every upcoming shift if they were never placed anywhere.
   const conds = [eq(shifts.userId, input.userId), gte(shifts.date, localDateStr()), eq(shifts.status, "scheduled"), isNull(shifts.coversShiftId)];
   if (oldClinicId) conds.push(eq(shifts.clinicId, oldClinicId));
+  else if (existing.length) conds.push(isNull(shifts.clinicId));
   const [res] = await db.update(shifts).set({ clinicId: input.homeClinicId }).where(and(...conds));
   return { movedShifts: (res as { affectedRows?: number })?.affectedRows ?? 0 };
 }
@@ -170,7 +181,7 @@ export async function getSchedule(from: string, to: string, clinicId?: number) {
     db.select({ shift: shifts, userName: users.name, clinicName: clinics.name })
       .from(shifts)
       .innerJoin(users, eq(users.id, shifts.userId))
-      .innerJoin(clinics, eq(clinics.id, shifts.clinicId))
+      .leftJoin(clinics, eq(clinics.id, shifts.clinicId))
       .where(and(...conds))
       .orderBy(asc(shifts.date), asc(shifts.startTime)),
     db.select().from(timeOffRequests).where(and(
@@ -180,7 +191,7 @@ export async function getSchedule(from: string, to: string, clinicId?: number) {
   ]);
   const coveredIds = new Set(shiftRows.map((r) => r.shift.coversShiftId).filter(Boolean) as number[]);
   return {
-    shifts: shiftRows.map((r) => ({ ...r.shift, userName: r.userName, clinicName: r.clinicName, covered: coveredIds.has(r.shift.id) })),
+    shifts: shiftRows.map((r) => ({ ...r.shift, userName: r.userName, clinicName: r.clinicName ?? REMOTE_LABEL, covered: coveredIds.has(r.shift.id) })),
     timeOff,
   };
 }
@@ -194,7 +205,7 @@ async function findOverlap(userId: number, date: string, startTime: string, endT
 }
 
 export async function saveShift(input: {
-  id?: number; userId: number; clinicId: number; date: string; startTime: string; endTime: string;
+  id?: number; userId: number; clinicId: number | null; date: string; startTime: string; endTime: string;
   note?: string | null; createdByUserId: number;
 }): Promise<{ id: number } | { error: string }> {
   const db = await requireDb();
@@ -245,8 +256,7 @@ export async function markCalledOut(shiftId: number, note: string | null, actorN
   if (!shift) return null;
   await db.update(shifts).set({ status: "called_out", note: note ?? shift.note }).where(eq(shifts.id, shiftId));
   const [who] = await db.select({ name: users.name }).from(users).where(eq(users.id, shift.userId));
-  const [clinic] = await db.select({ name: clinics.name }).from(clinics).where(eq(clinics.id, shift.clinicId));
-  await notify(await adminIds(), `Call-out: ${who?.name ?? "Employee"} — ${clinic?.name ?? "clinic"}`,
+  await notify(await adminIds(), `Call-out: ${who?.name ?? "Employee"} — ${await clinicLabel(db, shift.clinicId)}`,
     `${shift.date} ${shift.startTime}–${shift.endTime} needs coverage${actorName ? ` (logged by ${actorName})` : ""}.`);
   return shift;
 }
@@ -304,8 +314,8 @@ export async function assignCoverage(shiftId: number, coverUserId: number, creat
     userId: coverUserId, clinicId: shift.clinicId, date: shift.date, startTime: shift.startTime, endTime: shift.endTime,
     coversShiftId: shift.id, note: "Coverage", createdByUserId,
   });
-  const [clinic] = await db.select({ name: clinics.name }).from(clinics).where(eq(clinics.id, shift.clinicId));
-  await notify([coverUserId], `You're covering a shift at ${clinic?.name ?? "another clinic"}`, `${shift.date}, ${shift.startTime}–${shift.endTime}.`);
+  const where = shift.clinicId ? `at ${await clinicLabel(db, shift.clinicId)}` : "(remote)";
+  await notify([coverUserId], `You're covering a shift ${where}`, `${shift.date}, ${shift.startTime}–${shift.endTime}.`);
   return { id: res?.[0]?.insertId as number };
 }
 
@@ -461,7 +471,7 @@ export async function getMyDay(userId: number) {
       ? db.select().from(jobDuties).where(and(eq(jobDuties.jobRoleId, jobRoleId), eq(jobDuties.active, true))).orderBy(asc(jobDuties.sortOrder), asc(jobDuties.id))
       : Promise.resolve([]),
     db.select().from(dutyCompletions).where(and(eq(dutyCompletions.userId, userId), inArray(dutyCompletions.periodKey, keys))),
-    db.select({ shift: shifts, clinicName: clinics.name }).from(shifts).innerJoin(clinics, eq(clinics.id, shifts.clinicId))
+    db.select({ shift: shifts, clinicName: clinics.name }).from(shifts).leftJoin(clinics, eq(clinics.id, shifts.clinicId))
       .where(and(eq(shifts.userId, userId), eq(shifts.date, today))).orderBy(asc(shifts.startTime)),
     db.select().from(timePunches).where(and(eq(timePunches.userId, userId), eq(timePunches.workDate, today))).orderBy(asc(timePunches.clockInAt)),
   ]);
@@ -478,7 +488,7 @@ export async function getMyDay(userId: number) {
     jobRole: profileRow?.jobRole ?? null,
     homeClinicName: profileRow?.clinicName ?? null,
     duties: duties.map((d) => ({ ...d, done: doneIds.has(d.id) })),
-    shifts: todaysShifts.map((s) => ({ ...s.shift, clinicName: s.clinicName })),
+    shifts: todaysShifts.map((s) => ({ ...s.shift, clinicName: s.clinicName ?? REMOTE_LABEL })),
     punches,
     openPunch: punches.find((p) => !p.clockOutAt) ?? null,
   };
@@ -504,11 +514,11 @@ export async function toggleDuty(userId: number, dutyId: number, done: boolean):
 export async function getMySchedule(userId: number, from: string, to: string) {
   const db = await requireDb();
   const [shiftRows, timeOff] = await Promise.all([
-    db.select({ shift: shifts, clinicName: clinics.name }).from(shifts).innerJoin(clinics, eq(clinics.id, shifts.clinicId))
+    db.select({ shift: shifts, clinicName: clinics.name }).from(shifts).leftJoin(clinics, eq(clinics.id, shifts.clinicId))
       .where(and(eq(shifts.userId, userId), gte(shifts.date, from), lte(shifts.date, to))).orderBy(asc(shifts.date), asc(shifts.startTime)),
     listTimeOff({ userId }),
   ]);
-  return { shifts: shiftRows.map((s) => ({ ...s.shift, clinicName: s.clinicName })), timeOff };
+  return { shifts: shiftRows.map((s) => ({ ...s.shift, clinicName: s.clinicName ?? REMOTE_LABEL })), timeOff };
 }
 
 // ---- Today board ----
@@ -543,7 +553,10 @@ export async function getDayBoard(date: string) {
   return {
     date,
     pendingTimeOff: Number(pendingTimeOff[0]?.n ?? 0),
-    clinics: allClinics.map((c) => ({ id: c.id, name: c.name, shifts: rows.filter((r) => r.clinicId === c.id) })),
+    clinics: [
+      ...allClinics.map((c) => ({ id: c.id as number | null, name: c.name, shifts: rows.filter((r) => r.clinicId === c.id) })),
+      ...(rows.some((r) => !r.clinicId) ? [{ id: null, name: REMOTE_LABEL, shifts: rows.filter((r) => !r.clinicId) }] : []),
+    ],
   };
 }
 

@@ -52,7 +52,7 @@ export function TodayTab({ onOpenTimeOff }: { onOpenTimeOff: () => void }) {
       {board.isLoading && <Loader2 className="animate-spin text-slate-400" />}
       <div className="grid md:grid-cols-2 gap-4">
         {(board.data?.clinics || []).map((c) => (
-          <div key={c.id} className="bg-white rounded-3xl border border-slate-200 p-5">
+          <div key={c.id ?? "remote"} className="bg-white rounded-3xl border border-slate-200 p-5">
             <h3 className="flex items-center gap-2 font-bold tracking-tight text-slate-900"><Building2 size={16} className="text-slate-400" /> {c.name}
               <span className="ml-auto text-xs font-medium text-slate-400">{c.shifts.filter((s) => s.status === "scheduled").length} on shift</span>
             </h3>

@@ -6,7 +6,8 @@ import { addDays, fmtDay, fmtDuration, fmtTime, localDateStr, shiftMinutes, week
 import { CoverageModal, type CoverageTarget } from "./CoverageModal";
 import { Field, Modal, btnGhost, btnPrimary, inputCls } from "./ui";
 
-interface ShiftDraft { id?: number; userId: number; clinicId: number; date: string; startTime: string; endTime: string; note: string; status?: string; covered?: boolean }
+// clinicId null = a remote shift.
+interface ShiftDraft { id?: number; userId: number; clinicId: number | null; date: string; startTime: string; endTime: string; note: string; status?: string; covered?: boolean }
 
 export function ScheduleTab() {
   const utils = trpc.useUtils();
@@ -44,7 +45,8 @@ export function ScheduleTab() {
     const p = people.data?.find((x) => x.userId === userId);
     // Default to the person's usual hours: reuse their most recent shift this week if there is one.
     const last = shifts.filter((s) => s.userId === userId).slice(-1)[0];
-    setDraft({ userId, date, clinicId: clinicId ?? last?.clinicId ?? p?.homeClinicId ?? clinics.data?.[0]?.id ?? 0, startTime: last?.startTime ?? "08:00", endTime: last?.endTime ?? "17:00", note: "" });
+    const where = clinicId ?? (last ? last.clinicId : p?.profileId ? p.homeClinicId : clinics.data?.[0]?.id ?? null);
+    setDraft({ userId, date, clinicId: where, startTime: last?.startTime ?? "08:00", endTime: last?.endTime ?? "17:00", note: "" });
   };
 
   return (
@@ -130,8 +132,9 @@ export function ScheduleTab() {
             </Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Clinic">
-                <select value={draft.clinicId} onChange={(e) => setDraft({ ...draft, clinicId: Number(e.target.value) })} className={inputCls}>
+                <select value={draft.clinicId ?? ""} onChange={(e) => setDraft({ ...draft, clinicId: e.target.value ? Number(e.target.value) : null })} className={inputCls}>
                   {(clinics.data || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  <option value="">Remote (no clinic)</option>
                 </select>
               </Field>
               <Field label="Date"><input type="date" required value={draft.date} onChange={(e) => setDraft({ ...draft, date: e.target.value })} className={inputCls} /></Field>
@@ -139,7 +142,7 @@ export function ScheduleTab() {
               <Field label="End"><input type="time" required value={draft.endTime} onChange={(e) => setDraft({ ...draft, endTime: e.target.value })} className={inputCls} /></Field>
             </div>
             <Field label="Note (optional)"><input value={draft.note} onChange={(e) => setDraft({ ...draft, note: e.target.value })} className={inputCls} /></Field>
-            <button type="submit" disabled={save.isPending || !draft.clinicId} className={`${btnPrimary} w-full`}>{save.isPending ? "Saving…" : "Save shift"}</button>
+            <button type="submit" disabled={save.isPending} className={`${btnPrimary} w-full`}>{save.isPending ? "Saving…" : "Save shift"}</button>
           </form>
 
           {draft.id && (
