@@ -13,6 +13,8 @@ import { openSecret, sealSecret } from "./secretBox";
 import { buildPhoneIndex, type WorkspaceActor, audit } from "./workspaceDb";
 
 const API = "https://platform.ringcentral.com";
+/** On AWS this app has no internet access; RingCentral is reached through this relay (infra/ringcentral-relay). */
+const RELAY_FUNCTION = "ccm-ringcentral-relay";
 const CONFIG_KEY = "ringcentral_sync";
 const STATE_KEY = "ringcentral_sync_state";
 /** First run looks this far back. */
@@ -63,6 +65,25 @@ export async function getSyncStatus() {
 
 // ---- RingCentral API ----
 
+let lambdaClient: import("@aws-sdk/client-lambda").LambdaClient | null = null;
+
+/**
+ * fetch() for RingCentral. On Lambda (inside the VPC, no internet) the request goes through the
+ * RingCentral-only relay via the private Lambda endpoint; locally it's a plain fetch.
+ */
+async function rcFetch(url: string, init: { method?: "GET" | "POST"; headers?: Record<string, string>; body?: string } = {}): Promise<Response> {
+  if (!process.env.AWS_LAMBDA_FUNCTION_NAME) return fetch(url, init);
+  const { LambdaClient, InvokeCommand } = await import("@aws-sdk/client-lambda");
+  lambdaClient ??= new LambdaClient({ region: process.env.AWS_REGION ?? "us-east-1" });
+  const out = await lambdaClient.send(new InvokeCommand({
+    FunctionName: RELAY_FUNCTION,
+    Payload: new TextEncoder().encode(JSON.stringify({ url, method: init.method ?? "GET", headers: init.headers ?? {}, body: init.body ?? null })),
+  }));
+  if (out.FunctionError || !out.Payload) throw new RcError("The RingCentral relay failed.", 502);
+  const r = JSON.parse(new TextDecoder().decode(out.Payload)) as { status: number; headers?: Record<string, string>; body: string };
+  return new Response([204, 205, 304].includes(r.status) ? null : r.body, { status: r.status, headers: r.headers });
+}
+
 let tokenCache: { clientId: string; token: string; expiresAt: number } | null = null;
 let extCache: { at: number; byId: Map<string, { name: string; email: string | null }> } | null = null;
 
@@ -72,13 +93,13 @@ class RcError extends Error {
 
 async function accessToken(cfg: { clientId: string; clientSecret: string; jwt: string }): Promise<string> {
   if (tokenCache && tokenCache.clientId === cfg.clientId && tokenCache.expiresAt > Date.now() + 60_000) return tokenCache.token;
-  const res = await fetch(`${API}/restapi/oauth/token`, {
+  const res = await rcFetch(`${API}/restapi/oauth/token`, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       Authorization: `Basic ${Buffer.from(`${cfg.clientId}:${cfg.clientSecret}`).toString("base64")}`,
     },
-    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: cfg.jwt }),
+    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: cfg.jwt }).toString(),
   });
   const body = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; error_description?: string; message?: string };
   if (!res.ok || !body.access_token) {
@@ -89,7 +110,7 @@ async function accessToken(cfg: { clientId: string; clientSecret: string; jwt: s
 }
 
 async function rcGet<T>(token: string, path: string): Promise<T> {
-  const res = await fetch(`${API}${path}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
+  const res = await rcFetch(`${API}${path}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
   if (res.status === 429) throw new RcError("RingCentral rate limit reached; the next run will continue.", 429);
   const body = (await res.json().catch(() => ({}))) as T & { message?: string; errorCode?: string };
   if (!res.ok) {
@@ -182,7 +203,7 @@ export async function runRingCentralSync(opts: { maxRequests: number; maxMs: num
       let complete = false;
       for (let page = 1; requests < opts.maxRequests && Date.now() - started < opts.maxMs; page++) {
         const r = await rcGet<{ records: unknown[]; navigation?: { nextPage?: unknown } }>(token,
-          `/restapi/v1.0/account/~/call-log?view=Detailed&type=Voice&perPage=1000&page=${page}&dateFrom=${encodeURIComponent(from.toISOString())}&dateTo=${encodeURIComponent(to.toISOString())}`);
+          `/restapi/v1.0/account/~/call-log?view=Detailed&type=Voice&perPage=500&page=${page}&dateFrom=${encodeURIComponent(from.toISOString())}&dateTo=${encodeURIComponent(to.toISOString())}`);
         requests++;
         records.push(...(r.records ?? []));
         if (!r.navigation?.nextPage) { complete = true; break; }
