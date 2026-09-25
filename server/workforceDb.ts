@@ -6,7 +6,7 @@ import { randomUUID } from "crypto";
 import { getDb } from "./db";
 import {
   users, clinics, notifications, jobRoles, jobDuties, staffProfiles, shifts,
-  timeOffRequests, timePunches, dutyCompletions, performanceNotes,
+  timeOffRequests, timePunches, dutyCompletions, performanceNotes, providers,
 } from "../drizzle/schema";
 import {
   LATE_GRACE_MINUTES, MA_ROLE_TEMPLATE, addDays, attendanceTracked, localDateStr, localMinutes,
@@ -647,33 +647,39 @@ export async function addEmployee(input: { name: string; jobRoleId?: number | nu
 export async function getTeamWeek(from: string, to: string) {
   const db = await requireDb();
   const today = localDateStr();
-  const [shiftRows, offRows, openNow, allClinics, profiles] = await Promise.all([
-    db.select({ id: shifts.id, userId: shifts.userId, clinicId: shifts.clinicId, date: shifts.date, startTime: shifts.startTime, endTime: shifts.endTime, status: shifts.status, userName: users.name })
+  const [shiftRows, offRows, openNow, allClinics, profiles, providerLogins] = await Promise.all([
+    db.select({ id: shifts.id, userId: shifts.userId, clinicId: shifts.clinicId, date: shifts.date, startTime: shifts.startTime, endTime: shifts.endTime, status: shifts.status, userName: users.name, userRole: users.role })
       .from(shifts).innerJoin(users, eq(users.id, shifts.userId))
       .where(and(gte(shifts.date, from), lte(shifts.date, to)))
       .orderBy(asc(shifts.date), asc(shifts.startTime)),
-    db.select({ userId: timeOffRequests.userId, startDate: timeOffRequests.startDate, endDate: timeOffRequests.endDate, userName: users.name })
+    db.select({ userId: timeOffRequests.userId, startDate: timeOffRequests.startDate, endDate: timeOffRequests.endDate, userName: users.name, userRole: users.role })
       .from(timeOffRequests).innerJoin(users, eq(users.id, timeOffRequests.userId))
       .where(and(eq(timeOffRequests.status, "approved"), lte(timeOffRequests.startDate, to), gte(timeOffRequests.endDate, from))),
-    db.select({ userId: timePunches.userId, clinicId: timePunches.clinicId, userName: users.name })
+    db.select({ userId: timePunches.userId, clinicId: timePunches.clinicId, userName: users.name, userRole: users.role })
       .from(timePunches).innerJoin(users, eq(users.id, timePunches.userId))
       .where(and(eq(timePunches.workDate, today), isNull(timePunches.clockOutAt))),
     db.select({ id: clinics.id, name: clinics.name }).from(clinics).orderBy(asc(clinics.name)),
     db.select({ userId: staffProfiles.userId, homeClinicId: staffProfiles.homeClinicId, jobRoleName: jobRoles.name })
       .from(staffProfiles).leftJoin(jobRoles, eq(jobRoles.id, staffProfiles.jobRoleId)),
+    db.select({ userId: providers.userId }).from(providers).where(isNotNull(providers.userId)),
   ]);
   const profileBy = new Map(profiles.map((p) => [p.userId, p]));
+  // Providers are listed apart from the rest of the team: linked to a provider record,
+  // a provider login, or the "Provider" job role (Dr. Mansour is an admin who also sees patients).
+  const providerIds = new Set(providerLogins.map((p) => p.userId));
+  const isProvider = (userId: number, role: string | null) =>
+    providerIds.has(userId) || role === "provider" || profileBy.get(userId)?.jobRoleName === "Provider";
   const todayShiftEnd = new Map(shiftRows.filter((s) => s.date === today && s.status === "scheduled").map((s) => [s.userId, s.endTime]));
 
   // One row per person who has a shift or approved time off in the range.
-  const people = new Map<number, { userId: number; name: string; jobRoleName: string | null; homeClinicId: number | null }>();
-  const addPerson = (userId: number, name: string | null) => {
+  const people = new Map<number, { userId: number; name: string; jobRoleName: string | null; homeClinicId: number | null; isProvider: boolean }>();
+  const addPerson = (userId: number, name: string | null, role: string | null) => {
     if (people.has(userId)) return;
     const p = profileBy.get(userId);
-    people.set(userId, { userId, name: name ?? "Unknown", jobRoleName: p?.jobRoleName ?? null, homeClinicId: p?.homeClinicId ?? null });
+    people.set(userId, { userId, name: name ?? "Unknown", jobRoleName: p?.jobRoleName ?? null, homeClinicId: p?.homeClinicId ?? null, isProvider: isProvider(userId, role) });
   };
-  shiftRows.forEach((s) => addPerson(s.userId, s.userName));
-  offRows.forEach((o) => addPerson(o.userId, o.userName));
+  shiftRows.forEach((s) => addPerson(s.userId, s.userName, s.userRole));
+  offRows.forEach((o) => addPerson(o.userId, o.userName, o.userRole));
 
   const offDays: { userId: number; date: string }[] = [];
   for (const o of offRows) {
@@ -693,6 +699,7 @@ export async function getTeamWeek(from: string, to: string) {
       name: o.userName ?? "Unknown",
       clinicId: o.clinicId ?? profileBy.get(o.userId)?.homeClinicId ?? null,
       jobRoleName: profileBy.get(o.userId)?.jobRoleName ?? null,
+      isProvider: isProvider(o.userId, o.userRole),
       until: todayShiftEnd.get(o.userId) ?? null,
     })),
   };
