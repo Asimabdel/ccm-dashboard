@@ -46,5 +46,10 @@ export const handler = async (event: any, context: any) => {
     const { runWorkspaceMigration } = await import("../workspaceMigration");
     return { migrated: "workspace", applied: await runWorkspaceMigration() };
   }
+  // Every 10 minutes from an EventBridge schedule (IAM-only, same reasoning as __migrate).
+  if (event && event.__job === "ringcentral-sync" && !event.requestContext && !event.version) {
+    const { runRingCentralSync } = await import("../ringcentralSync");
+    return runRingCentralSync({ maxRequests: 8, maxMs: 22_000, manual: false });
+  }
   return httpHandler(event, context);
 };

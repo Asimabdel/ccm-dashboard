@@ -73,3 +73,45 @@ export function parseRingCentralCall(call: Record<string, unknown> | null | unde
   const result = [call.result, call.callStatus, call.telephonyStatus].find((x) => typeof x === "string" && x) as string | undefined;
   return { sessionId: sessionId ?? null, direction: dir, otherNumber: normalizePhone(other), startedAt, durationSec, result: result ?? null };
 }
+
+/** One record from RingCentral's company call log, reduced to what MyPCP keeps. */
+export interface MappedCallLogRecord {
+  /** Every id RingCentral gives the call; any match means "same call". The first is stored. */
+  ids: string[];
+  direction: "outbound" | "inbound";
+  otherNumber: string | null;
+  startedAt: Date;
+  durationSec: number;
+  result: string | null;
+  extensionId: string | null;
+}
+
+type RcParty = { phoneNumber?: string; extensionNumber?: string; name?: string } | undefined;
+interface RcCallLogRecord {
+  id?: string; sessionId?: string; telephonySessionId?: string;
+  startTime?: string; duration?: number; direction?: string; result?: string;
+  from?: RcParty; to?: RcParty;
+  extension?: { id?: string | number };
+  legs?: { extension?: { id?: string | number } }[];
+}
+
+/**
+ * Map a call-log record (account-level, Detailed view). Internal extension-to-extension
+ * calls have no outside number and come back with otherNumber = null.
+ */
+export function mapCallLogRecord(r: RcCallLogRecord): MappedCallLogRecord | null {
+  if (!r || !r.startTime) return null;
+  const direction = String(r.direction ?? "").toLowerCase().startsWith("in") ? "inbound" : "outbound";
+  const party = direction === "outbound" ? r.to : r.from;
+  const ext = r.extension?.id ?? r.legs?.find((l) => l.extension?.id != null)?.extension?.id;
+  const ids = [r.telephonySessionId, r.sessionId, r.id].filter((x): x is string => typeof x === "string" && x.length > 0);
+  return {
+    ids,
+    direction,
+    otherNumber: normalizePhone(party?.phoneNumber),
+    startedAt: new Date(r.startTime),
+    durationSec: Math.max(0, Math.round(Number(r.duration ?? 0))),
+    result: r.result ?? null,
+    extensionId: ext != null ? String(ext) : null,
+  };
+}

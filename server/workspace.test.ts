@@ -21,7 +21,7 @@ import {
   type ScheduleVisit,
 } from "../shared/workspace";
 import { appointmentKey } from "./workspaceDb";
-import { formatPhone, normalizePhone, parseRingCentralCall } from "../shared/phone";
+import { formatPhone, mapCallLogRecord, normalizePhone, parseRingCentralCall } from "../shared/phone";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
 
@@ -336,5 +336,34 @@ describe("RingCentral phone", () => {
 
   it("rejects a client secret-looking value or junk as the client ID", async () => {
     await expect(appRouter.createCaller(ctxFor("admin")).workspace.phone.saveConfig({ enabled: true, clientId: "abc def/ghi", allowTexting: false })).rejects.toThrow();
+  });
+});
+
+describe("RingCentral call-log sync", () => {
+  it("reads outbound, inbound and internal call-log records", () => {
+    const out = mapCallLogRecord({ id: "r1", telephonySessionId: "t1", sessionId: "s1", startTime: "2026-09-25T15:00:00.000Z", duration: 95, direction: "Outbound", result: "Call connected", from: { phoneNumber: "+12815550100", extensionNumber: "101" }, to: { phoneNumber: "+17135551234" }, extension: { id: 555 } });
+    expect(out).toMatchObject({ ids: ["t1", "s1", "r1"], direction: "outbound", otherNumber: "7135551234", durationSec: 95, extensionId: "555" });
+    const inbound = mapCallLogRecord({ id: "r2", startTime: "2026-09-25T16:00:00.000Z", direction: "Inbound", from: { phoneNumber: "(281) 555-0000" }, to: { phoneNumber: "+12815550100" }, legs: [{}, { extension: { id: 777 } }] });
+    expect(inbound).toMatchObject({ direction: "inbound", otherNumber: "2815550000", extensionId: "777" });
+    const internal = mapCallLogRecord({ id: "r3", startTime: "2026-09-25T16:00:00.000Z", direction: "Outbound", to: { extensionNumber: "102" } });
+    expect(internal!.otherNumber).toBeNull();
+    expect(mapCallLogRecord({})).toBeNull();
+  });
+
+  it("encrypts stored credentials so the database never holds them in the clear", async () => {
+    const { ENV } = await import("./_core/env");
+    if (!ENV.cookieSecret) return; // no server secret in this environment
+    const { sealSecret, openSecret } = await import("./secretBox");
+    const sealed = sealSecret("super-secret-jwt");
+    expect(sealed).not.toContain("super-secret-jwt");
+    expect(openSecret(sealed)).toBe("super-secret-jwt");
+    expect(sealSecret("super-secret-jwt")).not.toBe(sealed); // fresh IV each time
+  });
+
+  it("is admin-only", async () => {
+    const fd = appRouter.createCaller(ctxFor("front_desk"));
+    await expect(fd.workspace.phone.syncStatus()).rejects.toThrow(/admin/);
+    await expect(fd.workspace.phone.saveSync({ enabled: true, clientId: "abc", clientSecret: "x", jwt: "y" })).rejects.toThrow(/admin/);
+    await expect(fd.workspace.phone.syncNow()).rejects.toThrow(/admin/);
   });
 });

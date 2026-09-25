@@ -841,6 +841,21 @@ async function loadScheduleSubjects(): Promise<Map<string, ScheduleSubject>> {
   return subjects;
 }
 
+/** Every known patient phone number (last 10 digits): CCM roster first, then the imported schedule. */
+export async function buildPhoneIndex(): Promise<Map<string, { key: string; patientId: number | null; name: string }>> {
+  const d = await db();
+  const out = new Map<string, { key: string; patientId: number | null; name: string }>();
+  for (const p of await d.select({ id: patients.id, name: patients.name, phoneNumber: patients.phoneNumber }).from(patients)) {
+    const n = normalizePhone(p.phoneNumber);
+    if (n && !out.has(n)) out.set(n, { key: `p:${p.id}`, patientId: p.id, name: p.name });
+  }
+  for (const s of Array.from((await loadScheduleSubjects()).values())) {
+    const n = normalizePhone(s.phone);
+    if (n && !out.has(n)) out.set(n, { key: s.key, patientId: s.patientId, name: s.name });
+  }
+  return out;
+}
+
 /** Who a phone number belongs to: a CCM-roster patient first, then anyone on the imported schedule. */
 export async function findSubjectByPhone(phone: string): Promise<{ key: string; patientId: number | null; name: string } | null> {
   const d = await db();

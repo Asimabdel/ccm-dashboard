@@ -16,6 +16,7 @@ import {
 } from "../../shared/workspace";
 import * as ws from "../workspaceDb";
 import * as phone from "../phoneDb";
+import * as rcSync from "../ringcentralSync";
 import { CALL_OUTCOME_LIST } from "../../shared/phone";
 
 // Every Workspace procedure resolves an actor first: who is calling and which
@@ -263,6 +264,30 @@ export const workspaceRouter = router({
     forPatient: protectedProcedure.input(z.number().int().positive()).query(async ({ ctx, input }) => {
       await actorFor(ctx, "patientFull");
       return phone.callsForPatient(input);
+    }),
+    // Call-log sync (calls made outside MyPCP). Admin only; secrets are write-only.
+    syncStatus: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "tasks");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can see the RingCentral call-log sync." });
+      return rcSync.getSyncStatus();
+    }),
+    saveSync: protectedProcedure
+      .input(z.object({
+        enabled: z.boolean(),
+        clientId: z.string().trim().max(120).regex(/^[A-Za-z0-9_-]*$/, "That doesn't look like a RingCentral client ID.").nullish(),
+        clientSecret: z.string().trim().max(200).nullish(),
+        jwt: z.string().trim().max(4000).nullish(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "tasks");
+        if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can change the RingCentral call-log sync." });
+        return rcSync.saveSyncConfig(actor, input);
+      }),
+    syncNow: protectedProcedure.mutation(async ({ ctx }) => {
+      await actorFor(ctx, "tasks");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can run the RingCentral call-log sync." });
+      // Kept under API Gateway's 30s limit; the schedule does the heavy lifting.
+      return rcSync.runRingCentralSync({ maxRequests: 4, maxMs: 18_000, manual: true });
     }),
   }),
 

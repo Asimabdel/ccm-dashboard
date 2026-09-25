@@ -5,6 +5,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { Btn, ErrorNote, Loading, PageHeader, Panel, inputCls } from "@/components/workspace/ui";
 import { useRingCentral } from "@/components/phone/ringcentralStore";
+import { CallLogSyncCard } from "@/components/phone/CallLogSyncCard";
 import { trpc } from "@/lib/trpc";
 
 const REDIRECT_URI = "https://apps.ringcentral.com/integration/ringcentral-embeddable/latest/redirect.html";
@@ -82,6 +83,8 @@ export default function IntegrationsPage() {
               <li>Each person signs in to the phone once with their own RingCentral login. Their calls go through your RingCentral account, which your BAA covers.</li>
             </ol>
           </Panel>
+
+          <CallLogSyncCard />
         </div>
       )}
     </CCMDashboardLayout>

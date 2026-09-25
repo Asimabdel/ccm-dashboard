@@ -1,6 +1,6 @@
 // RingCentral: the practice's connection settings and the log of calls made or taken
 // through the phone built into the app. Numbers are matched to patients here.
-import { and, desc, eq, gte, inArray } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import { getDb } from "./db";
 import { appSettings, opportunityActions, phoneCalls, users } from "../drizzle/schema";
 import { CLOSING_OUTCOMES, DEFAULT_RINGCENTRAL, normalizePhone, type CallOutcome, type RingCentralSettings } from "../shared/phone";
@@ -50,6 +50,21 @@ export async function logCall(
   }
   // The row the call was started from wins; otherwise look the number up.
   const ctx = input.context ?? {};
+  // The call-log sync may have stored this call already (same number and direction, within a
+  // few minutes): claim that row instead of adding a second one.
+  const [synced] = await d.select().from(phoneCalls).where(and(
+    eq(phoneCalls.phoneNumber, phone), eq(phoneCalls.direction, input.direction), eq(phoneCalls.source, "ringcentral"),
+    gte(phoneCalls.startedAt, new Date(input.startedAt.getTime() - 3 * 60_000)), lte(phoneCalls.startedAt, new Date(input.startedAt.getTime() + 3 * 60_000)),
+  )).limit(1);
+  if (synced) {
+    await d.update(phoneCalls).set({
+      userId: synced.userId ?? actor.id,
+      source: ctx.source?.slice(0, 40) ?? synced.source,
+      ...(ctx.subjectKey ? { subjectKey: ctx.subjectKey, patientId: ctx.patientId ?? synced.patientId } : {}),
+      ...(ctx.name ? { contactName: ctx.name } : {}),
+    }).where(eq(phoneCalls.id, synced.id));
+    return { id: synced.id, contactName: ctx.name ?? synced.contactName, duplicate: false };
+  }
   const match = ctx.subjectKey || ctx.patientId ? null : await findSubjectByPhone(phone);
   const patientId = ctx.patientId ?? match?.patientId ?? null;
   const subjectKey = ctx.subjectKey ?? (ctx.patientId ? `p:${ctx.patientId}` : null) ?? match?.key ?? null;
@@ -84,7 +99,7 @@ export async function setCallOutcome(actor: WorkspaceActor, input: { callId: num
 export async function callsForPatient(patientId: number) {
   const d = await db();
   return d
-    .select({ id: phoneCalls.id, direction: phoneCalls.direction, startedAt: phoneCalls.startedAt, durationSec: phoneCalls.durationSec, result: phoneCalls.result, outcome: phoneCalls.outcome, note: phoneCalls.note, userName: users.name })
+    .select({ id: phoneCalls.id, direction: phoneCalls.direction, startedAt: phoneCalls.startedAt, durationSec: phoneCalls.durationSec, result: phoneCalls.result, outcome: phoneCalls.outcome, note: phoneCalls.note, userName: users.name, rcExtensionName: phoneCalls.rcExtensionName, source: phoneCalls.source })
     .from(phoneCalls)
     .leftJoin(users, eq(users.id, phoneCalls.userId))
     .where(eq(phoneCalls.patientId, patientId))

@@ -863,7 +863,8 @@ export const appSettings = mysqlTable("appSettings", {
  */
 export const phoneCalls = mysqlTable("phoneCalls", {
   id: int("id").autoincrement().primaryKey(),
-  userId: int("userId").references(() => users.id).notNull(),
+  /** MyPCP user who made/took it; null when the call came from the RingCentral sync and the extension isn't a MyPCP user. */
+  userId: int("userId").references(() => users.id),
   direction: mysqlEnum("direction", ["outbound", "inbound"]).notNull(),
   /** Last 10 digits of the other party's number. */
   phoneNumber: varchar("phoneNumber", { length: 20 }).notNull(),
@@ -880,6 +881,8 @@ export const phoneCalls = mysqlTable("phoneCalls", {
   /** Where the call was started from, e.g. "schedule_fill", "reach_out", "patient". */
   source: varchar("source", { length: 40 }),
   rcSessionId: varchar("rcSessionId", { length: 120 }).unique(),
+  /** Name of the RingCentral extension, for calls pulled in by the call-log sync. */
+  rcExtensionName: varchar("rcExtensionName", { length: 120 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (t) => ({
   phoneIdx: index("phoneCalls_phone_idx").on(t.phoneNumber),

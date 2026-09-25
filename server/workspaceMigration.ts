@@ -239,6 +239,22 @@ async function upgradeOpportunityActions(db: Db): Promise<string[]> {
   return done;
 }
 
+/** Call-log sync: calls may belong to no MyPCP user, and keep the RingCentral extension name (added 2026-09-25). */
+async function upgradePhoneCalls(db: Db): Promise<string[]> {
+  const cols = await rows<{ c: string; n: string }>(db, sql`SELECT COLUMN_NAME AS c, IS_NULLABLE AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'phoneCalls'`);
+  if (!cols.length) return [];
+  const applied: string[] = [];
+  if (cols.find((c) => c.c === "userId")?.n === "NO") {
+    await db.execute(sql.raw("ALTER TABLE `phoneCalls` MODIFY COLUMN `userId` int NULL"));
+    applied.push("phoneCalls.userId now nullable");
+  }
+  if (!cols.some((c) => c.c === "rcExtensionName")) {
+    await db.execute(sql.raw("ALTER TABLE `phoneCalls` ADD COLUMN `rcExtensionName` varchar(120) NULL AFTER `rcSessionId`"));
+    applied.push("phoneCalls.rcExtensionName added");
+  }
+  return applied;
+}
+
 /** Remote shifts: a shift may have no clinic (added 2026-09-25). */
 async function upgradeShifts(db: Db): Promise<string[]> {
   const cols = await rows<{ n: string }>(db, sql`SELECT IS_NULLABLE AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'shifts' AND COLUMN_NAME = 'clinicId'`);
@@ -323,6 +339,7 @@ export async function runWorkspaceMigration(): Promise<string[]> {
   applied.push(...(await upgradeOpportunityActions(db)));
   applied.push(...(await upgradeStaffProfiles(db)));
   applied.push(...(await upgradeShifts(db)));
+  applied.push(...(await upgradePhoneCalls(db)));
   const seeded = await seedPlaybooksIfEmpty(db);
   if (seeded) applied.push(seeded);
   return applied;

@@ -212,12 +212,12 @@ function CallLog({ patientId }: { patientId: number }) {
   if (!calls.data?.length) return null;
   const dur = (s: number) => (s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`);
   return (
-    <Panel title="Calls" subtitle="Through the RingCentral phone in MyPCP" className="lg:col-span-2" bodyClassName="p-0">
+    <Panel title="Calls" subtitle="From RingCentral — calls made in MyPCP and on your other RingCentral phones" className="lg:col-span-2" bodyClassName="p-0">
       <ul className="divide-y divide-slate-100 dark:divide-slate-700">
         {calls.data.slice(0, 10).map((c) => (
           <li key={c.id} className="flex flex-wrap items-center gap-x-4 gap-y-0.5 px-4 py-2.5 text-sm">
             <span className="w-32 text-slate-700 dark:text-slate-200">{fmtShortDate(c.startedAt)}</span>
-            <span className="text-slate-500">{c.direction === "outbound" ? "Called by" : "Called in to"} {c.userName ?? "staff"} · {dur(c.durationSec)}</span>
+            <span className="text-slate-500">{c.direction === "outbound" ? "Called by" : "Called in to"} {c.userName ?? c.rcExtensionName ?? "staff"}{c.source === "ringcentral" ? " (RingCentral)" : ""} · {dur(c.durationSec)}</span>
             <span className="font-medium text-slate-800 dark:text-slate-100">{c.outcome ? CALL_OUTCOMES[c.outcome as CallOutcome] ?? c.outcome : c.result ?? ""}</span>
             {c.note && <span className="basis-full text-xs text-slate-500 pl-36">{c.note}</span>}
           </li>
