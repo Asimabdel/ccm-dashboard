@@ -16,6 +16,7 @@ import {
   AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction,
 } from "@/components/ui/alert-dialog";
 import { PatientFormDialog, type PatientLike } from "@/components/PatientFormDialog";
+import { PhoneLink } from "@/components/phone/PhoneLink";
 
 type SortKey = "name" | "provider" | "clinic" | "lastCalled" | "nextAppt" | "status";
 type SortState = { key: SortKey; dir: "asc" | "desc" };
@@ -404,7 +405,7 @@ export default function PatientsPage() {
                         </span>
                       )}
                     </p>
-                    <p className="text-xs text-slate-400">{r.patient.phoneNumber}</p>
+                    <p className="text-xs text-slate-400"><PhoneLink phone={r.patient.phoneNumber} context={{ patientId: r.patient.id, name: r.patient.name, source: "patient" }} /></p>
                   </td>
                   <td className="px-5 py-3">
                     <div className="flex flex-wrap gap-1 max-w-[220px]">

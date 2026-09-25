@@ -9,6 +9,8 @@ import { trpc } from "@/lib/trpc";
 import { addDays, fmtDay, localDateStr } from "@shared/workforce";
 import { FILL_GROUPS, FILL_GROUP_LIST, FILL_LIKELIHOOD_LABELS, WORKSPACE_ROLE_LABELS, type FillGroup, type FillLikelihood } from "@shared/workspace";
 import { cn } from "@/lib/utils";
+import { CALL_OUTCOMES, type CallOutcome } from "@shared/phone";
+import { PhoneLink } from "@/components/phone/PhoneLink";
 
 const MAX_SELECT = 500;
 
@@ -196,7 +198,8 @@ export function FillSchedule({ providerParam, onProvider }: { providerParam: num
                         <td className="px-3 py-2.5 text-slate-600 dark:text-slate-300">{r.reason}</td>
                         <td className="px-3 py-2.5 text-slate-500 hidden md:table-cell whitespace-nowrap">{r.lastSeen ? <>{fmtShortDate(r.lastSeen)}<span className="block text-xs">{r.lastSeenBy}</span></> : "Never seen"}</td>
                         <td className="px-3 py-2.5 text-xs text-slate-500 hidden lg:table-cell whitespace-nowrap">{r.seenCount} visit{r.seenCount === 1 ? "" : "s"}{r.noShows ? ` · ${r.noShows} no-show${r.noShows === 1 ? "" : "s"}` : ""}{r.cancellations ? ` · ${r.cancellations} cancelled` : ""}</td>
-                        <td className="px-3 py-2.5 text-slate-500 hidden lg:table-cell whitespace-nowrap">{r.phoneNumber || <span className="text-amber-600">No phone</span>}</td>
+                        <td className="px-3 py-2.5 text-slate-500 hidden lg:table-cell whitespace-nowrap">{r.phoneNumber ? <PhoneLink phone={r.phoneNumber} context={{ patientId: r.patientId, subjectKey: r.key, name: r.name, source: "schedule_fill" }} className="font-medium text-slate-700 dark:text-slate-200" icon /> : <span className="text-amber-600">No phone</span>}
+                          {r.calls && <span className="block text-[11px] text-slate-400">{r.calls.count} call{r.calls.count === 1 ? "" : "s"} · last {fmtShortDate(r.calls.lastAt)}{r.calls.lastOutcome ? ` · ${CALL_OUTCOMES[r.calls.lastOutcome as CallOutcome] ?? r.calls.lastOutcome}` : ""}</span>}</td>
                         <td className="px-3 py-2.5 text-xs text-slate-500 whitespace-nowrap">{r.lastAction ? `${r.lastAction.replace("_", " ")} ${fmtShortDate(r.lastActionAt)}` : "—"}</td>
                       </tr>
                     ))}

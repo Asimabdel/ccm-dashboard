@@ -16,6 +16,7 @@ import { MedRefillPanel } from "@/components/MedRefillPanel";
 import {
   AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction,
 } from "@/components/ui/alert-dialog";
+import { PhoneLink } from "@/components/phone/PhoneLink";
 
 function Section({ title, icon: Icon, children }: { title: string; icon: React.ElementType; children: React.ReactNode }) {
   return (
@@ -321,7 +322,7 @@ export default function PatientDetailPage({ embedded = false, patientId }: { emb
                   <h2 className="text-2xl font-extrabold tracking-tight text-slate-900">{d.patient.name}</h2>
                 )}
                 <div className="mt-2 flex flex-wrap items-center gap-4 text-sm text-slate-500">
-                  <span className="flex items-center gap-1.5"><Phone size={14} /> {d.patient.phoneNumber}</span>
+                  <span className="flex items-center gap-1.5"><Phone size={14} /> <PhoneLink phone={d.patient.phoneNumber} context={{ patientId: d.patient.id, name: d.patient.name, source: "patient" }} /></span>
                   <span className="flex items-center gap-1.5"><Calendar size={14} /> {fmtDate(d.patient.dateOfBirth)}</span>
                   <span className="flex items-center gap-1.5"><Globe size={14} /> {d.patient.preferredLanguage}</span>
                   <span className="flex items-center gap-1.5"><Shield size={14} /> {d.patient.insurance || "—"}</span>

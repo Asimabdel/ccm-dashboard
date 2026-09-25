@@ -146,6 +146,35 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     INDEX \`playbookVersions_playbook_idx\` (\`playbookId\`),
     CONSTRAINT \`playbookVersions_playbookId_fk\` FOREIGN KEY (\`playbookId\`) REFERENCES \`playbooks\`(\`id\`),
     CONSTRAINT \`playbookVersions_createdByUserId_fk\` FOREIGN KEY (\`createdByUserId\`) REFERENCES \`users\`(\`id\`))` },
+  // Added 2026-09-25: RingCentral connection settings + the call log.
+  { label: "appSettings", sql: `CREATE TABLE IF NOT EXISTS \`appSettings\` (
+    \`key\` varchar(80) PRIMARY KEY,
+    \`value\` json NOT NULL,
+    \`updatedByUserId\` int,
+    \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT \`appSettings_updatedByUserId_fk\` FOREIGN KEY (\`updatedByUserId\`) REFERENCES \`users\`(\`id\`))` },
+  { label: "phoneCalls", sql: `CREATE TABLE IF NOT EXISTS \`phoneCalls\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`userId\` int NOT NULL,
+    \`direction\` ENUM('outbound','inbound') NOT NULL,
+    \`phoneNumber\` varchar(20) NOT NULL,
+    \`patientId\` int,
+    \`subjectKey\` varchar(120),
+    \`contactName\` varchar(255),
+    \`startedAt\` datetime NOT NULL,
+    \`durationSec\` int NOT NULL DEFAULT 0,
+    \`result\` varchar(60),
+    \`outcome\` varchar(30),
+    \`note\` text,
+    \`source\` varchar(40),
+    \`rcSessionId\` varchar(120),
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    UNIQUE KEY \`phoneCalls_rcSessionId_unique\` (\`rcSessionId\`),
+    INDEX \`phoneCalls_phone_idx\` (\`phoneNumber\`),
+    INDEX \`phoneCalls_patient_idx\` (\`patientId\`),
+    INDEX \`phoneCalls_subject_idx\` (\`subjectKey\`),
+    CONSTRAINT \`phoneCalls_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`),
+    CONSTRAINT \`phoneCalls_patientId_fk\` FOREIGN KEY (\`patientId\`) REFERENCES \`patients\`(\`id\`))` },
 ];
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;

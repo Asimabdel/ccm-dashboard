@@ -6,6 +6,7 @@ import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { Loader2, RotateCcw } from "lucide-react";
 import { fmtDate } from "@/lib/ccm";
+import { PhoneLink } from "@/components/phone/PhoneLink";
 
 /** A filtered patient list for an enrollment status (inactive / declined), with a reactivate action. */
 export function EnrollmentPatients({ status, title, emptyText, reactivateLabel, icon: Icon, note }: {
@@ -68,7 +69,7 @@ export function EnrollmentPatients({ status, title, emptyText, reactivateLabel, 
                 <tr key={r.patient.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60">
                   <td className="px-5 py-3 cursor-pointer" onClick={() => setLocation(`/patients/${r.patient.id}`)}>
                     <p className="font-semibold text-slate-800">{r.patient.name}</p>
-                    <p className="text-xs text-slate-400">{r.patient.phoneNumber}</p>
+                    <p className="text-xs text-slate-400"><PhoneLink phone={r.patient.phoneNumber} context={{ patientId: r.patient.id, name: r.patient.name, source: "patient" }} /></p>
                   </td>
                   <td className="px-5 py-3 text-slate-600">{r.providerName || "—"}</td>
                   <td className="px-5 py-3 text-slate-600">{r.clinicName || "—"}</td>

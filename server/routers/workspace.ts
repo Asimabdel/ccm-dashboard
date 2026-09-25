@@ -15,6 +15,8 @@ import {
   type WorkspaceCap,
 } from "../../shared/workspace";
 import * as ws from "../workspaceDb";
+import * as phone from "../phoneDb";
+import { CALL_OUTCOME_LIST } from "../../shared/phone";
 
 // Every Workspace procedure resolves an actor first: who is calling and which
 // clinics they may see. Medical assistants are limited to the clinics they work
@@ -218,6 +220,50 @@ export const workspaceRouter = router({
   openings: protectedProcedure.input(z.object({ clinicId, days: z.number().int().min(0).max(14).default(3) })).query(async ({ ctx, input }) => {
     const actor = await actorFor(ctx, "opportunitiesView");
     return run(() => ws.openings(actor, input));
+  }),
+
+  // RingCentral phone built into the app + the call log.
+  phone: router({
+    config: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "tasks");
+      return phone.getRingCentralSettings();
+    }),
+    saveConfig: protectedProcedure
+      .input(z.object({ enabled: z.boolean(), clientId: z.string().trim().max(120).regex(/^[A-Za-z0-9_-]*$/, "That doesn't look like a RingCentral client ID."), allowTexting: z.boolean() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "tasks");
+        if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can change the RingCentral connection." });
+        return phone.saveRingCentralSettings(actor, input);
+      }),
+    log: protectedProcedure
+      .input(z.object({
+        sessionId: z.string().max(120).nullable(),
+        direction: z.enum(["outbound", "inbound"]),
+        phoneNumber: z.string().min(10).max(20),
+        startedAt: z.date(),
+        durationSec: z.number().int().min(0).max(86_400),
+        result: z.string().max(60).nullable(),
+        context: z.object({
+          patientId: z.number().int().positive().nullish(),
+          subjectKey: z.string().regex(/^(p:\d+|s:.{1,110})$/).nullish(),
+          name: z.string().max(255).nullish(),
+          source: z.string().max(40).nullish(),
+        }).nullish(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "tasks");
+        return run(() => phone.logCall(actor, input));
+      }),
+    outcome: protectedProcedure
+      .input(z.object({ callId: z.number().int().positive(), outcome: z.enum(CALL_OUTCOME_LIST as [string, ...string[]]), note: z.string().max(1000).nullish() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "tasks");
+        return run(() => phone.setCallOutcome(actor, input as Parameters<typeof phone.setCallOutcome>[1]));
+      }),
+    forPatient: protectedProcedure.input(z.number().int().positive()).query(async ({ ctx, input }) => {
+      await actorFor(ctx, "patientFull");
+      return phone.callsForPatient(input);
+    }),
   }),
 
   opportunities: router({

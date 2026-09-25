@@ -12,6 +12,7 @@ import { trpc } from "@/lib/trpc";
 import { addDays, fmtDay, fmtTime, localDateStr } from "@shared/workforce";
 import { OPPORTUNITY_CATEGORY_LIST, OPPORTUNITY_INFO, TASK_CATEGORIES, TASK_CATEGORY_LABELS, WORKSPACE_ROLE_LABELS, type OpportunityCategory } from "@shared/workspace";
 import { cn } from "@/lib/utils";
+import { PhoneLink } from "@/components/phone/PhoneLink";
 
 const TASK_CATEGORY_FOR: Record<OpportunityCategory, string> = {
   missed_appointment: "patient_call",
@@ -217,7 +218,7 @@ function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: nu
                       <td className="px-3 py-2.5 text-slate-600 dark:text-slate-300">{r.reason}</td>
                       <td className="px-3 py-2.5 text-slate-500 hidden md:table-cell">{r.clinicName ?? "—"}{r.providerName ? ` · ${r.providerName}` : ""}</td>
                       <td className="px-3 py-2.5 text-slate-500 hidden lg:table-cell whitespace-nowrap">{fmtShortDate(r.lastOfficeVisit)}</td>
-                      <td className="px-3 py-2.5 text-slate-500 hidden lg:table-cell whitespace-nowrap">{r.phoneNumber || "—"}</td>
+                      <td className="px-3 py-2.5 text-slate-500 hidden lg:table-cell whitespace-nowrap">{r.phoneNumber ? <PhoneLink phone={r.phoneNumber} context={{ patientId: r.patientId, subjectKey: r.key, name: r.name, source: category }} /> : "—"}</td>
                       <td className="px-3 py-2.5 text-xs text-slate-500 whitespace-nowrap">{r.lastAction ? `${r.lastAction.replace("_", " ")} ${fmtShortDate(r.lastActionAt)}` : "—"}</td>
                     </tr>
                   ))}

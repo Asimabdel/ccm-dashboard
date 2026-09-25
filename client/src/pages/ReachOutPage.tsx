@@ -8,6 +8,7 @@ import {
   Loader2, PhoneOutgoing, Phone, Search, Upload, X, PhoneMissed, Voicemail,
   PhoneOff, RotateCcw, CheckCircle2, CalendarCheck, CalendarPlus, ThumbsDown, Ban, MinusCircle,
 } from "lucide-react";
+import { PhoneLink } from "@/components/phone/PhoneLink";
 
 type CallStatus = "not_called" | "no_answer" | "voicemail" | "wrong_number" | "callback" | "reached" | "do_not_call";
 type Outcome = "pending" | "wants_appointment" | "appointment_scheduled" | "already_scheduled" | "not_interested" | "declined";
@@ -174,7 +175,7 @@ export default function ReachOutPage() {
                       {c.dateOfBirth && <div className="text-xs text-slate-400">DOB {new Date(c.dateOfBirth).toLocaleDateString()}</div>}
                     </td>
                     <td className="px-4 py-3">
-                      <a href={`tel:${c.phoneNumber}`} className="inline-flex items-center gap-1.5 text-emerald-700 font-medium hover:underline"><Phone size={13} /> {c.phoneNumber || "—"}</a>
+                      {c.phoneNumber ? <PhoneLink phone={c.phoneNumber} context={{ name: c.name, source: "reach_out" }} className="gap-1.5 text-emerald-700 font-medium"><Phone size={13} /> {c.phoneNumber}</PhoneLink> : <span className="text-slate-400">—</span>}
                     </td>
                     <td className="px-4 py-3 text-slate-500">{c.language || "—"}</td>
                     <td className="px-4 py-3 text-center text-slate-500">{c.attempts || 0}</td>
@@ -230,15 +231,15 @@ function LogCallModal({ contact, onClose, onSave, pending }: { contact: any; onC
         <div className="flex items-start justify-between mb-4">
           <div>
             <h3 className="text-lg font-bold text-slate-900">{contact.name}</h3>
-            <a href={`tel:${contact.phoneNumber}`} className="inline-flex items-center gap-1.5 mt-1 text-emerald-700 font-semibold hover:underline"><Phone size={15} /> {contact.phoneNumber}</a>
+            <PhoneLink phone={contact.phoneNumber} context={{ name: contact.name, source: "reach_out" }} className="gap-1.5 mt-1 text-emerald-700 font-semibold"><Phone size={15} /> {contact.phoneNumber}</PhoneLink>
             {contact.dateOfBirth && <span className="text-xs text-slate-400 ml-2">DOB {new Date(contact.dateOfBirth).toLocaleDateString()}</span>}
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400"><X size={18} /></button>
         </div>
 
-        <a href={`tel:${contact.phoneNumber}`} className="flex items-center justify-center gap-2 w-full py-3 mb-5 rounded-xl bg-emerald-600 text-white font-semibold hover:brightness-110 active:scale-[0.99] transition">
+        <PhoneLink phone={contact.phoneNumber} context={{ name: contact.name, source: "reach_out" }} className="flex justify-center gap-2 w-full py-3 mb-5 rounded-xl bg-emerald-600 text-white font-semibold hover:brightness-110 hover:no-underline active:scale-[0.99] transition">
           <Phone size={16} /> Call {contact.phoneNumber}
-        </a>
+        </PhoneLink>
 
         <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Call result</p>
         <select value={callStatus} onChange={(e) => { const v = e.target.value as CallStatus | ""; setCallStatus(v); if (v !== "reached") setOutcome(""); }}

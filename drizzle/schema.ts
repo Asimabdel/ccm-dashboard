@@ -849,6 +849,44 @@ export const opportunityActions = mysqlTable("opportunityActions", {
   subjectCategoryIdx: index("opportunityActions_subject_cat_idx").on(t.subjectKey, t.category),
 }));
 
+/** Practice-wide settings (e.g. the RingCentral connection), one JSON value per key. */
+export const appSettings = mysqlTable("appSettings", {
+  key: varchar("key", { length: 80 }).primaryKey(),
+  value: json("value").notNull(),
+  updatedByUserId: int("updatedByUserId").references(() => users.id),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+/**
+ * Phone calls made or taken through the RingCentral phone built into the app,
+ * matched to a patient when the number is known. The outcome is what staff record.
+ */
+export const phoneCalls = mysqlTable("phoneCalls", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").references(() => users.id).notNull(),
+  direction: mysqlEnum("direction", ["outbound", "inbound"]).notNull(),
+  /** Last 10 digits of the other party's number. */
+  phoneNumber: varchar("phoneNumber", { length: 20 }).notNull(),
+  patientId: int("patientId").references(() => patients.id),
+  /** Same key the Opportunity Finder uses: "p:<patientId>" or "s:<name>|<dob>". */
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  contactName: varchar("contactName", { length: 255 }),
+  startedAt: datetime("startedAt").notNull(),
+  durationSec: int("durationSec").default(0).notNull(),
+  /** RingCentral's result, e.g. "Call connected", "Voicemail", "Missed". */
+  result: varchar("result", { length: 60 }),
+  outcome: varchar("outcome", { length: 30 }),
+  note: text("note"),
+  /** Where the call was started from, e.g. "schedule_fill", "reach_out", "patient". */
+  source: varchar("source", { length: 40 }),
+  rcSessionId: varchar("rcSessionId", { length: 120 }).unique(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  phoneIdx: index("phoneCalls_phone_idx").on(t.phoneNumber),
+  patientIdx: index("phoneCalls_patient_idx").on(t.patientId),
+  subjectIdx: index("phoneCalls_subject_idx").on(t.subjectKey),
+}));
+
 /** Practice knowledge base (SOPs / workflows). */
 export const playbooks = mysqlTable("playbooks", {
   id: int("id").autoincrement().primaryKey(),

@@ -21,6 +21,7 @@ import {
   type ScheduleVisit,
 } from "../shared/workspace";
 import { appointmentKey } from "./workspaceDb";
+import { formatPhone, normalizePhone, parseRingCentralCall } from "../shared/phone";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
 
@@ -308,5 +309,32 @@ describe("fill a provider's schedule", () => {
     await expect(
       appRouter.createCaller(ctxFor("provider")).workspace.opportunities.fillAct({ providerId: 1, keys: ["p:1"], action: "reviewed" }),
     ).rejects.toThrow(/access/);
+  });
+});
+
+describe("RingCentral phone", () => {
+  it("normalizes US numbers to 10 digits", () => {
+    expect(normalizePhone("(713) 555-1234")).toBe("7135551234");
+    expect(normalizePhone("+1 713.555.1234")).toBe("7135551234");
+    expect(normalizePhone("555-1234")).toBeNull();
+    expect(formatPhone("7135551234")).toBe("(713) 555-1234");
+  });
+
+  it("reads the call RingCentral reports when a call ends", () => {
+    const out = parseRingCentralCall({ direction: "Outbound", to: { phoneNumber: "+17135551234" }, startTime: 1_790_000_000_000, endTime: 1_790_000_095_000, telephonySessionId: "s-1", result: "Call connected" });
+    expect(out).toMatchObject({ direction: "outbound", otherNumber: "7135551234", durationSec: 95, sessionId: "s-1", result: "Call connected" });
+    const inbound = parseRingCentralCall({ direction: "Inbound", from: { phoneNumber: "+12815550000" }, duration: 30 });
+    expect(inbound).toMatchObject({ direction: "inbound", otherNumber: "2815550000", durationSec: 30 });
+    expect(parseRingCentralCall(null)).toBeNull();
+  });
+
+  it("only admins change the connection; MAs can't read a patient's call log", async () => {
+    await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.phone.saveConfig({ enabled: true, clientId: "", allowTexting: false })).rejects.toThrow(/admin/);
+    await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.phone.forPatient(1)).rejects.toThrow(/access/);
+    await expect(appRouter.createCaller(ctxFor("user")).workspace.phone.config()).rejects.toThrow(/access/);
+  });
+
+  it("rejects a client secret-looking value or junk as the client ID", async () => {
+    await expect(appRouter.createCaller(ctxFor("admin")).workspace.phone.saveConfig({ enabled: true, clientId: "abc def/ghi", allowTexting: false })).rejects.toThrow();
   });
 });

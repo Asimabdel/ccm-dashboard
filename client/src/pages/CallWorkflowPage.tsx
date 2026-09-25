@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { phq9Severity, gad7Severity, bhiCompliance } from "@/lib/ccm";
 import { MedRefillPanel } from "@/components/MedRefillPanel";
+import { PhoneLink } from "@/components/phone/PhoneLink";
 
 type Responses = {
   howFeeling: string; newSymptoms: string; medicationAdherence: string; refillsNeeded: string;
@@ -171,7 +172,7 @@ export default function CallWorkflowPage() {
           <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_28px_-18px_rgba(15,23,42,0.18)] p-6">
             <p className="text-xs uppercase tracking-wider text-slate-400 mb-1">Patient</p>
             <h2 className="text-2xl font-bold text-slate-900">{p?.name || <Loader2 className="animate-spin inline" />}</h2>
-            <p className="text-sm text-slate-500 mt-0.5">{p?.dateOfBirth ? `DOB ${new Date(p.dateOfBirth).toLocaleDateString()}` : ""} {p?.phoneNumber ? `· ${p.phoneNumber}` : ""}</p>
+            <p className="text-sm text-slate-500 mt-0.5">{p?.dateOfBirth ? `DOB ${new Date(p.dateOfBirth).toLocaleDateString()}` : ""} {p?.phoneNumber && <>· <PhoneLink phone={p.phoneNumber} context={{ patientId: p.id, name: p.name, source: "ccm_call" }} className="font-medium text-slate-700" /></>}</p>
             <div className="mt-4 flex flex-wrap gap-1.5">
               {conditions.map((c) => <span key={c} className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-[hsl(22_64%_93%)] text-[hsl(17_66%_34%)]">{c}</span>)}
             </div>

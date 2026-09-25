@@ -58,6 +58,7 @@ import {
   type TaskStatus,
 } from "../shared/workspace";
 import { matchProviderId } from "../shared/csvImport";
+import { normalizePhone } from "../shared/phone";
 
 export class WorkspaceError extends Error {
   constructor(
@@ -95,7 +96,8 @@ type AuditAction =
   | "update_appointment"
   | "opportunity_action"
   | "manage_playbook"
-  | "view_patient";
+  | "view_patient"
+  | "manage_access";
 
 export async function audit(actor: WorkspaceActor, action: AuditAction, opts: { entityType?: string; entityId?: number; description?: string } = {}) {
   try {
@@ -839,6 +841,18 @@ async function loadScheduleSubjects(): Promise<Map<string, ScheduleSubject>> {
   return subjects;
 }
 
+/** Who a phone number belongs to: a CCM-roster patient first, then anyone on the imported schedule. */
+export async function findSubjectByPhone(phone: string): Promise<{ key: string; patientId: number | null; name: string } | null> {
+  const d = await db();
+  const roster = await d.select({ id: patients.id, name: patients.name, phoneNumber: patients.phoneNumber }).from(patients);
+  const r = roster.find((p) => normalizePhone(p.phoneNumber) === phone);
+  if (r) return { key: `p:${r.id}`, patientId: r.id, name: r.name };
+  for (const s of Array.from((await loadScheduleSubjects()).values())) {
+    if (normalizePhone(s.phone) === phone) return { key: s.key, patientId: s.patientId, name: s.name };
+  }
+  return null;
+}
+
 function visitDates(visits: ScheduleVisit[], now: Date) {
   let lastSeen: Date | null = null;
   let nextBooked: Date | null = null;
@@ -1115,8 +1129,12 @@ export async function scheduleFill(actor: WorkspaceActor, input: { providerId: n
     const a = actedBy.get(c.key);
     if (a && !input.includeActioned) continue;
     counts[c.group]++;
-    rows.push({ ...c, lastAction: a?.action ?? null, lastActionAt: a?.createdAt ?? null });
+    rows.push({ ...c, lastAction: a?.action ?? null, lastActionAt: a?.createdAt ?? null, calls: null as { count: number; lastAt: Date; lastOutcome: string | null } | null });
   }
+  // Calls made through RingCentral in the last 90 days.
+  const { recentCallsBySubject } = await import("./phoneDb");
+  const calls = await recentCallsBySubject(rows.map((r) => r.key));
+  for (const r of rows) r.calls = calls.get(r.key) ?? null;
   // Ties: most recently seen first, then the most visits.
   rows.sort((a, b) => b.score - a.score || (b.lastSeen?.getTime() ?? 0) - (a.lastSeen?.getTime() ?? 0) || b.seenCount - a.seenCount);
   const [range] = await d.select({ last: sql<string | null>`MAX(${appointments.date})` }).from(appointments);

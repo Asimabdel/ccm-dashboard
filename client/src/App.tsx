@@ -35,6 +35,8 @@ import WorkforcePage from "./pages/WorkforcePage";
 import MyDayPage from "./pages/MyDayPage";
 import MySchedulePage from "./pages/MySchedulePage";
 import TeamSchedulePage from "./pages/TeamSchedulePage";
+import IntegrationsPage from "./pages/IntegrationsPage";
+import { RingCentralPhone } from "./components/phone/RingCentralPhone";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
 
 function Router() {
@@ -71,6 +73,7 @@ function Router() {
       <Route path="/my-day" component={MyDayPage} />
       <Route path="/my-schedule" component={MySchedulePage} />
       <Route path="/team-schedule" component={TeamSchedulePage} />
+      <Route path="/integrations" component={IntegrationsPage} />
       <Route path="/billing" component={BillingPage} />
       <Route path="/follow-ups" component={FollowUpsPage} />
       <Route path="/reports" component={ReportsPage} />
@@ -87,6 +90,8 @@ function App() {
         <TooltipProvider>
           <Toaster />
           <Router />
+          {/* Mounted once for the whole app so a call keeps going while you change pages. */}
+          <RingCentralPhone />
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>

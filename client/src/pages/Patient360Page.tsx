@@ -12,6 +12,8 @@ import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { localDateStr } from "@shared/workforce";
 import { TASK_CATEGORY_LABELS, type TaskCategory } from "@shared/workspace";
 import { cn } from "@/lib/utils";
+import { PhoneLink } from "@/components/phone/PhoneLink";
+import { CALL_OUTCOMES, type CallOutcome } from "@shared/phone";
 
 type Tab = "overview" | "appointments" | "tasks" | "care";
 
@@ -79,7 +81,7 @@ function Patient360({ id }: { id: number }) {
                   <h2 className="text-xl md:text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-50">{p.name}</h2>
                   <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-500 dark:text-slate-400">
                     <span>DOB {fmtDob(p.dateOfBirth)}{age != null ? ` (${age})` : ""}</span>
-                    {p.phoneNumber && <a href={`tel:${p.phoneNumber}`} className="inline-flex items-center gap-1 hover:underline"><Phone size={13} /> {p.phoneNumber}</a>}
+                    {p.phoneNumber && <PhoneLink phone={p.phoneNumber} context={{ patientId: p.id, name: p.name, source: "patient" }}><Phone size={13} /> {p.phoneNumber}</PhoneLink>}
                     {p.clinicName && <span className="inline-flex items-center gap-1"><Building2 size={13} /> {p.clinicName}</span>}
                     {p.providerName && <span className="inline-flex items-center gap-1"><Stethoscope size={13} /> {p.providerName}</span>}
                     {p.preferredLanguage && <span className="inline-flex items-center gap-1"><Globe size={13} /> {p.preferredLanguage}</span>}
@@ -124,6 +126,7 @@ function Patient360({ id }: { id: number }) {
               <Panel title="Open tasks" action={<button className="text-xs font-semibold text-brand hover:underline" onClick={() => setParams({ tab: "tasks" })}>All tasks</button>} bodyClassName="p-0">
                 <TaskList rows={d.openTasks.slice(0, 6)} onOpen={(tid) => setParams({ task: tid })} onNew={() => setTaskOpen(true)} />
               </Panel>
+              {caps?.patientFull && <CallLog patientId={id} />}
               {p.lastOfficeVisit && (
                 <p className="lg:col-span-2 text-xs text-slate-500">Last office visit on record: {fmtShortDate(p.lastOfficeVisit)}. Clinical details (problems, medications, notes) stay in Practice Fusion.</p>
               )}
@@ -200,5 +203,26 @@ function TaskList({ rows, onOpen, onNew }: { rows: Summary["tasks"]; onOpen: (id
         );
       })}
     </ul>
+  );
+}
+
+/** Calls made or taken through the RingCentral phone in MyPCP. Hidden until there are any. */
+function CallLog({ patientId }: { patientId: number }) {
+  const calls = trpc.workspace.phone.forPatient.useQuery(patientId);
+  if (!calls.data?.length) return null;
+  const dur = (s: number) => (s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`);
+  return (
+    <Panel title="Calls" subtitle="Through the RingCentral phone in MyPCP" className="lg:col-span-2" bodyClassName="p-0">
+      <ul className="divide-y divide-slate-100 dark:divide-slate-700">
+        {calls.data.slice(0, 10).map((c) => (
+          <li key={c.id} className="flex flex-wrap items-center gap-x-4 gap-y-0.5 px-4 py-2.5 text-sm">
+            <span className="w-32 text-slate-700 dark:text-slate-200">{fmtShortDate(c.startedAt)}</span>
+            <span className="text-slate-500">{c.direction === "outbound" ? "Called by" : "Called in to"} {c.userName ?? "staff"} · {dur(c.durationSec)}</span>
+            <span className="font-medium text-slate-800 dark:text-slate-100">{c.outcome ? CALL_OUTCOMES[c.outcome as CallOutcome] ?? c.outcome : c.result ?? ""}</span>
+            {c.note && <span className="basis-full text-xs text-slate-500 pl-36">{c.note}</span>}
+          </li>
+        ))}
+      </ul>
+    </Panel>
   );
 }
