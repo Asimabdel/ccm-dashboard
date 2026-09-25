@@ -707,6 +707,168 @@ export function evaluateScheduleOpportunities(visits: ScheduleVisit[], now: Date
 }
 
 // ---------------------------------------------------------------------------
+// Fill a provider's schedule: who is most likely to book with them
+// ---------------------------------------------------------------------------
+
+/** A visit with who it was with and where (the fill finder needs both). */
+export interface FillVisit extends ScheduleVisit {
+  /** "id:<providerId>" when linked to a provider record, else "name:<normalized name>". */
+  providerKey: string | null;
+  providerName: string | null;
+  clinicId: number | null;
+}
+
+export interface ProviderActivity {
+  key: string;
+  name: string;
+  firstVisit: Date;
+  lastSeen: Date | null;
+  seenLast60: number;
+  seenTotal: number;
+  /** False once they've been on the schedule 60+ days but completed few visits lately. */
+  active: boolean;
+  /** Not active, and had a real patient panel (so MAs or staff named on a few visits don't count). */
+  stopped: boolean;
+}
+
+/** Fewer completed visits than this in the last 60 days = no longer really seeing patients. */
+export const FILL_ACTIVE_MIN_VISITS = 10;
+/** Completed visits someone needs on record to count as a provider whose patients were left behind. */
+export const FILL_MIN_PANEL_VISITS = 30;
+
+export function providerActivity(visits: FillVisit[], now: Date = new Date()): Map<string, ProviderActivity> {
+  const since60 = now.getTime() - 60 * DAY;
+  const out = new Map<string, ProviderActivity>();
+  for (const v of visits) {
+    if (!v.providerKey) continue;
+    const a = out.get(v.providerKey) ?? { key: v.providerKey, name: v.providerName ?? "Unknown", firstVisit: v.startsAt, lastSeen: null, seenLast60: 0, seenTotal: 0, active: true, stopped: false };
+    if (v.startsAt < a.firstVisit) a.firstVisit = v.startsAt;
+    if (v.startsAt <= now && SEEN_STATUSES.includes(v.status)) {
+      if (!a.lastSeen || v.startsAt > a.lastSeen) a.lastSeen = v.startsAt;
+      a.seenTotal++;
+      if (v.startsAt.getTime() >= since60) a.seenLast60++;
+    }
+    out.set(v.providerKey, a);
+  }
+  // Brand-new providers aren't judged until they've had 60 days to build a schedule.
+  out.forEach((a) => {
+    a.active = a.firstVisit.getTime() > since60 || a.seenLast60 >= FILL_ACTIVE_MIN_VISITS;
+    a.stopped = !a.active && a.seenTotal >= FILL_MIN_PANEL_VISITS;
+  });
+  return out;
+}
+
+export const FILL_GROUPS = {
+  own_due: {
+    label: "Their patients, due back",
+    description: "Seen by this provider 30+ days ago, not seen by anyone since and nothing booked.",
+  },
+  orphaned: {
+    label: "Patients of providers who stopped",
+    description: "Last seen by a provider who's no longer seeing patients, and not seen by anyone since.",
+  },
+  never_seen: {
+    label: "Booked with them, never came in",
+    description: "Only ever booked with a provider who stopped, and never showed. Weaker leads.",
+  },
+} as const;
+export type FillGroup = keyof typeof FILL_GROUPS;
+export const FILL_GROUP_LIST = Object.keys(FILL_GROUPS) as FillGroup[];
+
+export type FillLikelihood = "very_likely" | "likely" | "possible";
+export const FILL_LIKELIHOOD_LABELS: Record<FillLikelihood, string> = { very_likely: "Very likely", likely: "Likely", possible: "Possible" };
+
+export interface FillMatch {
+  group: FillGroup;
+  score: number;
+  likelihood: FillLikelihood;
+  reason: string;
+  lastSeen: Date | null;
+  lastSeenBy: string | null;
+  /** Clinic of their last visit (seen, or booked if never seen). */
+  clinicId: number | null;
+  seenCount: number;
+  noShows: number;
+  cancellations: number;
+  newNoFollowUp: boolean;
+}
+
+const monthsText = (d: number) => (d < 45 ? `${d} days ago` : `${Math.round(d / 30)} months ago`);
+
+/**
+ * Where one person stands for a target provider's schedule, or null if they don't fit
+ * (already booked, recently seen, or they belong to another provider who's still active).
+ * The score is a simple, visible points system — a ranking for staff, not a prediction model.
+ */
+export function evaluateScheduleFill(
+  visits: FillVisit[],
+  target: { key: string; name: string; clinicId: number | null },
+  inactive: Set<string>,
+  opts: { includeOtherClinics: boolean; hasPhone: boolean; ccmActive: boolean },
+  now: Date = new Date(),
+): FillMatch | null {
+  const kept = (v: FillVisit) => v.status !== "cancelled" && v.status !== "no_show";
+  if (visits.some((v) => v.startsAt > now && kept(v))) return null; // already booked
+  const past = visits.filter((v) => v.startsAt <= now);
+  if (!past.length) return null;
+  const seen = past.filter((v) => SEEN_STATUSES.includes(v.status)).sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());
+  const lastSeenV = seen[seen.length - 1] ?? null;
+  const noShows = past.filter((v) => v.status === "no_show").length;
+  const cancellations = past.filter((v) => v.status === "cancelled").length;
+  const newNoFollowUp = seen.length === 1 && /new/i.test(seen[0]!.visitType ?? "");
+  // Visits with no clinic recorded could be anywhere, so they stay in (without the same-clinic bonus).
+  const sameClinic = (clinicId: number | null) => target.clinicId == null || clinicId == null || clinicId === target.clinicId;
+  const exactClinic = (clinicId: number | null) => target.clinicId != null && clinicId === target.clinicId;
+
+  let group: FillGroup;
+  let reason: string;
+  let score: number;
+  let clinicId: number | null;
+  if (lastSeenV) {
+    const d = daysBetween(lastSeenV.startsAt, now);
+    clinicId = lastSeenV.clinicId;
+    if (lastSeenV.providerKey === target.key) {
+      if (d < 30 || d > 400) return null;
+      group = "own_due";
+      score = 50;
+      reason = `Seen by ${target.name} ${monthsText(d)}; not back since`;
+    } else if (lastSeenV.providerKey && inactive.has(lastSeenV.providerKey)) {
+      if (d < 14) return null;
+      if (!sameClinic(clinicId) && !opts.includeOtherClinics) return null;
+      group = "orphaned";
+      score = 50 + (exactClinic(clinicId) ? 8 : 0);
+      reason = `${lastSeenV.providerName ?? "Their provider"} stopped seeing patients; last seen ${monthsText(d)}`;
+    } else {
+      return null; // their provider is still active
+    }
+    score += d <= 90 ? 20 : d <= 180 ? 14 : d <= 270 ? 8 : d <= 365 ? 4 : 0;
+  } else {
+    // Never seen: only no-shows / cancellations. Count it if the latest booking was with a provider who stopped.
+    const lastBooked = past.reduce((m, v) => (v.startsAt > m.startsAt ? v : m), past[0]!);
+    if (!lastBooked.providerKey || !inactive.has(lastBooked.providerKey)) return null;
+    clinicId = lastBooked.clinicId;
+    if (!sameClinic(clinicId) && !opts.includeOtherClinics) return null;
+    group = "never_seen";
+    score = 20 + (exactClinic(clinicId) ? 8 : 0);
+    reason = `Booked with ${lastBooked.providerName ?? "a former provider"} ${monthsText(daysBetween(lastBooked.startsAt, now))} but never came in`;
+  }
+
+  score += seen.length >= 3 ? 12 : seen.length === 2 ? 8 : seen.length === 1 ? 3 : 0;
+  if (newNoFollowUp) { score += 5; reason += "; new patient who never followed up"; }
+  score -= Math.min(18, noShows * 6) + Math.min(6, cancellations * 2);
+  if (opts.ccmActive) score += 8;
+  if (!opts.hasPhone) score -= 25;
+  score = Math.max(1, Math.min(99, Math.round(score)));
+  return {
+    group, score, reason, clinicId,
+    likelihood: score >= 80 ? "very_likely" : score >= 55 ? "likely" : "possible",
+    lastSeen: lastSeenV?.startsAt ?? null,
+    lastSeenBy: lastSeenV?.providerName ?? null,
+    seenCount: seen.length, noShows, cancellations, newNoFollowUp,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Starter playbooks (inserted once by the migration; editable afterwards)
 // ---------------------------------------------------------------------------
 

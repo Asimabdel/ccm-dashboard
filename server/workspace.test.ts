@@ -7,6 +7,9 @@ import {
   clinicLocalToUtc,
   evaluateOpportunities,
   evaluateScheduleOpportunities,
+  evaluateScheduleFill,
+  providerActivity,
+  type FillVisit,
   findOpenings,
   mapScheduleStatus,
   nameKey,
@@ -233,5 +236,77 @@ describe("schedule opportunity rules (everyone on the schedule)", () => {
     expect(cats([v(-120, "completed"), v(14, "scheduled")])).toEqual([]);
     expect(cats([v(-30, "completed")])).toEqual([]);
     expect(cats([v(-400, "completed")])).toEqual([]); // over a year: out of scope
+  });
+});
+
+describe("fill a provider's schedule", () => {
+  const now = new Date("2026-09-25T17:00:00Z");
+  const ago = (days: number) => new Date(now.getTime() - days * 86_400_000);
+  const ahead = (days: number) => new Date(now.getTime() + days * 86_400_000);
+  const v = (at: Date, status: string, providerKey: string, clinicId = 1, visitType: string | null = "Follow up"): FillVisit =>
+    ({ startsAt: at, status, visitType, providerKey, providerName: providerKey === "id:5" ? "Narang" : providerKey === "id:1" ? "Mansour" : "Al Hadad", clinicId });
+  const target = { key: "id:5", name: "Narang", clinicId: 1 };
+  const stopped = new Set(["id:1"]);
+  const opts = { includeOtherClinics: false, hasPhone: true, ccmActive: false };
+
+  it("flags providers who have stopped seeing patients, but not new ones", () => {
+    const visits: FillVisit[] = [
+      ...Array.from({ length: 40 }, (_, i) => v(ago(200 - i), "completed", "id:1")),
+      v(ago(20), "completed", "id:1"),
+      ...Array.from({ length: 12 }, (_, i) => v(ago(i + 1), "completed", "id:2")),
+      ...Array.from({ length: 3 }, (_, i) => v(ago(i + 2), "completed", "id:5")),
+    ];
+    const a = providerActivity(visits, now);
+    expect(a.get("id:1")!.active).toBe(false); // 1 visit in 60 days after months on the schedule
+    expect(a.get("id:2")!.active).toBe(true);
+    expect(a.get("id:5")!.active).toBe(true); // too new to judge
+    expect(a.get("id:1")!.stopped).toBe(true);
+    // Someone named on a couple of visits (e.g. an MA) never counts as a provider who stopped.
+    const ma = providerActivity([v(ago(200), "completed", "id:9"), v(ago(190), "completed", "id:9")], now);
+    expect(ma.get("id:9")!.stopped).toBe(false);
+  });
+
+  it("leaves out anyone already booked, recently seen, or with an active provider", () => {
+    expect(evaluateScheduleFill([v(ago(60), "completed", "id:5"), v(ahead(10), "scheduled", "id:5")], target, stopped, opts, now)).toBeNull();
+    expect(evaluateScheduleFill([v(ago(10), "completed", "id:5")], target, stopped, opts, now)).toBeNull();
+    expect(evaluateScheduleFill([v(ago(90), "completed", "id:2")], target, stopped, opts, now)).toBeNull();
+  });
+
+  it("puts the provider's own overdue patients first, sooner-seen ranked higher", () => {
+    const recent = evaluateScheduleFill([v(ago(45), "completed", "id:5")], target, stopped, opts, now)!;
+    const older = evaluateScheduleFill([v(ago(300), "completed", "id:5")], target, stopped, opts, now)!;
+    expect(recent.group).toBe("own_due");
+    expect(recent.score).toBeGreaterThan(older.score);
+  });
+
+  it("finds patients left behind by a provider who stopped, at the same clinic", () => {
+    const same = evaluateScheduleFill([v(ago(120), "completed", "id:1", 1), v(ago(200), "completed", "id:1", 1)], target, stopped, opts, now)!;
+    expect(same.group).toBe("orphaned");
+    expect(same.reason).toMatch(/Mansour stopped seeing patients/);
+    const elsewhere = [v(ago(120), "completed", "id:1", 3)];
+    expect(evaluateScheduleFill(elsewhere, target, stopped, opts, now)).toBeNull();
+    expect(evaluateScheduleFill(elsewhere, target, stopped, { ...opts, includeOtherClinics: true }, now)!.group).toBe("orphaned");
+    // No clinic recorded: still a lead, just without the same-clinic bonus.
+    const unknown = evaluateScheduleFill([v(ago(120), "completed", "id:1", null as unknown as number), v(ago(200), "completed", "id:1", null as unknown as number)], target, stopped, opts, now)!;
+    expect(unknown.group).toBe("orphaned");
+    expect(unknown.score).toBeLessThan(same.score);
+  });
+
+  it("keeps never-seen bookings as weak leads, and marks down no-shows and missing phones", () => {
+    const never = evaluateScheduleFill([v(ago(90), "no_show", "id:1")], target, stopped, opts, now)!;
+    expect(never.group).toBe("never_seen");
+    expect(never.likelihood).toBe("possible");
+    const reliable = evaluateScheduleFill([v(ago(100), "completed", "id:1")], target, stopped, opts, now)!;
+    const flaky = evaluateScheduleFill([v(ago(100), "completed", "id:1"), v(ago(150), "no_show", "id:1"), v(ago(160), "no_show", "id:1")], target, stopped, opts, now)!;
+    const noPhone = evaluateScheduleFill([v(ago(100), "completed", "id:1")], target, stopped, { ...opts, hasPhone: false }, now)!;
+    expect(flaky.score).toBeLessThan(reliable.score);
+    expect(noPhone.score).toBeLessThan(reliable.score);
+  });
+
+  it("is open to front desk but closed to billing", async () => {
+    await expect(appRouter.createCaller(ctxFor("billing")).workspace.opportunities.fill({ providerId: 1 })).rejects.toThrow(/access/);
+    await expect(
+      appRouter.createCaller(ctxFor("provider")).workspace.opportunities.fillAct({ providerId: 1, keys: ["p:1"], action: "reviewed" }),
+    ).rejects.toThrow(/access/);
   });
 });

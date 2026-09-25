@@ -231,6 +231,31 @@ export const workspaceRouter = router({
         const actor = await actorFor(ctx, "opportunitiesView");
         return run(() => ws.opportunityList(actor, input as Parameters<typeof ws.opportunityList>[1]));
       }),
+    // Fill a provider's schedule: who is most likely to book with them.
+    fillProviders: protectedProcedure.query(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "opportunitiesView");
+      return run(() => ws.fillProviders(actor));
+    }),
+    fill: protectedProcedure
+      .input(z.object({ providerId: z.number().int().positive(), includeOtherClinics: z.boolean().default(false), includeActioned: z.boolean().default(false) }))
+      .query(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "opportunitiesView");
+        return run(() => ws.scheduleFill(actor, input));
+      }),
+    fillAct: protectedProcedure
+      .input(
+        z.object({
+          providerId: z.number().int().positive(),
+          keys: z.array(z.string().regex(/^(p:\d+|s:.{1,110})$/)).min(1).max(500),
+          action: z.enum(["reviewed", "task_created", "dismissed"]),
+          assigneeId: z.number().int().positive().nullish(),
+          taskTitle: z.string().trim().min(1).max(200).default("Call to schedule"),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "opportunitiesAct");
+        return run(() => ws.scheduleFillAct(actor, input));
+      }),
     act: protectedProcedure
       .input(
         z.object({

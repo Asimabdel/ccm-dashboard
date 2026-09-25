@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
-import { CalendarPlus, CheckSquare, EyeOff, Info, ListPlus, Loader2, Radar, Square, CalendarClock, Clock } from "lucide-react";
+import { CalendarPlus, CheckSquare, EyeOff, Info, ListPlus, Loader2, Radar, Square, CalendarClock, Clock, UserSearch } from "lucide-react";
+import { FillSchedule } from "@/components/workspace/FillSchedule";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { useUrlParams, useWorkspace } from "@/components/workspace/useWorkspace";
@@ -32,7 +33,8 @@ export default function OpportunitiesPage() {
   const { user } = useAuth({ redirectOnUnauthenticated: true });
   const ws = useWorkspace();
   const [params, setParams] = useUrlParams();
-  const tab = params.get("tab") === "openings" ? "openings" : "patients";
+  const tab = params.get("tab") === "openings" ? "openings" : params.get("tab") === "fill" ? "fill" : "patients";
+  const fillProvider = Number(params.get("provider")) || null;
   const category = (params.get("category") as OpportunityCategory) || null;
 
   return (
@@ -44,6 +46,7 @@ export default function OpportunitiesPage() {
       <div className="flex gap-1 mb-5 border-b border-slate-200 dark:border-slate-700 overflow-x-auto" role="tablist">
         {[
           { key: "patients", label: "Patient opportunities", icon: Radar },
+          { key: "fill", label: "Fill a schedule", icon: UserSearch },
           { key: "openings", label: "Open slots", icon: CalendarPlus },
         ].map((t) => (
           <button
@@ -58,7 +61,11 @@ export default function OpportunitiesPage() {
         ))}
       </div>
       {user && ws.caps?.opportunitiesView === false && <ErrorNote message="You don't have access to Opportunity Finder." />}
-      {user && ws.caps?.opportunitiesView && (tab === "openings" ? <Openings clinicId={ws.clinicId} /> : <PatientOpportunities clinicId={ws.clinicId} category={category} onCategory={(c) => setParams({ category: c })} />)}
+      {user && ws.caps?.opportunitiesView && (
+        tab === "openings" ? <Openings clinicId={ws.clinicId} />
+          : tab === "fill" ? <FillSchedule providerParam={fillProvider} onProvider={(id) => setParams({ provider: id })} />
+          : <PatientOpportunities clinicId={ws.clinicId} category={category} onCategory={(c) => setParams({ category: c })} />
+      )}
     </CCMDashboardLayout>
   );
 }
@@ -338,6 +345,7 @@ function Openings({ clinicId }: { clinicId: number | null }) {
             <Link href="/opportunities?category=missed_appointment" className="font-semibold text-brand hover:underline">Missed appointments</Link>
             <Link href="/opportunities?category=cancelled_not_rebooked" className="font-semibold text-brand hover:underline">Cancelled, not rebooked</Link>
             <Link href="/opportunities?category=lapsed_follow_up" className="font-semibold text-brand hover:underline">No visit in 3+ months</Link>
+            <Link href="/opportunities?tab=fill" className="font-semibold text-brand hover:underline">Fill a provider's schedule</Link>
           </div>
         </Panel>
       ))}

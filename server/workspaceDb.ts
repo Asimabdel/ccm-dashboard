@@ -42,6 +42,10 @@ import {
   SEEN_STATUSES,
   type OpportunityMatch,
   type ScheduleVisit,
+  evaluateScheduleFill,
+  providerActivity,
+  type FillGroup,
+  type FillVisit,
   findOpenings,
   minutesBetween,
   nameKey,
@@ -779,7 +783,7 @@ interface ScheduleSubject {
   phone: string | null;
   clinicId: number | null;
   providerName: string | null;
-  visits: ScheduleVisit[];
+  visits: FillVisit[];
 }
 
 // Schedule history is read on every Home / Opportunity Finder load; keep it for a
@@ -799,6 +803,7 @@ async function loadScheduleSubjects(): Promise<Map<string, ScheduleSubject>> {
       dateOfBirth: appointments.dateOfBirth,
       phoneNumber: appointments.phoneNumber,
       clinicId: appointments.clinicId,
+      providerId: appointments.providerId,
       providerName: appointments.providerName,
       providerDisplay: providers.name,
       startsAt: appointments.startsAt,
@@ -817,7 +822,8 @@ async function loadScheduleSubjects(): Promise<Map<string, ScheduleSubject>> {
       s = { key, patientId: r.patientId, name: r.patientName, dob: r.dateOfBirth, phone: r.phoneNumber, clinicId: r.clinicId, providerName: r.providerDisplay ?? r.providerName, visits: [], latestAt: -Infinity };
       subjects.set(key, s);
     }
-    s.visits.push({ startsAt: r.startsAt, status: r.status, visitType: r.visitType });
+    const providerKey = r.providerId ? `id:${r.providerId}` : r.providerName?.trim() ? `name:${nameKey(r.providerName)}` : null;
+    s.visits.push({ startsAt: r.startsAt, status: r.status, visitType: r.visitType, providerKey, providerName: r.providerDisplay ?? r.providerName, clinicId: r.clinicId });
     // Contact details, clinic and provider come from the most recent visit so far (future ones only if nothing past).
     const t = r.startsAt.getTime();
     const rank = t <= now ? t : -t;
@@ -1030,6 +1036,138 @@ export async function actOnOpportunities(
   await audit(actor, "opportunity_action", { entityType: "opportunity", description: `${input.category}: ${input.action} x${targets.length}` });
   return { count: targets.length, tasks };
 }
+
+// ---------------------------------------------------------------------------
+// Fill a provider's schedule
+// ---------------------------------------------------------------------------
+
+const FILL_CATEGORY = "schedule_fill";
+const FILL_LIST_LIMIT = 1000;
+
+/** Providers to fill for, with how busy they've been lately (from the imported schedule). */
+export async function fillProviders(actor: WorkspaceActor) {
+  const d = await db();
+  const scope = scopeClinics(actor, null);
+  const [provs, subjects, clinicRows] = await Promise.all([
+    d.select({ id: providers.id, name: providers.name, title: providers.title, clinicId: providers.clinicId }).from(providers),
+    loadScheduleSubjects(),
+    d.select({ id: clinics.id, name: clinics.name }).from(clinics),
+  ]);
+  const activity = providerActivity(Array.from(subjects.values()).flatMap((s) => s.visits));
+  return provs
+    .filter((p) => scope === null || (p.clinicId != null && scope.includes(p.clinicId)))
+    .map((p) => {
+      const a = activity.get(`id:${p.id}`);
+      return { id: p.id, name: p.name, title: p.title, clinicId: p.clinicId, clinicName: clinicRows.find((c) => c.id === p.clinicId)?.name ?? null, seenLast60: a?.seenLast60 ?? 0, active: a ? a.active : false };
+    })
+    .sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name));
+}
+
+async function loadScheduleFill(actor: WorkspaceActor, input: { providerId: number; includeOtherClinics: boolean }) {
+  const d = await db();
+  const [prov] = await d.select({ id: providers.id, name: providers.name, clinicId: providers.clinicId }).from(providers).where(eq(providers.id, input.providerId)).limit(1);
+  if (!prov) throw new WorkspaceError("Provider not found.", "NOT_FOUND");
+  const now = new Date();
+  const scope = scopeClinics(actor, null);
+  const [subjects, roster, clinicRows] = await Promise.all([
+    loadScheduleSubjects(),
+    d.select({ id: patients.id, phoneNumber: patients.phoneNumber, ccmEnrollmentStatus: patients.ccmEnrollmentStatus }).from(patients),
+    d.select({ id: clinics.id, name: clinics.name }).from(clinics),
+  ]);
+  const rosterBy = new Map(roster.map((p) => [p.id, p]));
+  const clinicName = new Map(clinicRows.map((c) => [c.id, c.name]));
+  const targetKey = `id:${prov.id}`;
+  const activity = providerActivity(Array.from(subjects.values()).flatMap((s) => s.visits), now);
+  const inactive = new Set(Array.from(activity.values()).filter((a) => a.stopped && a.key !== targetKey).map((a) => a.key));
+  const target = { key: targetKey, name: prov.name, clinicId: prov.clinicId };
+
+  const candidates = [];
+  for (const s of Array.from(subjects.values())) {
+    const r = s.patientId ? rosterBy.get(s.patientId) : undefined;
+    const phone = s.phone || r?.phoneNumber || null;
+    const ccmActive = r?.ccmEnrollmentStatus === "active";
+    const m = evaluateScheduleFill(s.visits, target, inactive, { includeOtherClinics: input.includeOtherClinics, hasPhone: !!phone, ccmActive }, now);
+    if (!m) continue;
+    if (scope !== null && (m.clinicId == null || !scope.includes(m.clinicId))) continue;
+    candidates.push({ key: s.key, patientId: s.patientId, name: s.name, dateOfBirth: s.dob, phoneNumber: phone, ccmActive, clinicName: m.clinicId ? clinicName.get(m.clinicId) ?? null : null, ...m });
+  }
+  const stopped = Array.from(activity.values())
+    .filter((a) => inactive.has(a.key))
+    .map((a) => ({ name: a.name, lastSeen: a.lastSeen, seenLast60: a.seenLast60 }))
+    .sort((a, b) => (b.lastSeen?.getTime() ?? 0) - (a.lastSeen?.getTime() ?? 0));
+  return { prov, candidates, stopped, clinicName };
+}
+
+export async function scheduleFill(actor: WorkspaceActor, input: { providerId: number; includeOtherClinics: boolean; includeActioned: boolean }) {
+  const d = await db();
+  const { prov, candidates, stopped, clinicName } = await loadScheduleFill(actor, input);
+  const acted = await d
+    .select({ subjectKey: opportunityActions.subjectKey, action: opportunityActions.action, createdAt: opportunityActions.createdAt })
+    .from(opportunityActions)
+    .where(and(eq(opportunityActions.category, FILL_CATEGORY), gte(opportunityActions.createdAt, new Date(Date.now() - 30 * 86_400_000))))
+    .orderBy(desc(opportunityActions.createdAt));
+  const actedBy = new Map<string, (typeof acted)[number]>();
+  for (const a of acted) if (a.subjectKey && !actedBy.has(a.subjectKey)) actedBy.set(a.subjectKey, a);
+
+  const counts: Record<FillGroup, number> = { own_due: 0, orphaned: 0, never_seen: 0 };
+  const rows = [];
+  for (const c of candidates) {
+    const a = actedBy.get(c.key);
+    if (a && !input.includeActioned) continue;
+    counts[c.group]++;
+    rows.push({ ...c, lastAction: a?.action ?? null, lastActionAt: a?.createdAt ?? null });
+  }
+  // Ties: most recently seen first, then the most visits.
+  rows.sort((a, b) => b.score - a.score || (b.lastSeen?.getTime() ?? 0) - (a.lastSeen?.getTime() ?? 0) || b.seenCount - a.seenCount);
+  const [range] = await d.select({ last: sql<string | null>`MAX(${appointments.date})` }).from(appointments);
+  return {
+    provider: { id: prov.id, name: prov.name, clinicId: prov.clinicId, clinicName: prov.clinicId ? clinicName.get(prov.clinicId) ?? null : null },
+    stoppedProviders: stopped,
+    counts,
+    total: rows.length,
+    rows: rows.slice(0, FILL_LIST_LIMIT),
+    scheduleThrough: range?.last ?? null,
+  };
+}
+
+export async function scheduleFillAct(
+  actor: WorkspaceActor,
+  input: { providerId: number; keys: string[]; action: "reviewed" | "task_created" | "dismissed"; assigneeId?: number | null; taskTitle: string },
+) {
+  const d = await db();
+  // Only people on this provider's fill list (as this user sees it) can be acted on.
+  const { prov, candidates } = await loadScheduleFill(actor, { providerId: input.providerId, includeOtherClinics: true });
+  const byKey = new Map(candidates.map((c) => [c.key, c]));
+  const targets = input.keys.map((k) => byKey.get(k)).filter((c): c is NonNullable<typeof c> => !!c);
+  let tasks = 0;
+  const rows: (typeof opportunityActions.$inferInsert)[] = [];
+  for (const c of targets) {
+    let taskId: number | null = null;
+    if (input.action === "task_created") {
+      const details = c.patientId ? "" : ` Not on the CCM roster. DOB ${c.dateOfBirth ? c.dateOfBirth.toISOString().slice(0, 10) : "unknown"}.`;
+      const t = await createTask(actor, {
+        title: `${input.taskTitle} — ${c.name}`,
+        description: `Fill ${prov.name}'s schedule: ${c.reason}.${c.phoneNumber ? ` Phone ${c.phoneNumber}.` : " No phone on file."}${details} No one has contacted the patient yet.`,
+        patientId: c.patientId,
+        clinicId: c.clinicId ?? prov.clinicId,
+        assignedUserId: input.assigneeId ?? null,
+        assignedRole: input.assigneeId ? null : "front_desk",
+        priority: c.likelihood === "very_likely" ? "high" : "normal",
+        category: "patient_call",
+        dueDate: nextClinicDay(localDateStr()),
+        sourceType: "opportunity",
+        sourceRef: FILL_CATEGORY,
+      });
+      taskId = t.id;
+      tasks++;
+    }
+    rows.push({ patientId: c.patientId, subjectKey: c.key, category: FILL_CATEGORY, action: input.action, userId: actor.id, taskId });
+  }
+  for (let i = 0; i < rows.length; i += 400) await d.insert(opportunityActions).values(rows.slice(i, i + 400));
+  await audit(actor, "opportunity_action", { entityType: "opportunity", description: `${FILL_CATEGORY} (provider #${prov.id}): ${input.action} x${targets.length}` });
+  return { count: targets.length, tasks };
+}
+
 
 // ---------------------------------------------------------------------------
 // Home
