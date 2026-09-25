@@ -4,10 +4,11 @@ import { toast } from "sonner";
 import { Link } from "wouter";
 import { Clock, Loader2, Pencil, Shuffle, UserPlus } from "lucide-react";
 import { Field, Modal, btnPrimary, inputCls } from "./ui";
+import { fmtDay, localDateStr } from "@shared/workforce";
 
 interface ProfileDraft {
   userId: number; name: string | null; jobRoleId: number | null; homeClinicId: number | null;
-  canFloat: boolean; usesTimeClock: boolean; hoursPerWeek: number; originalClinicId: number | null; moveShifts: boolean; hireDate: string; active: boolean;
+  canFloat: boolean; usesTimeClock: boolean; clockStartDate: string; hoursPerWeek: number; originalClinicId: number | null; moveShifts: boolean; hireDate: string; active: boolean;
 }
 
 export function PeopleTab() {
@@ -51,13 +52,13 @@ export function PeopleTab() {
                   <td className="px-4 py-3"><p className="font-semibold text-slate-800">{p.name ?? p.email}</p><p className="text-xs text-slate-400">{p.accessRole === "user" ? "No login yet" : `${p.email} · ${p.accessRole.replace("_", " ")}`}</p></td>
                   <td className="px-3 py-3 text-slate-700">{p.jobRoleName ?? <span className="text-slate-300">—</span>}</td>
                   <td className="px-3 py-3 text-slate-700">{p.homeClinicName ?? <span className="text-slate-300">—</span>}{p.canFloat && <span className="ml-2 inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700"><Shuffle size={11} /> floats</span>}</td>
-                  <td className="px-3 py-3 text-center">{p.usesTimeClock ? <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700"><Clock size={11} /> Hourly</span> : <span className="text-slate-300">—</span>}</td>
+                  <td className="px-3 py-3 text-center">{p.usesTimeClock ? <span className="inline-flex flex-col items-center"><span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700"><Clock size={11} /> Hourly</span>{p.clockStartDate && p.clockStartDate > localDateStr() && <span className="text-[10px] text-slate-400">from {fmtDay(p.clockStartDate, { month: "short", day: "numeric" })}</span>}</span> : <span className="text-slate-300">—</span>}</td>
                   <td className="px-3 py-3 text-center text-slate-700">{p.profileId ? p.hoursPerWeek : <span className="text-slate-300">—</span>}</td>
                   <td className="px-3 py-3 text-center">
                     <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${!p.profileId ? "bg-amber-100 text-amber-800" : p.active ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-500"}`}>{!p.profileId ? "Not set up" : p.active ? "Active" : "Inactive"}</span>
                   </td>
                   <td className="px-3 py-3 text-right">
-                    <button onClick={() => setDraft({ userId: p.userId, name: p.name, jobRoleId: p.jobRoleId, homeClinicId: p.homeClinicId, canFloat: !!p.canFloat, usesTimeClock: !!p.usesTimeClock, originalClinicId: p.homeClinicId, moveShifts: true, hoursPerWeek: p.hoursPerWeek ?? 40, hireDate: p.hireDate ?? "", active: p.active ?? true })}
+                    <button onClick={() => setDraft({ userId: p.userId, name: p.name, jobRoleId: p.jobRoleId, homeClinicId: p.homeClinicId, canFloat: !!p.canFloat, usesTimeClock: !!p.usesTimeClock, clockStartDate: p.clockStartDate ?? "", originalClinicId: p.homeClinicId, moveShifts: true, hoursPerWeek: p.hoursPerWeek ?? 40, hireDate: p.hireDate ?? "", active: p.active ?? true })}
                       className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-100"><Pencil size={12} /> {p.profileId ? "Edit" : "Set up"}</button>
                   </td>
                 </tr>
@@ -91,7 +92,7 @@ export function PeopleTab() {
 
       {draft && (
         <Modal title={draft.name ?? "Employee"} onClose={() => setDraft(null)}>
-          <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); save.mutate({ userId: draft.userId, jobRoleId: draft.jobRoleId, homeClinicId: draft.homeClinicId, canFloat: draft.canFloat, usesTimeClock: draft.usesTimeClock, moveUpcomingShifts: draft.moveShifts, hoursPerWeek: draft.hoursPerWeek, hireDate: draft.hireDate || null, active: draft.active }); }}>
+          <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); save.mutate({ userId: draft.userId, jobRoleId: draft.jobRoleId, homeClinicId: draft.homeClinicId, canFloat: draft.canFloat, usesTimeClock: draft.usesTimeClock, clockStartDate: draft.usesTimeClock ? draft.clockStartDate || undefined : undefined, moveUpcomingShifts: draft.moveShifts, hoursPerWeek: draft.hoursPerWeek, hireDate: draft.hireDate || null, active: draft.active }); }}>
             <Field label="Job role">
               <select value={draft.jobRoleId ?? ""} onChange={(e) => setDraft({ ...draft, jobRoleId: e.target.value ? Number(e.target.value) : null })} className={inputCls}>
                 <option value="">— none —</option>
@@ -113,6 +114,12 @@ export function PeopleTab() {
             </div>
             <label className="flex items-start gap-2 text-sm text-slate-700"><input type="checkbox" className="mt-1" checked={draft.usesTimeClock} onChange={(e) => setDraft({ ...draft, usesTimeClock: e.target.checked })} />
               <span>Uses time clock (hourly)<span className="block text-xs text-slate-400">They clock in and out on My Day, and their hours show on Timesheets.</span></span></label>
+            {draft.usesTimeClock && (
+              <Field label="Track lateness and no-shows starting">
+                <input type="date" value={draft.clockStartDate} onChange={(e) => setDraft({ ...draft, clockStartDate: e.target.value })} className={inputCls} />
+                <span className="block mt-1 text-xs font-normal text-slate-400">Before this date they can still clock in, but they're never marked late or a no-show. Leave empty to start today.</span>
+              </Field>
+            )}
             <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={draft.canFloat} onChange={(e) => setDraft({ ...draft, canFloat: e.target.checked })} /> Can float to other clinics for coverage</label>
             <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={draft.active} onChange={(e) => setDraft({ ...draft, active: e.target.checked })} /> Active employee</label>
             <button type="submit" disabled={save.isPending} className={`${btnPrimary} w-full`}>{save.isPending ? "Saving…" : "Save profile"}</button>

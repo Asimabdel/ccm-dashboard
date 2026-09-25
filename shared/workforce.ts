@@ -7,6 +7,15 @@ export const CLINIC_TZ = "America/Chicago";
 /** Clock-ins up to this many minutes after the shift start still count as on time. */
 export const LATE_GRACE_MINUTES = 5;
 
+/**
+ * Is this person's attendance judged (late / no-show) on this date? Only for people
+ * on the time clock, and only from their clock start date on — salaried staff and
+ * providers are just "scheduled".
+ */
+export function attendanceTracked(profile: { usesTimeClock?: boolean | null; clockStartDate?: string | null } | null | undefined, date: string): boolean {
+  return !!profile?.usesTimeClock && (!profile.clockStartDate || date >= profile.clockStartDate);
+}
+
 /** Roles that may use ONLY the workforce pages — never patient (PHI) endpoints. */
 export const WORKFORCE_ONLY_ROLES = ["medical_assistant"] as const;
 

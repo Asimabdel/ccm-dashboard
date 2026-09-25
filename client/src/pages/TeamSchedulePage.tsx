@@ -20,6 +20,8 @@ export default function TeamSchedulePage() {
   const [mobileDay, setMobileDay] = useState(today);
   const days = weekDates(monday);
   const week = trpc.workforce.team.week.useQuery({ from: days[0], to: days[6] }, { enabled: !!user, refetchInterval: 60000 });
+  // Today's panel has its own query so it stays put while you browse other weeks.
+  const todayQ = trpc.workforce.team.week.useQuery({ from: today, to: today }, { enabled: !!user, refetchInterval: 60000 });
 
   const d = week.data;
   const clinicName = useMemo(() => new Map((d?.clinics || []).map((c) => [c.id, c.name])), [d]);
@@ -28,15 +30,34 @@ export default function TeamSchedulePage() {
   const isOff = (userId: number, date: string) => offDays.some((o) => o.userId === userId && o.date === date);
   // With a clinic picked: people working there this week, plus that clinic's own staff who are off.
   const rows = (d?.people || []).filter((p) => clinicId === "all" || shifts.some((s) => s.userId === p.userId) || (p.homeClinicId === clinicId && offDays.some((o) => o.userId === p.userId)));
-  const workingNow = (d?.workingNow || []).filter((w) => clinicId === "all" || w.clinicId === clinicId);
-  const nowByClinic = useMemo(() => {
-    const m = new Map<string, typeof workingNow>();
-    for (const w of workingNow) {
-      const key = w.clinicId ? clinicName.get(w.clinicId) ?? "Other" : "No clinic";
-      m.set(key, [...(m.get(key) || []), w]);
+  // Everyone working today, by clinic: their shift, plus an "In" tag once they've clocked in.
+  const t = todayQ.data;
+  const todayGroups = useMemo(() => {
+    if (!t) return [];
+    const inNow = new Map(t.workingNow.map((w) => [w.userId, w]));
+    const person = new Map(t.people.map((p) => [p.userId, p]));
+    const groups = new Map<number | null, { name: string; rows: { userId: number; name: string; role: string | null; time: string | null; out: boolean; isIn: boolean }[] }>();
+    const add = (cid: number | null, row: { userId: number; name: string; role: string | null; time: string | null; out: boolean; isIn: boolean }) => {
+      if (clinicId !== "all" && cid !== clinicId) return;
+      const g = groups.get(cid) ?? { name: cid ? t.clinics.find((c) => c.id === cid)?.name ?? "Clinic" : "No clinic", rows: [] };
+      if (!g.rows.some((r) => r.userId === row.userId)) g.rows.push(row);
+      groups.set(cid, g);
+    };
+    for (const sh of t.shifts) {
+      const p = person.get(sh.userId);
+      add(sh.clinicId, { userId: sh.userId, name: p?.name ?? "Someone", role: p?.jobRoleName ?? null, time: `${shortTime(sh.startTime)} – ${shortTime(sh.endTime)}`, out: sh.out, isIn: inNow.has(sh.userId) });
     }
-    return Array.from(m.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [workingNow, clinicName]);
+    // Clocked in without a shift today (e.g. covering or extra hours).
+    for (const w of t.workingNow) {
+      if (!t.shifts.some((sh) => sh.userId === w.userId && !sh.out)) add(w.clinicId, { userId: w.userId, name: w.name, role: w.jobRoleName, time: null, out: false, isIn: true });
+    }
+    return Array.from(groups.values())
+      .map((g) => ({ ...g, rows: g.rows.sort((a, b) => Number(a.out) - Number(b.out) || a.name.localeCompare(b.name)) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [t, clinicId]);
+  const todayWorking = todayGroups.reduce((n, g) => n + g.rows.filter((r) => !r.out).length, 0);
+  const todayIn = todayGroups.reduce((n, g) => n + g.rows.filter((r) => r.isIn).length, 0);
+  const todayOff = (t?.people || []).filter((p) => t?.offDays.some((o) => o.userId === p.userId) && (clinicId === "all" || p.homeClinicId === clinicId));
 
   if (loading || !user) return <div className="min-h-screen flex items-center justify-center bg-white"><Loader2 className="animate-spin text-slate-400" /></div>;
 
@@ -48,27 +69,32 @@ export default function TeamSchedulePage() {
 
   return (
     <CCMDashboardLayout title="Team Schedule">
-      {/* ---- Who's in right now ---- */}
+      {/* ---- Working today ---- */}
       <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-soft mb-5">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h2 className="flex items-center gap-2 text-lg font-bold tracking-tight text-slate-900">
             <span className="relative flex h-2.5 w-2.5"><span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60 animate-ping" /><span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" /></span>
-            Working now
+            Working today <span className="text-sm font-medium text-slate-400">{fmtDay(today, { weekday: "long", month: "short", day: "numeric" })}</span>
           </h2>
-          <span className="text-sm text-slate-500">{workingNow.length} clocked in</span>
+          <span className="text-sm text-slate-500">{todayWorking} working · {todayIn} clocked in</span>
         </div>
-        {week.isLoading && <Loader2 className="animate-spin text-slate-400 mt-3" />}
-        {!week.isLoading && workingNow.length === 0 && <p className="mt-3 text-sm text-slate-500">No one is clocked in right now.</p>}
-        {nowByClinic.length > 0 && (
+        {todayQ.isLoading && <Loader2 className="animate-spin text-slate-400 mt-3" />}
+        {!todayQ.isLoading && todayGroups.length === 0 && <p className="mt-3 text-sm text-slate-500">No one is on the schedule today.</p>}
+        {todayGroups.length > 0 && (
           <div className="mt-4 grid sm:grid-cols-2 xl:grid-cols-4 gap-3">
-            {nowByClinic.map(([name, list]) => (
-              <div key={name} className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-3">
-                <p className="flex items-center gap-1.5 text-xs font-semibold text-emerald-900"><MapPin size={12} /> {name} <span className="ml-auto text-emerald-700">{list.length}</span></p>
+            {todayGroups.map((g) => (
+              <div key={g.name} className="rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
+                <p className="flex items-center gap-1.5 text-xs font-semibold text-slate-700"><MapPin size={12} /> {g.name} <span className="ml-auto text-slate-500">{g.rows.filter((r) => !r.out).length}</span></p>
                 <ul className="mt-2 space-y-1.5">
-                  {list.map((w) => (
-                    <li key={w.userId} className="text-sm">
-                      <span className="font-semibold text-slate-800">{w.name}</span>{w.userId === user.id && <span className="ml-1 text-[10px] uppercase tracking-widest text-emerald-700">You</span>}
-                      <span className="block text-xs text-slate-500">{w.jobRoleName ?? "Team member"}{w.until ? ` · until ${fmtTime(w.until)}` : ""}</span>
+                  {g.rows.map((r) => (
+                    <li key={r.userId} className={`text-sm ${r.out ? "opacity-60" : ""}`}>
+                      <span className="flex items-center gap-1.5">
+                        <span className={`font-semibold text-slate-800 truncate ${r.out ? "line-through" : ""}`}>{r.name}</span>
+                        {r.userId === user.id && <span className="text-[10px] uppercase tracking-widest text-amber-700">You</span>}
+                        {r.isIn && <span className="ml-auto shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-semibold"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />In</span>}
+                        {r.out && <span className="ml-auto shrink-0 px-1.5 py-0.5 rounded-full bg-slate-200 text-slate-600 text-[10px] font-semibold">Out</span>}
+                      </span>
+                      <span className="block text-xs text-slate-500">{r.role ?? "Team member"}{r.time ? ` · ${r.time}` : " · extra hours"}</span>
                     </li>
                   ))}
                 </ul>
@@ -76,7 +102,8 @@ export default function TeamSchedulePage() {
             ))}
           </div>
         )}
-        <p className="mt-3 text-[11px] text-slate-400 flex items-center gap-1"><Radio size={11} /> Shows hourly staff who clocked in on the time clock. Updates every minute.</p>
+        {todayOff.length > 0 && <p className="mt-3 text-xs text-slate-500"><b className="text-slate-600">Off today:</b> {todayOff.map((p) => p.name).join(", ")}</p>}
+        <p className="mt-3 text-[11px] text-slate-400 flex items-center gap-1"><Radio size={11} /> "In" means they clocked in on the time clock. Updates every minute.</p>
       </div>
 
       {/* ---- Week ---- */}

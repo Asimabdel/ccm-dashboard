@@ -13,6 +13,8 @@ const STATE: Record<string, { label: string; cls: string }> = {
   late: { label: "Late — not in", cls: "bg-amber-100 text-amber-800" },
   no_show: { label: "No-show", cls: "bg-rose-100 text-rose-700" },
   called_out: { label: "Called out", cls: "bg-rose-600 text-white" },
+  // Not on the time clock (providers, salaried staff) or before their clock start date.
+  scheduled: { label: "Scheduled", cls: "bg-slate-100 text-slate-600" },
 };
 
 export function TodayTab({ onOpenTimeOff }: { onOpenTimeOff: () => void }) {
@@ -70,7 +72,7 @@ export function TodayTab({ onOpenTimeOff }: { onOpenTimeOff: () => void }) {
                     {s.state === "called_out" && !s.covered && (
                       <button onClick={() => setCoverFor(s)} className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700">Find coverage</button>
                     )}
-                    {["upcoming", "late", "no_show"].includes(s.state) && (
+                    {["upcoming", "late", "no_show", "scheduled"].includes(s.state) && (
                       <button title="Mark as called out" onClick={() => callOut.mutate({ shiftId: s.id })} className="p-1.5 rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"><UserX size={15} /></button>
                     )}
                   </div>

@@ -213,9 +213,19 @@ async function upgradeOpportunityActions(db: Db): Promise<string[]> {
 /** Time clock: hourly staff are marked on their profile (added 2026-09-24). */
 async function upgradeStaffProfiles(db: Db): Promise<string[]> {
   const cols = await rows<{ c: string }>(db, sql`SELECT COLUMN_NAME AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'staffProfiles'`);
-  if (!cols.length || cols.some((c) => c.c === "usesTimeClock")) return [];
-  await db.execute(sql.raw("ALTER TABLE `staffProfiles` ADD COLUMN `usesTimeClock` boolean NOT NULL DEFAULT false AFTER `canFloat`"));
-  return ["staffProfiles.usesTimeClock added"];
+  if (!cols.length) return [];
+  const has = (name: string) => cols.some((c) => c.c === name);
+  const applied: string[] = [];
+  if (!has("usesTimeClock")) {
+    await db.execute(sql.raw("ALTER TABLE `staffProfiles` ADD COLUMN `usesTimeClock` boolean NOT NULL DEFAULT false AFTER `canFloat`"));
+    applied.push("staffProfiles.usesTimeClock added");
+  }
+  // Added 2026-09-25: the date attendance tracking starts for an hourly employee.
+  if (!has("clockStartDate")) {
+    await db.execute(sql.raw("ALTER TABLE `staffProfiles` ADD COLUMN `clockStartDate` varchar(10) NULL AFTER `usesTimeClock`"));
+    applied.push("staffProfiles.clockStartDate added");
+  }
+  return applied;
 }
 
 const NEW_TABLES = ["workTasks", "workTaskActivities", "appointments", "appointmentStatusEvents", "scheduleImports", "opportunityActions", "playbooks", "playbookVersions"];

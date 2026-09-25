@@ -51,7 +51,7 @@ export const workforceRouter = router({
     saveProfile: protectedProcedure
       .input(z.object({
         userId: z.number(), jobRoleId: z.number().nullable(), homeClinicId: z.number().nullable(), canFloat: z.boolean(),
-        usesTimeClock: z.boolean().optional(), hoursPerWeek: z.number().min(0).max(80).nullish(), hireDate: dateStr.nullish(), active: z.boolean(),
+        usesTimeClock: z.boolean().optional(), clockStartDate: dateStr.nullish(), hoursPerWeek: z.number().min(0).max(80).nullish(), hireDate: dateStr.nullish(), active: z.boolean(),
         moveUpcomingShifts: z.boolean().optional(),
       }))
       .mutation(async ({ input, ctx }) => { requireAdmin(ctx); return { success: true, ...(await wf.saveProfile(input)) }; }),

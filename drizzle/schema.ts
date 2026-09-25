@@ -595,6 +595,9 @@ export const staffProfiles = mysqlTable("staffProfiles", {
   canFloat: boolean("canFloat").default(false).notNull(),
   // Hourly staff who clock in and out. Only they can use the time clock.
   usesTimeClock: boolean("usesTimeClock").default(false).notNull(),
+  // Attendance (late / no-show) is judged from this clinic-local date on — e.g. a new
+  // hire's first day, or the day the clock rolls out. Null = from the start.
+  clockStartDate: varchar("clockStartDate", { length: 10 }),
   hoursPerWeek: int("hoursPerWeek").default(40),
   hireDate: varchar("hireDate", { length: 10 }),
   active: boolean("active").default(true).notNull(),

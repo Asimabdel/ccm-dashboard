@@ -9,7 +9,7 @@ import {
   timeOffRequests, timePunches, dutyCompletions, performanceNotes,
 } from "../drizzle/schema";
 import {
-  LATE_GRACE_MINUTES, MA_ROLE_TEMPLATE, addDays, localDateStr, localMinutes,
+  LATE_GRACE_MINUTES, MA_ROLE_TEMPLATE, addDays, attendanceTracked, localDateStr, localMinutes,
   periodKey, shiftMinutes, timeToMinutes, weekStart, type DutyFrequency,
 } from "../shared/workforce";
 
@@ -113,8 +113,8 @@ export async function listPeople() {
       userId: users.id, name: users.name, email: users.email, accessRole: users.role,
       profileId: staffProfiles.id, jobRoleId: staffProfiles.jobRoleId, jobRoleName: jobRoles.name,
       homeClinicId: staffProfiles.homeClinicId, homeClinicName: clinics.name,
-      canFloat: staffProfiles.canFloat, usesTimeClock: staffProfiles.usesTimeClock, hoursPerWeek: staffProfiles.hoursPerWeek,
-      hireDate: staffProfiles.hireDate, active: staffProfiles.active,
+      canFloat: staffProfiles.canFloat, usesTimeClock: staffProfiles.usesTimeClock, clockStartDate: staffProfiles.clockStartDate,
+      hoursPerWeek: staffProfiles.hoursPerWeek, hireDate: staffProfiles.hireDate, active: staffProfiles.active,
     })
     .from(users)
     .leftJoin(staffProfiles, eq(staffProfiles.userId, users.id))
@@ -126,6 +126,8 @@ export async function listPeople() {
 
 export async function saveProfile(input: {
   userId: number; jobRoleId: number | null; homeClinicId: number | null; canFloat: boolean; usesTimeClock?: boolean;
+  /** Attendance is judged from this date; defaults to today when the clock is first turned on. */
+  clockStartDate?: string | null;
   hoursPerWeek?: number | null; hireDate?: string | null; active: boolean;
   /** When the home clinic changes, also move their upcoming shifts at the old clinic. */
   moveUpcomingShifts?: boolean;
@@ -136,7 +138,9 @@ export async function saveProfile(input: {
     ...(input.usesTimeClock !== undefined ? { usesTimeClock: input.usesTimeClock } : {}),
     hoursPerWeek: input.hoursPerWeek ?? 40, hireDate: input.hireDate ?? null, active: input.active,
   };
-  const existing = await db.select({ id: staffProfiles.id, homeClinicId: staffProfiles.homeClinicId }).from(staffProfiles).where(eq(staffProfiles.userId, input.userId)).limit(1);
+  const existing = await db.select({ id: staffProfiles.id, homeClinicId: staffProfiles.homeClinicId, usesTimeClock: staffProfiles.usesTimeClock }).from(staffProfiles).where(eq(staffProfiles.userId, input.userId)).limit(1);
+  if (input.clockStartDate !== undefined) Object.assign(values, { clockStartDate: input.clockStartDate });
+  else if (input.usesTimeClock && !existing[0]?.usesTimeClock) Object.assign(values, { clockStartDate: localDateStr() });
   if (existing.length) await db.update(staffProfiles).set(values).where(eq(staffProfiles.userId, input.userId));
   else await db.insert(staffProfiles).values({ userId: input.userId, ...values });
 
@@ -393,7 +397,7 @@ export async function clockIn(userId: number): Promise<{ id: number; minutesLate
   const [profile] = await db.select().from(staffProfiles).where(eq(staffProfiles.userId, userId)).limit(1);
   // Lateness counts only for the first punch of a shift (not the return from lunch).
   let minutesLate = 0;
-  if (shift) {
+  if (shift && attendanceTracked(profile, today)) {
     const prior = await db.select({ id: timePunches.id }).from(timePunches).where(eq(timePunches.shiftId, shift.id)).limit(1);
     const late = nowMin - timeToMinutes(shift.startTime);
     if (!prior.length && late > LATE_GRACE_MINUTES) minutesLate = late;
@@ -512,21 +516,25 @@ export async function getMySchedule(userId: number, from: string, to: string) {
 /** Per-clinic view of a day: who's scheduled, who's in, who's late, open coverage. */
 export async function getDayBoard(date: string) {
   const db = await requireDb();
-  const [{ shifts: dayShifts }, punches, allClinics, pendingTimeOff] = await Promise.all([
+  const [{ shifts: dayShifts }, punches, allClinics, pendingTimeOff, profiles] = await Promise.all([
     getSchedule(date, date),
     db.select().from(timePunches).where(eq(timePunches.workDate, date)),
     db.select().from(clinics).orderBy(asc(clinics.name)),
     db.select({ n: sql<number>`count(*)` }).from(timeOffRequests).where(eq(timeOffRequests.status, "pending")),
+    db.select({ userId: staffProfiles.userId, usesTimeClock: staffProfiles.usesTimeClock, clockStartDate: staffProfiles.clockStartDate }).from(staffProfiles),
   ]);
+  const profileBy = new Map(profiles.map((p) => [p.userId, p]));
   const isToday = date === localDateStr();
   const nowMin = localMinutes();
   const rows = dayShifts.map((s) => {
     const mine = punches.filter((p) => p.shiftId === s.id || (p.shiftId == null && p.userId === s.userId));
     const first = mine.slice().sort((a, b) => +a.clockInAt - +b.clockInAt)[0];
-    let state: "called_out" | "upcoming" | "clocked_in" | "done" | "late" | "no_show";
+    // "scheduled" = on the schedule but not on the time clock (yet), so never late or a no-show.
+    let state: "called_out" | "upcoming" | "clocked_in" | "done" | "late" | "no_show" | "scheduled";
     if (s.status === "called_out") state = "called_out";
     else if (mine.some((p) => !p.clockOutAt)) state = "clocked_in";
     else if (first) state = "done";
+    else if (!attendanceTracked(profileBy.get(s.userId), date)) state = "scheduled";
     else if (date > localDateStr() || (isToday && nowMin <= timeToMinutes(s.startTime) + LATE_GRACE_MINUTES)) state = "upcoming";
     else if (isToday && nowMin < timeToMinutes(s.endTime)) state = "late";
     else state = "no_show";
@@ -567,7 +575,7 @@ export async function getScorecards(from: string, to: string, clinicId?: number)
     const myPunches = punchRows.filter((x) => x.userId === p.userId);
     const calledOut = myShifts.filter((s) => s.status === "called_out").length;
     // A shift is "due" once its start (plus grace) has passed.
-    const due = myShifts.filter((s) => s.status === "scheduled" && (s.date < today || timeToMinutes(s.startTime) + LATE_GRACE_MINUTES < nowMin));
+    const due = myShifts.filter((s) => s.status === "scheduled" && attendanceTracked(p, s.date) && (s.date < today || timeToMinutes(s.startTime) + LATE_GRACE_MINUTES < nowMin));
     let onTime = 0, late = 0, noShow = 0, lateMinutes = 0;
     for (const s of due) {
       const first = myPunches.filter((x) => x.shiftId === s.id).sort((a, b) => +a.clockInAt - +b.clockInAt)[0];

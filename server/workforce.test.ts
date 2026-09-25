@@ -3,7 +3,7 @@ import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 import {
   addDays, fmtDuration, fmtTime, isValidDateStr, isValidTimeStr, localDateStr, localMinutes,
-  periodKey, shiftMinutes, weekDates, weekStart, MA_ROLE_TEMPLATE,
+  periodKey, shiftMinutes, weekDates, weekStart, MA_ROLE_TEMPLATE, attendanceTracked,
 } from "../shared/workforce";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
@@ -76,6 +76,21 @@ describe("team schedule", () => {
     const ma = appRouter.createCaller(ctxFor("medical_assistant"));
     await expect(ma.workforce.team.week({ from: "2026-09-27", to: "2026-09-21" })).rejects.toThrow(/6 weeks/);
     await expect(ma.workforce.team.week({ from: "2026-01-01", to: "2026-06-01" })).rejects.toThrow(/6 weeks/);
+  });
+});
+
+describe("attendance tracking", () => {
+  it("only judges people on the time clock", () => {
+    expect(attendanceTracked(null, "2026-09-25")).toBe(false);
+    expect(attendanceTracked({ usesTimeClock: false }, "2026-09-25")).toBe(false);
+    expect(attendanceTracked({ usesTimeClock: true, clockStartDate: null }, "2026-09-25")).toBe(true);
+  });
+
+  it("starts on the clock start date", () => {
+    const p = { usesTimeClock: true, clockStartDate: "2026-09-28" };
+    expect(attendanceTracked(p, "2026-09-25")).toBe(false);
+    expect(attendanceTracked(p, "2026-09-28")).toBe(true);
+    expect(attendanceTracked(p, "2026-10-01")).toBe(true);
   });
 });
 
