@@ -11,6 +11,7 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { useIdleLogout } from "@/hooks/useIdleLogout";
 import { useIsMobile } from "@/hooks/useMobile";
 import { useWorkspace } from "@/components/workspace/useWorkspace";
+import { MyProgress } from "@/components/workspace/MyProgress";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuSeparator, DropdownMenuTrigger,
@@ -247,6 +248,8 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
           </button>
 
           <div className="ml-auto flex items-center gap-1 md:gap-1.5 shrink-0">
+            {/* Today's numbers for this person (calls, tasks, care calls...) */}
+            <MyProgress isAdmin={user.role === "admin"} />
             {clinicPicker && <ClinicPicker />}
 
             {/* Role switcher (admin-only preview) */}

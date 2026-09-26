@@ -25,6 +25,7 @@ import { formatPhone, mapCallLogRecord, normalizePhone, parseRingCentralCall } f
 import { extractPhones, matchEmailSender, parseFromHeader, stripQuotedText } from "../shared/email";
 import { ageOn, evaluateTesting, parseSex, recognizeTest } from "../shared/testing";
 import { PLANS, checkInsurance, patientLine } from "../shared/insurance";
+import { orderMetrics, progressOf, usualPerDay, weekdaysLeftInMonth } from "../shared/metrics";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
 
@@ -500,5 +501,32 @@ describe("insurance checker", () => {
     expect(PLANS).toHaveLength(44);
     expect(patientLine(checkInsurance("cigna")!, "es")).toBe("Sí — aceptamos Cigna Healthcare of Texas en nuestras 4 clínicas.");
     expect(patientLine(checkInsurance("medicaid")!, "en")).toContain("$120 first visit, $99 follow-ups");
+  });
+});
+
+describe("my progress metrics", () => {
+  it("usual day = average of active days before today (needs 3+)", () => {
+    const m = new Map([["2026-09-20", 10], ["2026-09-21", 20], ["2026-09-22", 0], ["2026-09-26", 99]]);
+    expect(usualPerDay(m, "2026-09-26")).toBeNull();
+    m.set("2026-09-23", 30);
+    expect(usualPerDay(m, "2026-09-26")).toBe(20);
+  });
+  it("counts weekdays left in the month, including today", () => {
+    expect(weekdaysLeftInMonth("2026-09-28")).toBe(3); // Mon 28, Tue 29, Wed 30
+    expect(weekdaysLeftInMonth("2026-09-26")).toBe(3); // Sat → Mon–Wed
+  });
+  it("progress uses the goal first, then the usual day", () => {
+    expect(progressOf({ value: 10, goal: 40, usual: 20 })).toBe(0.25);
+    expect(progressOf({ value: 30, goal: null, usual: 20 })).toBe(1);
+    expect(progressOf({ value: 3, goal: null, usual: null })).toBeNull();
+  });
+  it("puts each role's top-bar numbers first", () => {
+    const ms = (["calls", "booked", "talk", "care_calls", "ccm_month", "tasks_done"] as const).map((key) => ({ key, label: key, value: 0 }));
+    expect(orderMetrics("staff", ms).slice(0, 3).map((m) => m.key)).toEqual(["care_calls", "ccm_month", "calls"]);
+    expect(orderMetrics("front_desk", ms).slice(0, 2).map((m) => m.key)).toEqual(["calls", "booked"]);
+  });
+  it("only admins can see or set daily goals", async () => {
+    await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.metrics.setGoals({ front_desk: { calls: 40 } })).rejects.toThrow(/admin/);
+    await expect(appRouter.createCaller(ctxFor("staff")).workspace.metrics.goals()).rejects.toThrow(/admin/);
   });
 });

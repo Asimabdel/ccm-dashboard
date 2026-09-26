@@ -19,6 +19,7 @@ import * as phone from "../phoneDb";
 import * as rcSync from "../ringcentralSync";
 import * as gmail from "../gmailSync";
 import * as testing from "../testingDb";
+import * as metrics from "../metricsDb";
 import { TEST_KEYS, type TestKey } from "../../shared/testing";
 import { CALL_OUTCOME_LIST } from "../../shared/phone";
 
@@ -357,6 +358,24 @@ export const workspaceRouter = router({
       const actor = await actorFor(ctx, "emailTriage");
       return run(() => gmail.ignoreEmailSender(actor, input));
     }),
+  }),
+
+  // "My progress" in the top bar: today's counts for the signed-in employee (no patient details).
+  metrics: router({
+    mine: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "tasks");
+      return metrics.myMetrics({ id: ctx.user.id, name: ctx.user.name, role: ctx.user.role });
+    }),
+    goals: protectedProcedure.query(async ({ ctx }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can see the daily goals." });
+      return metrics.getDailyGoals();
+    }),
+    setGoals: protectedProcedure
+      .input(z.record(z.string().max(30), z.record(z.string().max(30), z.number().int().min(0).max(1000))))
+      .mutation(async ({ ctx, input }) => {
+        if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can set daily goals." });
+        return metrics.setDailyGoals(ctx.user.id, input);
+      }),
   }),
 
   // Testing & screenings: who's due (guideline reminders), what they've had, scheduling tasks.

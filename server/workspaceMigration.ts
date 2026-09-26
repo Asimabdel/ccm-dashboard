@@ -330,6 +330,27 @@ async function upgradeEmailMessages(db: Db): Promise<string[]> {
   return ["emailMessages.historical added"];
 }
 
+/** Indexes behind the top-bar "My progress" counts (added 2026-09-26). */
+const METRIC_INDEXES: { table: string; name: string; cols: string }[] = [
+  { table: "phoneCalls", name: "phoneCalls_user_started_idx", cols: "`userId`, `startedAt`" },
+  { table: "phoneCalls", name: "phoneCalls_started_idx", cols: "`startedAt`" },
+  { table: "appointmentStatusEvents", name: "appointmentStatusEvents_user_idx", cols: "`changedByUserId`, `createdAt`" },
+  { table: "workTaskActivities", name: "workTaskActivities_user_idx", cols: "`userId`, `createdAt`" },
+  { table: "ccmTasks", name: "ccmTasks_completedBy_idx", cols: "`completedByStaffId`, `completedAt`" },
+];
+async function ensureMetricIndexes(db: Db): Promise<string[]> {
+  const applied: string[] = [];
+  for (const ix of METRIC_INDEXES) {
+    const t = await rows<{ t: string }>(db, sql`SELECT TABLE_NAME AS t FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${ix.table}`);
+    if (!t.length) continue;
+    const have = await rows<{ i: string }>(db, sql`SELECT INDEX_NAME AS i FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${ix.table} AND INDEX_NAME = ${ix.name}`);
+    if (have.length) continue;
+    await db.execute(sql.raw("CREATE INDEX `" + ix.name + "` ON `" + ix.table + "` (" + ix.cols + ")"));
+    applied.push(`${ix.table} index ${ix.name} added`);
+  }
+  return applied;
+}
+
 /** Remote shifts: a shift may have no clinic (added 2026-09-25). */
 async function upgradeShifts(db: Db): Promise<string[]> {
   const cols = await rows<{ n: string }>(db, sql`SELECT IS_NULLABLE AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'shifts' AND COLUMN_NAME = 'clinicId'`);
@@ -416,6 +437,7 @@ export async function runWorkspaceMigration(): Promise<string[]> {
   applied.push(...(await upgradeShifts(db)));
   applied.push(...(await upgradePhoneCalls(db)));
   applied.push(...(await upgradeEmailMessages(db)));
+  applied.push(...(await ensureMetricIndexes(db)));
   const seeded = await seedPlaybooksIfEmpty(db);
   if (seeded) applied.push(seeded);
   return applied;
