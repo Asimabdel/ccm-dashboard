@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, CheckCircle2, Copy, Loader2, Mail, RefreshCw, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, History, Loader2, Mail, RefreshCw, Upload } from "lucide-react";
 import { Link } from "wouter";
 import { Btn, Panel, inputCls } from "@/components/workspace/ui";
 import { trpc } from "@/lib/trpc";
@@ -22,7 +22,8 @@ function CopyText({ text }: { text: string }) {
 
 /** Admin card: connect the practice Gmail mailbox (read-only) and import patient email addresses. */
 export function GmailCard() {
-  const status = trpc.workspace.email.status.useQuery(undefined, { refetchInterval: 60_000 });
+  // Poll faster while earlier emails are loading so the progress moves.
+  const status = trpc.workspace.email.status.useQuery(undefined, { refetchInterval: (q) => (q.state.data?.backfill?.status === "running" ? 5_000 : 60_000) });
   const utils = trpc.useUtils();
   const refresh = () => void utils.workspace.email.invalidate();
   const [app, setApp] = useState({ clientId: "", clientSecret: "" });
@@ -50,12 +51,22 @@ export function GmailCard() {
     onSuccess: (r) => { refresh(); if ("skipped" in r) toast.info(r.skipped); else if (r.error) toast.error(r.error); else toast.success(`${r.stats.processed} new emails: ${r.stats.assigned} assigned, ${r.stats.needsPatient} need a patient.`); },
     onError,
   });
+  const backfill = trpc.workspace.email.backfill.useMutation({
+    onSuccess: (r) => {
+      refresh();
+      if (r?.status === "done") toast.success(`Loaded: ${r.assigned} emails matched to patients, ${r.needsPatient} need a patient.`);
+      else if (r?.status === "error") toast.error(r.error ?? "Couldn't load earlier emails.");
+      else toast.info("Loading earlier emails. This keeps going in the background; you can leave this page.");
+    },
+    onError,
+  });
   const importCsv = trpc.workspace.email.importContacts.useMutation({
     onSuccess: (r) => { refresh(); toast.success(`${r.added} patient email addresses saved (${r.withEmail} in the file; ${r.notFound} didn't match a patient by name and date of birth).`); },
     onError,
   });
 
   const st = s?.state;
+  const bf = s?.backfill;
   return (
     <Panel
       className="lg:col-span-5"
@@ -104,6 +115,35 @@ export function GmailCard() {
                 {syncNow.isPending ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Check now
               </Btn>
               <Btn variant="ghost" disabled={disconnect.isPending} onClick={() => { if (confirm("Disconnect the practice mailbox? New emails stop coming in until you connect it again.")) disconnect.mutate(); }}>Disconnect</Btn>
+            </div>
+          )}
+
+          {s?.connected && (
+            <div className="rounded-xl border border-slate-200 dark:border-slate-700 px-3 py-2.5 text-xs text-slate-600 dark:text-slate-300 space-y-2">
+              {!bf && (
+                <>
+                  <p><b className="text-slate-800 dark:text-slate-100">Earlier emails.</b> Only emails that arrive after connecting come in on their own. Load the last 30 days to see those on the Patient emails page too: they're matched to patients the same way, but no tasks are made for them (they were likely handled in Gmail already).</p>
+                  <Btn size="sm" variant="secondary" disabled={backfill.isPending} onClick={() => backfill.mutate({ days: 30 })}>
+                    {backfill.isPending ? <Loader2 size={14} className="animate-spin" /> : <History size={14} />} Load the last 30 days
+                  </Btn>
+                </>
+              )}
+              {bf && bf.status !== "done" && (
+                <>
+                  <p className="flex items-center gap-1.5">
+                    {bf.status === "error" ? <AlertTriangle size={13} className="text-rose-600 shrink-0" /> : <Loader2 size={13} className="animate-spin shrink-0" />}
+                    Loading the last {bf.days} days: {bf.processed + bf.skipped} of {bf.found}{bf.listed ? "" : "+"} emails checked · {bf.assigned} matched to patients, {bf.needsPatient} need a patient
+                  </p>
+                  {bf.status === "error" && <p className="text-rose-700">Stopped: {bf.error}. It retries every 2 minutes, or try now.</p>}
+                  {bf.status === "error" && <Btn size="sm" variant="secondary" disabled={backfill.isPending} onClick={() => backfill.mutate({ days: bf.days })}>Try again</Btn>}
+                </>
+              )}
+              {bf?.status === "done" && (
+                <p className="flex items-center gap-1.5">
+                  <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+                  Last {bf.days} days loaded: {bf.assigned} matched to patients, {bf.needsPatient} need a patient, {bf.ignored} not from patients. <Link href="/patient-emails" className="font-semibold underline">See them</Link>
+                </p>
+              )}
             </div>
           )}
 

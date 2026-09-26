@@ -49,8 +49,12 @@ export const handler = async (event: any, context: any) => {
   // Every 10 minutes from an EventBridge schedule (IAM-only, same reasoning as __migrate).
   // Every 2 minutes: new emails in the practice mailbox → patient-email tasks.
   if (event && event.__job === "gmail-sync" && !event.requestContext && !event.version) {
-    const { runGmailSync } = await import("../gmailSync");
-    return runGmailSync({ maxMs: 22_000, manual: false });
+    const { runGmailSync, runGmailBackfill } = await import("../gmailSync");
+    const started = Date.now();
+    const sync = await runGmailSync({ maxMs: 14_000, manual: false });
+    // Then keep loading earlier emails ("Load the last 30 days") with the time left.
+    const backfill = "skipped" in sync ? null : await runGmailBackfill({ deadline: started + 23_000 });
+    return { ...sync, backfill };
   }
   if (event && event.__job === "ringcentral-sync" && !event.requestContext && !event.version) {
     const { runRingCentralSync } = await import("../ringcentralSync");

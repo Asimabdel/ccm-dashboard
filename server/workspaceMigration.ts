@@ -193,6 +193,7 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     \`status\` ENUM('assigned','needs_patient','ignored') NOT NULL,
     \`taskId\` int,
     \`assignedUserId\` int,
+    \`historical\` boolean NOT NULL DEFAULT false,
     \`createdAt\` timestamp NOT NULL DEFAULT (now()),
     UNIQUE KEY \`emailMessages_gmailId_unique\` (\`gmailId\`),
     INDEX \`emailMessages_status_idx\` (\`status\`, \`receivedAt\`),
@@ -321,6 +322,14 @@ async function upgradePhoneCalls(db: Db): Promise<string[]> {
   return applied;
 }
 
+/** Practice mailbox: emails loaded from before the mailbox was connected (added 2026-09-25). */
+async function upgradeEmailMessages(db: Db): Promise<string[]> {
+  const cols = await rows<{ c: string }>(db, sql`SELECT COLUMN_NAME AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'emailMessages'`);
+  if (!cols.length || cols.some((c) => c.c === "historical")) return [];
+  await db.execute(sql.raw("ALTER TABLE `emailMessages` ADD COLUMN `historical` boolean NOT NULL DEFAULT false AFTER `assignedUserId`"));
+  return ["emailMessages.historical added"];
+}
+
 /** Remote shifts: a shift may have no clinic (added 2026-09-25). */
 async function upgradeShifts(db: Db): Promise<string[]> {
   const cols = await rows<{ n: string }>(db, sql`SELECT IS_NULLABLE AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'shifts' AND COLUMN_NAME = 'clinicId'`);
@@ -406,6 +415,7 @@ export async function runWorkspaceMigration(): Promise<string[]> {
   applied.push(...(await upgradeStaffProfiles(db)));
   applied.push(...(await upgradeShifts(db)));
   applied.push(...(await upgradePhoneCalls(db)));
+  applied.push(...(await upgradeEmailMessages(db)));
   const seeded = await seedPlaybooksIfEmpty(db);
   if (seeded) applied.push(seeded);
   return applied;

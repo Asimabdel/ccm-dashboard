@@ -5,6 +5,8 @@
 // staff member picks the patient; that address is then remembered.
 //
 // Runs every 2 minutes from an EventBridge schedule (lambda.ts, {"__job":"gmail-sync"}).
+// "Load the last 30 days" pulls in earlier inbox emails a chunk per run; those are matched
+// and shown on the Patient emails page but never create tasks (they were handled in Gmail).
 // Google is reached through the allowlist relay (server/egress.ts). Scope: gmail.readonly.
 import { SignJWT, jwtVerify } from "jose";
 import { and, asc, desc, eq, gte, inArray } from "drizzle-orm";
@@ -77,6 +79,7 @@ export async function getGmailStatus() {
     hasWaiting: !!waiting,
     hasContacts: !!contacts,
     callbackPath: CALLBACK_PATH,
+    backfill: await getBackfill(),
   };
 }
 
@@ -143,6 +146,7 @@ export async function setGmailEnabled(actor: WorkspaceActor, enabled: boolean) {
 export async function disconnectGmail(actor: WorkspaceActor) {
   const c = await config();
   await writeSetting(CONFIG_KEY, { ...c, refreshTokenEnc: "", mailbox: null, historyId: null, enabled: false }, actor.id);
+  await (await db()).delete(appSettings).where(eq(appSettings.key, BACKFILL_KEY));
   tokenCache = null;
   await audit(actor, "manage_access", { entityType: "integration", description: "Gmail disconnected" });
   return { ok: true };
@@ -286,7 +290,7 @@ export async function runGmailSync(opts: { maxMs: number; manual: boolean }) {
   return { stats, error: state.lastError };
 }
 
-async function processMessage(m: GmailMessage, mailbox: string, idx: EmailMatchIndex, actor: WorkspaceActor): Promise<"assigned" | "needsPatient" | "ignored"> {
+async function processMessage(m: GmailMessage, mailbox: string, idx: EmailMatchIndex, actor: WorkspaceActor, historical = false): Promise<"assigned" | "needsPatient" | "ignored"> {
   const d = await db();
   const header = (name: string) => m.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? null;
   const from = parseFromHeader(header("From"));
@@ -294,7 +298,7 @@ async function processMessage(m: GmailMessage, mailbox: string, idx: EmailMatchI
   const receivedAt = new Date(Number(m.internalDate ?? Date.now()));
   const messageIdHeader = header("Message-ID")?.slice(0, 255) ?? null;
   const labels = m.labelIds ?? [];
-  const base = { gmailId: m.id, threadId: m.threadId, messageIdHeader, fromEmail: from.email, fromName: from.name?.slice(0, 255) ?? null, subject, receivedAt };
+  const base = { gmailId: m.id, threadId: m.threadId, messageIdHeader, fromEmail: from.email, fromName: from.name?.slice(0, 255) ?? null, subject, receivedAt, historical };
 
   const skip = !labels.includes("INBOX") || labels.some((l) => SKIP_LABELS.includes(l)) || !from.email || from.email === mailbox || AUTOMATED_SENDER.test(from.email);
   const body = skip ? "" : bodyText(m.payload);
@@ -304,6 +308,11 @@ async function processMessage(m: GmailMessage, mailbox: string, idx: EmailMatchI
     await d.insert(emailMessages).values({ ...base, preview, status: match ? "ignored" : "needs_patient" });
     return match ? "ignored" : "needsPatient";
   }
+  const matched = { patientId: match.subject.patientId, subjectKey: match.subject.key, patientName: match.subject.name.slice(0, 255), matchMethod: match.method };
+  if (historical) {
+    await d.insert(emailMessages).values({ ...base, preview, status: "assigned", ...matched });
+    return "assigned";
+  }
   const who = await careTeamAssignee(match.subject.key);
   const text = taskText({ ...base, preview, link: gmailMessageLink(mailbox, messageIdHeader, m.threadId), method: match.method }, match.subject.name);
   const task = await createTask(actor, {
@@ -311,11 +320,102 @@ async function processMessage(m: GmailMessage, mailbox: string, idx: EmailMatchI
     assignedUserId: who.assignedUserId, assignedRole: who.assignedRole, priority: "normal", category: "patient_email",
     dueDate: localDateStr(), sourceType: "email", sourceRef: m.id,
   });
-  await d.insert(emailMessages).values({
-    ...base, preview, status: "assigned", patientId: match.subject.patientId, subjectKey: match.subject.key,
-    patientName: match.subject.name.slice(0, 255), matchMethod: match.method, taskId: task.id, assignedUserId: who.assignedUserId,
-  });
+  await d.insert(emailMessages).values({ ...base, preview, status: "assigned", ...matched, taskId: task.id, assignedUserId: who.assignedUserId });
   return "assigned";
+}
+
+// ---- Earlier emails: "Load the last 30 days" ----
+// Listed once (newest first, 500 per page), then fetched a few at a time on each scheduled run
+// until done, so no single request runs long. Mail newer than the request is the live sync's job.
+
+const BACKFILL_KEY = "gmail_backfill";
+interface GmailBackfill {
+  status: "running" | "done" | "error";
+  days: number;
+  after: number; // epoch seconds
+  before: number; // epoch seconds (when it was requested)
+  pageToken: string | null;
+  listed: boolean;
+  pending: string[];
+  found: number; processed: number; skipped: number; assigned: number; needsPatient: number; ignored: number;
+  requestedAt: string; finishedAt: string | null; error: string | null;
+}
+const publicBackfill = ({ pending, pageToken, after, before, ...b }: GmailBackfill) => ({ ...b, remaining: pending.length });
+async function getBackfill() {
+  const b = await readSetting<GmailBackfill>(BACKFILL_KEY);
+  return b ? publicBackfill(b) : null;
+}
+const isDuplicate = (e: unknown) => /Duplicate entry|ER_DUP_ENTRY/i.test(`${(e as Error)?.message} ${(e as { code?: string })?.code ?? ""} ${(e as { cause?: { code?: string; message?: string } })?.cause?.code ?? ""} ${(e as { cause?: { message?: string } })?.cause?.message ?? ""}`);
+
+export async function startGmailBackfill(actor: WorkspaceActor, days: number) {
+  const c = await config();
+  if (!c.refreshTokenEnc) throw new WorkspaceError("Connect the mailbox first.");
+  const cur = await readSetting<GmailBackfill>(BACKFILL_KEY);
+  if (cur?.status === "done") return publicBackfill(cur); // once per connection (disconnecting clears it)
+  if (!cur) {
+    const now = Math.floor(Date.now() / 1000);
+    await writeSetting(BACKFILL_KEY, {
+      status: "running", days, after: now - days * 86_400, before: now, pageToken: null, listed: false, pending: [],
+      found: 0, processed: 0, skipped: 0, assigned: 0, needsPatient: 0, ignored: 0, requestedAt: new Date().toISOString(), finishedAt: null, error: null,
+    } satisfies GmailBackfill, actor.id);
+    await audit(actor, "manage_access", { entityType: "integration", description: `Gmail: loading emails from the last ${days} days` });
+  }
+  return runGmailBackfill({ deadline: Date.now() + 15_000 });
+}
+
+export async function runGmailBackfill(opts: { deadline: number }) {
+  const b = await readSetting<GmailBackfill>(BACKFILL_KEY);
+  const c = await config();
+  if (!b || b.status === "done" || !c.refreshTokenEnc) return b ? publicBackfill(b) : null;
+  const d = await db();
+  b.status = "running";
+  b.error = null;
+  try {
+    let idx: EmailMatchIndex | null = null;
+    let actor: WorkspaceActor | null = null;
+    while (Date.now() < opts.deadline) {
+      if (!b.pending.length) {
+        if (b.listed) break;
+        const q = `in:inbox after:${b.after} before:${b.before} -category:promotions -category:social`;
+        const page = await gmailGet<{ messages?: { id: string }[]; nextPageToken?: string }>(
+          `/messages?q=${encodeURIComponent(q)}&maxResults=500${b.pageToken ? `&pageToken=${encodeURIComponent(b.pageToken)}` : ""}`);
+        const ids = (page.messages ?? []).map((m) => m.id);
+        const have = ids.length ? new Set((await d.select({ g: emailMessages.gmailId }).from(emailMessages).where(inArray(emailMessages.gmailId, ids))).map((r) => r.g)) : new Set<string>();
+        b.pending = ids.filter((id) => !have.has(id));
+        b.found += ids.length;
+        b.skipped += ids.length - b.pending.length;
+        b.pageToken = page.nextPageToken ?? null;
+        b.listed = !b.pageToken;
+        await writeSetting(BACKFILL_KEY, b, null);
+        continue;
+      }
+      idx ??= await buildIndex();
+      actor ??= await systemActor();
+      const batch = b.pending.slice(0, 8);
+      const msgs = await Promise.all(batch.map((id) => gmailGet<GmailMessage>(`/messages/${id}?format=full`)
+        .catch((e) => { if ((e as { status?: number }).status === 404) return null; throw e; }))); // 404: deleted since it was listed
+      for (const m of msgs) {
+        if (!m) { b.skipped++; continue; }
+        try {
+          const r = await processMessage(m, c.mailbox ?? "", idx, actor, true);
+          b.processed++;
+          b[r]++;
+        } catch (e) {
+          if (!isDuplicate(e)) throw e;
+          b.skipped++;
+        }
+      }
+      b.pending = b.pending.slice(batch.length);
+      await writeSetting(BACKFILL_KEY, b, null);
+    }
+    if (b.listed && !b.pending.length) { b.status = "done"; b.finishedAt = new Date().toISOString(); }
+  } catch (e) {
+    b.status = "error";
+    b.error = (e as Error).message.slice(0, 300);
+  }
+  await writeSetting(BACKFILL_KEY, b, null);
+  console.log(`[gmail-backfill] ${JSON.stringify({ status: b.status, found: b.found, processed: b.processed, remaining: b.pending.length, error: b.error })}`); // counts only
+  return publicBackfill(b);
 }
 
 // ---- Patient emails page: list, link, ignore ----
@@ -327,18 +427,18 @@ export async function listEmails(filter: "needs_patient" | "all") {
   if (filter === "needs_patient") conds.push(eq(emailMessages.status, "needs_patient"));
   const rows = await d.select({ m: emailMessages, assignee: users.name }).from(emailMessages)
     .leftJoin(users, eq(users.id, emailMessages.assignedUserId))
-    .where(and(...conds)).orderBy(desc(emailMessages.receivedAt)).limit(300);
+    .where(and(...conds)).orderBy(desc(emailMessages.receivedAt)).limit(1000);
   const c = await config();
   return rows.map(({ m, assignee }) => ({
     id: m.id, fromEmail: m.fromEmail, fromName: m.fromName, subject: m.subject, preview: m.preview, receivedAt: m.receivedAt,
-    status: m.status, patientName: m.patientName, patientId: m.patientId, matchMethod: m.matchMethod, taskId: m.taskId,
+    status: m.status, patientName: m.patientName, patientId: m.patientId, matchMethod: m.matchMethod, taskId: m.taskId, historical: m.historical,
     assigneeName: assignee, link: c.mailbox ? gmailMessageLink(c.mailbox, m.messageIdHeader, m.threadId ?? "") : null,
   }));
 }
 
 export { searchSubjects };
 
-/** Staff picked the patient: remember the address, then create (or re-route) the task. */
+/** Staff picked the patient: remember the address, then create (or re-route) the task. Earlier emails get no task. */
 export async function linkEmail(actor: WorkspaceActor, input: { emailId: number; subjectKey: string }) {
   const d = await db();
   const [m] = await d.select().from(emailMessages).where(eq(emailMessages.id, input.emailId)).limit(1);
@@ -356,18 +456,18 @@ export async function linkEmail(actor: WorkspaceActor, input: { emailId: number;
   if (taskId) {
     await d.update(workTasks).set({ title: text.title, description: text.description, patientId: care.patientId, clinicId: who.clinicId, assignedUserId: who.assignedUserId, assignedRole: who.assignedRole }).where(eq(workTasks.id, taskId));
     await d.insert(workTaskActivities).values({ taskId, userId: actor.id, type: "assigned", meta: { to: who.assignedUserId ? String(who.assignedUserId) : who.assignedRole } });
-  } else {
+  } else if (!m.historical) {
     taskId = (await createTask({ ...actor, clinicIds: null }, {
       title: text.title, description: text.description, patientId: care.patientId, clinicId: who.clinicId,
       assignedUserId: who.assignedUserId, assignedRole: who.assignedRole, priority: "normal", category: "patient_email",
       dueDate: localDateStr(), sourceType: "email", sourceRef: m.gmailId,
     })).id;
   }
-  await d.update(emailMessages).set({ status: "assigned", patientId: care.patientId, subjectKey: input.subjectKey, patientName: care.name.slice(0, 255), matchMethod: "manual", taskId, assignedUserId: who.assignedUserId }).where(eq(emailMessages.id, m.id));
+  await d.update(emailMessages).set({ status: "assigned", patientId: care.patientId, subjectKey: input.subjectKey, patientName: care.name.slice(0, 255), matchMethod: "manual", taskId, assignedUserId: taskId ? who.assignedUserId : null }).where(eq(emailMessages.id, m.id));
   // Other waiting emails from the same address go to the same patient now.
   const others = m.fromEmail ? await d.select({ id: emailMessages.id }).from(emailMessages).where(and(eq(emailMessages.fromEmail, m.fromEmail), eq(emailMessages.status, "needs_patient"))) : [];
   for (const o of others) if (o.id !== m.id) await linkEmail(actor, { emailId: o.id, subjectKey: input.subjectKey });
-  return { ok: true, assignedTo: who.who };
+  return { ok: true, assignedTo: who.who, task: !!taskId };
 }
 
 /** Not a patient (vendor, newsletter, etc.): hide it and ignore that address from now on. */

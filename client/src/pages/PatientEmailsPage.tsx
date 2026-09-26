@@ -33,7 +33,7 @@ export default function PatientEmailsPage() {
   const rows = list.data ?? [];
   return (
     <CCMDashboardLayout title="Patient emails" pageTitle={false}>
-      <PageHeader title="Patient emails" subtitle="Emails from the practice mailbox. Matched ones are already tasks in My Work; pick the patient for the rest." />
+      <PageHeader title="Patient emails" subtitle="Emails from the practice mailbox. New ones matched to a patient are already tasks in My Work; pick the patient for the rest." />
       {ws.caps && !ws.caps.emailTriage && <ErrorNote message="You don't have access to patient emails." />}
       <div className="flex gap-1 mb-5 border-b border-slate-200 dark:border-slate-700" role="tablist">
         {[{ k: "needs_patient", label: "Needs a patient", icon: Inbox }, { k: "all", label: "All emails (30 days)", icon: Mail }].map((t) => (
@@ -56,12 +56,12 @@ export default function PatientEmailsPage() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <p className="font-semibold text-slate-900 dark:text-slate-50 truncate">{m.subject || "(no subject)"}</p>
-                    <p className="text-xs text-slate-500 truncate">{m.fromName ? `${m.fromName} · ` : ""}{m.fromEmail} · {fmtTime(m.receivedAt)}</p>
+                    <p className="text-xs text-slate-500 truncate">{m.fromName ? `${m.fromName} · ` : ""}{m.fromEmail} · {fmtTime(m.receivedAt)}{m.historical ? " · earlier email" : ""}</p>
                     {m.preview && <p className="mt-1 text-xs text-slate-600 dark:text-slate-300 line-clamp-2 whitespace-pre-line">{m.preview}</p>}
                     {m.status === "assigned" && (
                       <p className="mt-1 text-xs text-emerald-700 dark:text-emerald-300">
                         {m.patientId ? <Link href={`/patients/${m.patientId}?tab=overview`} className="font-semibold hover:underline">{m.patientName}</Link> : <b>{m.patientName}</b>}
-                        {" "}({METHOD[m.matchMethod ?? ""] ?? m.matchMethod}) → {m.assigneeName ?? "front desk queue"}
+                        {" "}({METHOD[m.matchMethod ?? ""] ?? m.matchMethod}) {m.taskId ? <>→ {m.assigneeName ?? "front desk queue"}</> : m.historical ? "· no task" : null}
                         {m.taskId && <> · <Link href={`/my-work?task=${m.taskId}`} className="underline">task</Link></>}
                       </p>
                     )}
@@ -94,7 +94,7 @@ function LinkDialog({ email, onClose }: { email: { id: number; from: string }; o
   const search = trpc.workspace.email.search.useQuery({ q }, { enabled: q.trim().length >= 2 });
   const utils = trpc.useUtils();
   const link = trpc.workspace.email.link.useMutation({
-    onSuccess: (r) => { void utils.workspace.email.invalidate(); void utils.workspace.tasks.invalidate(); toast.success(`Linked and sent to the ${r.assignedTo}. Emails from this address will match automatically.`); onClose(); },
+    onSuccess: (r) => { void utils.workspace.email.invalidate(); void utils.workspace.tasks.invalidate(); toast.success(r.task ? `Linked and sent to the ${r.assignedTo}. Emails from this address will match automatically.` : "Linked to the patient. Emails from this address will match automatically."); onClose(); },
     onError: (e) => toast.error(e.message),
   });
   return (

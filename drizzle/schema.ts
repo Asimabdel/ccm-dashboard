@@ -872,6 +872,8 @@ export const emailMessages = mysqlTable("emailMessages", {
   status: mysqlEnum("status", ["assigned", "needs_patient", "ignored"]).notNull(),
   taskId: int("taskId"),
   assignedUserId: int("assignedUserId").references(() => users.id),
+  /** Loaded from before the mailbox was connected ("Load the last 30 days"): shown, but no task. */
+  historical: boolean("historical").default(false).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (t) => ({
   statusIdx: index("emailMessages_status_idx").on(t.status, t.receivedAt),

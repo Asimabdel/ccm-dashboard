@@ -329,6 +329,11 @@ export const workspaceRouter = router({
       if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can run the mailbox check." });
       return gmail.runGmailSync({ maxMs: 18_000, manual: true });
     }),
+    backfill: protectedProcedure.input(z.object({ days: z.number().int().min(1).max(90).default(30) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "emailTriage");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can load earlier emails." });
+      return run(() => gmail.startGmailBackfill(actor, input.days));
+    }),
     importContacts: protectedProcedure.input(z.object({ csv: csvText })).mutation(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "emailTriage");
       if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can import patient email addresses." });
