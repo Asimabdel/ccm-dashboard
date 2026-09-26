@@ -63,7 +63,8 @@ export default function TeamProgressPage() {
           {ROLE_ORDER.map((role) => {
             const people = data.people.filter((p) => p.role === role);
             if (!people.length) return null;
-            const keys = [...(ROLE_PRIMARY[role] ?? []), ...COMMON].filter((k, i, a) => a.indexOf(k) === i)
+            // Practice-wide numbers are the same for every admin and already in the tiles above.
+            const keys = [...(ROLE_PRIMARY[role] ?? []), ...COMMON].filter((k, i, a) => a.indexOf(k) === i && !k.startsWith("practice_"))
               .filter((k) => people.some((p) => p.metrics.some((m) => m.key === k)));
             const val = (p: (typeof people)[number], k: MetricKey) => p.metrics.find((m) => m.key === k);
             const sorted = [...people].sort((a, b) => (val(b, keys[0]!)?.value ?? -1) - (val(a, keys[0]!)?.value ?? -1));
