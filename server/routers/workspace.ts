@@ -366,6 +366,10 @@ export const workspaceRouter = router({
       await actorFor(ctx, "tasks");
       return metrics.myMetrics({ id: ctx.user.id, name: ctx.user.name, role: ctx.user.role });
     }),
+    team: protectedProcedure.input(z.object({ date: dateStr })).query(async ({ ctx, input }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can see the team's numbers." });
+      return metrics.teamMetrics(input.date);
+    }),
     goals: protectedProcedure.query(async ({ ctx }) => {
       if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can see the daily goals." });
       return metrics.getDailyGoals();

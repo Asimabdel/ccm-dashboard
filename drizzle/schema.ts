@@ -969,6 +969,30 @@ export const phoneCalls = mysqlTable("phoneCalls", {
   subjectIdx: index("phoneCalls_subject_idx").on(t.subjectKey),
 }));
 
+/**
+ * Every RingCentral call (not just patient calls), reduced to what the productivity numbers need:
+ * which extension handled it, direction, result and length. No outside phone numbers are kept.
+ */
+export const rcCallStats = mysqlTable("rcCallStats", {
+  id: int("id").autoincrement().primaryKey(),
+  rcId: varchar("rcId", { length: 120 }).notNull().unique(),
+  startedAt: datetime("startedAt").notNull(),
+  /** Clinic-local calendar date "YYYY-MM-DD". */
+  workDate: varchar("workDate", { length: 10 }).notNull(),
+  direction: mysqlEnum("direction", ["outbound", "inbound"]).notNull(),
+  durationSec: int("durationSec").default(0).notNull(),
+  result: varchar("result", { length: 60 }),
+  answered: boolean("answered").default(false).notNull(),
+  missed: boolean("missed").default(false).notNull(),
+  extensionId: varchar("extensionId", { length: 40 }),
+  extensionName: varchar("extensionName", { length: 120 }),
+  extensionEmail: varchar("extensionEmail", { length: 320 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  dateIdx: index("rcCallStats_date_idx").on(t.workDate),
+  extDateIdx: index("rcCallStats_ext_date_idx").on(t.extensionId, t.workDate),
+}));
+
 /** Practice knowledge base (SOPs / workflows). */
 export const playbooks = mysqlTable("playbooks", {
   id: int("id").autoincrement().primaryKey(),

@@ -2,7 +2,7 @@
 // Counts only (no patient details), so every role can see their own.
 
 export type MetricKey =
-  | "calls" | "talk" | "booked"
+  | "calls" | "talk" | "booked" | "missed"
   | "tasks_done" | "tasks_left" | "hours"
   | "care_calls" | "ccm_month"
   | "checkins" | "roomed"

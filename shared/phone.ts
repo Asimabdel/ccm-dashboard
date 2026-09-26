@@ -92,7 +92,47 @@ interface RcCallLogRecord {
   startTime?: string; duration?: number; direction?: string; result?: string;
   from?: RcParty; to?: RcParty;
   extension?: { id?: string | number };
-  legs?: { extension?: { id?: string | number } }[];
+  legs?: { extension?: { id?: string | number }; result?: string; duration?: number }[];
+}
+
+/** One call for the productivity numbers: who handled it and how it went. Never the outside number. */
+export interface CallStat {
+  rcId: string;
+  direction: "outbound" | "inbound";
+  startedAt: Date;
+  durationSec: number;
+  result: string | null;
+  /** The extension that made it (outbound) or answered it (inbound; else the one it rang). */
+  extensionId: string | null;
+  answered: boolean;
+  missed: boolean;
+}
+
+const ANSWERED = /accepted|connected/i;
+const MISSED = /missed|voicemail|no answer|rejected|busy|hang ?up|abandon/i;
+
+/** Map a company call-log record to a CallStat. Internal extension-to-extension calls are skipped. */
+export function mapCallStat(r: RcCallLogRecord): CallStat | null {
+  const base = mapCallLogRecord(r);
+  if (!base || !base.ids.length || !base.otherNumber) return null;
+  let extensionId = base.extensionId;
+  let answered = false;
+  if (base.direction === "inbound") {
+    // A call to a queue rings several people; credit the one who picked up.
+    const leg = (r.legs ?? []).find((l) => l.extension?.id != null && ANSWERED.test(l.result ?? ""));
+    if (leg) extensionId = String(leg.extension!.id);
+    answered = !!leg || ANSWERED.test(base.result ?? "");
+  }
+  return {
+    rcId: base.ids[0]!,
+    direction: base.direction,
+    startedAt: base.startedAt,
+    durationSec: base.durationSec,
+    result: base.result,
+    extensionId,
+    answered,
+    missed: base.direction === "inbound" && !answered && MISSED.test(base.result ?? ""),
+  };
 }
 
 /**

@@ -21,7 +21,7 @@ import {
   type ScheduleVisit,
 } from "../shared/workspace";
 import { appointmentKey } from "./workspaceDb";
-import { formatPhone, mapCallLogRecord, normalizePhone, parseRingCentralCall } from "../shared/phone";
+import { formatPhone, mapCallLogRecord, mapCallStat, normalizePhone, parseRingCentralCall } from "../shared/phone";
 import { extractPhones, matchEmailSender, parseFromHeader, stripQuotedText } from "../shared/email";
 import { ageOn, evaluateTesting, parseSex, recognizeTest } from "../shared/testing";
 import { PLANS, checkInsurance, patientLine } from "../shared/insurance";
@@ -528,5 +528,24 @@ describe("my progress metrics", () => {
   it("only admins can see or set daily goals", async () => {
     await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.metrics.setGoals({ front_desk: { calls: 40 } })).rejects.toThrow(/admin/);
     await expect(appRouter.createCaller(ctxFor("staff")).workspace.metrics.goals()).rejects.toThrow(/admin/);
+  });
+});
+
+describe("RingCentral call stats (every call, per person)", () => {
+  it("credits outbound calls to the caller and queue calls to whoever answered", () => {
+    const out = mapCallStat({ id: "a1", telephonySessionId: "t1", startTime: "2026-09-26T15:00:00.000Z", duration: 120, direction: "Outbound", result: "Call connected", to: { phoneNumber: "+17135551234" }, extension: { id: 101 } });
+    expect(out).toMatchObject({ rcId: "t1", direction: "outbound", extensionId: "101", answered: false, missed: false, durationSec: 120 });
+    const queue = mapCallStat({ id: "a2", startTime: "2026-09-26T16:00:00.000Z", duration: 300, direction: "Inbound", result: "Accepted", from: { phoneNumber: "+12815550000" },
+      extension: { id: 900 }, legs: [{ extension: { id: 900 }, result: "Missed" }, { extension: { id: 205 }, result: "Accepted" }] });
+    expect(queue).toMatchObject({ extensionId: "205", answered: true, missed: false });
+  });
+  it("marks unanswered inbound calls as missed and skips internal calls", () => {
+    expect(mapCallStat({ id: "a3", startTime: "2026-09-26T17:00:00.000Z", direction: "Inbound", result: "Missed", from: { phoneNumber: "+12815550001" }, extension: { id: 205 } }))
+      .toMatchObject({ answered: false, missed: true, extensionId: "205" });
+    expect(mapCallStat({ id: "a4", startTime: "2026-09-26T17:05:00.000Z", direction: "Inbound", result: "Voicemail", duration: 40, from: { phoneNumber: "+12815550002" } })!.missed).toBe(true);
+    expect(mapCallStat({ id: "a5", startTime: "2026-09-26T17:10:00.000Z", direction: "Outbound", result: "Call connected", to: { extensionNumber: "102" }, extension: { id: 101 } })).toBeNull();
+  });
+  it("only admins can see the team's numbers", async () => {
+    await expect(appRouter.createCaller(ctxFor("staff")).workspace.metrics.team({ date: "2026-09-26" })).rejects.toThrow(/admin/);
   });
 });

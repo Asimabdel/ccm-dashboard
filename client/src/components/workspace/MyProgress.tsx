@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { toast } from "sonner";
 import {
   BadgeDollarSign, Building2, CalendarCheck, CheckCircle2, Clock, DoorOpen, Gauge, HeartPulse, Inbox, ListTodo, Loader2,
-  PhoneCall, Receipt, Settings2, Stethoscope, Target, Timer, UserCheck,
+  PhoneCall, PhoneMissed, Receipt, Settings2, Stethoscope, Target, Timer, UserCheck,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -16,15 +16,15 @@ import {
   type DailyGoals, type Metric, type MetricKey,
 } from "@shared/metrics";
 
-const ICON: Record<MetricKey, React.ElementType> = {
-  calls: PhoneCall, talk: Clock, booked: CalendarCheck, tasks_done: CheckCircle2, tasks_left: ListTodo, hours: Timer,
+export const ICON: Record<MetricKey, React.ElementType> = {
+  missed: PhoneMissed, calls: PhoneCall, talk: Clock, booked: CalendarCheck, tasks_done: CheckCircle2, tasks_left: ListTodo, hours: Timer,
   care_calls: HeartPulse, ccm_month: Target, checkins: UserCheck, roomed: DoorOpen, seen: Stethoscope, waiting: Inbox,
   ready_to_bill: Receipt, billed_month: BadgeDollarSign, practice_visits: Building2, practice_calls: PhoneCall, practice_ccm: Target,
 };
 
 /** Short word after the number in the top bar. */
-const SHORT: Record<MetricKey, string> = {
-  calls: "calls", talk: "on phone", booked: "booked", tasks_done: "tasks done", tasks_left: "tasks left", hours: "on clock",
+export const SHORT: Record<MetricKey, string> = {
+  missed: "missed", calls: "calls", talk: "on phone", booked: "booked", tasks_done: "tasks done", tasks_left: "tasks left", hours: "on clock",
   care_calls: "care calls", ccm_month: "this month", checkins: "checked in", roomed: "roomed", seen: "seen", waiting: "waiting",
   ready_to_bill: "to bill", billed_month: "billed", practice_visits: "visits", practice_calls: "calls", practice_ccm: "care calls (mo)",
 };
@@ -97,7 +97,7 @@ export function MyProgress({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
-function MetricRow({ m, onGo }: { m: Metric; onGo?: () => void }) {
+export function MetricRow({ m, onGo }: { m: Metric; onGo?: () => void }) {
   const Icon = ICON[m.key];
   const p = progressOf(m);
   const compare = m.goal ? `Goal ${m.goal}${m.goalLabel ? ` (${m.goalLabel})` : ""}` : m.usual ? `Your usual day: ${m.usual}` : null;

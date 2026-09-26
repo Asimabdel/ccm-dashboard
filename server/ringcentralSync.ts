@@ -3,12 +3,14 @@
 // same call log as calls made through the phone built into MyPCP.
 //
 // Only calls to or from a known patient (CCM roster or anyone on the imported schedule)
-// are kept; everything else is ignored. Runs every 10 minutes from an EventBridge
+// land in the call log. Every outside call also becomes an rcCallStats row (who handled it,
+// direction, result, length; no outside number) for the per-person productivity numbers. Runs every 10 minutes from an EventBridge
 // schedule (lambda.ts, {"__job":"ringcentral-sync"}) and from Admin → Integrations.
-import { and, eq, gte, lte } from "drizzle-orm";
+import { and, eq, gte, lte, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { appSettings, phoneCalls, users } from "../drizzle/schema";
-import { mapCallLogRecord } from "../shared/phone";
+import { appSettings, phoneCalls, rcCallStats, users } from "../drizzle/schema";
+import { mapCallLogRecord, mapCallStat } from "../shared/phone";
+import { localDateStr } from "../shared/workforce";
 import { openSecret, sealSecret } from "./secretBox";
 import { buildPhoneIndex, type WorkspaceActor, audit } from "./workspaceDb";
 import { relayFetch as rcFetch } from "./egress";
@@ -37,6 +39,8 @@ export interface SyncState {
   lastError: string | null;
   lastStats: { records: number; matched: number; added: number; updated: number } | null;
   totalAdded: number;
+  /** The one-time 30-day re-read for per-person call stats has started. */
+  statsBackfilled?: boolean;
 }
 const EMPTY_STATE: SyncState = { cursor: null, lastRunAt: null, lastSuccessAt: null, lastError: null, lastStats: null, totalAdded: 0 };
 
@@ -149,6 +153,28 @@ export async function saveSyncConfig(actor: WorkspaceActor, input: { enabled: bo
 
 // ---- The sync ----
 
+async function saveCallStats(records: unknown[], exts: Map<string, { name: string; email: string | null }>) {
+  const rows = records.map((r) => mapCallStat(r as Parameters<typeof mapCallStat>[0])).filter((s): s is NonNullable<typeof s> => !!s).map((s) => {
+    const ext = s.extensionId ? exts.get(s.extensionId) : undefined;
+    return {
+      rcId: s.rcId.slice(0, 120), startedAt: s.startedAt, workDate: localDateStr(s.startedAt), direction: s.direction,
+      durationSec: Math.min(s.durationSec, 86_400), result: s.result?.slice(0, 60) ?? null, answered: s.answered, missed: s.missed,
+      extensionId: s.extensionId, extensionName: ext?.name.slice(0, 120) ?? null, extensionEmail: ext?.email?.slice(0, 320) ?? null,
+    };
+  });
+  const d = await db();
+  for (let i = 0; i < rows.length; i += 200) {
+    // Re-reading a window updates the same calls (RingCentral fills in results late), never duplicates.
+    await d.insert(rcCallStats).values(rows.slice(i, i + 200)).onDuplicateKeyUpdate({
+      set: {
+        durationSec: sql`VALUES(${rcCallStats.durationSec})`, result: sql`VALUES(${rcCallStats.result})`, answered: sql`VALUES(${rcCallStats.answered})`,
+        missed: sql`VALUES(${rcCallStats.missed})`, extensionId: sql`VALUES(${rcCallStats.extensionId})`, extensionName: sql`VALUES(${rcCallStats.extensionName})`,
+        extensionEmail: sql`VALUES(${rcCallStats.extensionEmail})`,
+      },
+    });
+  }
+}
+
 interface CallRow { id: number; phoneNumber: string; direction: string; startedAt: Date; rcSessionId: string | null; durationSec: number; result: string | null; userId: number | null; rcExtensionName: string | null }
 
 /**
@@ -171,6 +197,10 @@ export async function runRingCentralSync(opts: { maxRequests: number; maxMs: num
     const userByEmail = new Map((await d.select({ id: users.id, email: users.email }).from(users)).filter((u) => u.email).map((u) => [u.email!.toLowerCase(), u.id]));
     const phones = await buildPhoneIndex();
 
+    // Once, when per-person call stats were added (2026-09-26): re-read the last 30 days so every call
+    // (not only patient calls) is counted. Re-reading is safe: calls already in the log are matched, not added.
+    if (state.cursor && !state.statsBackfilled) state.cursor = null;
+    state.statsBackfilled = true;
     let cursor = state.cursor ? new Date(state.cursor) : new Date(Date.now() - BACKFILL_DAYS * 86_400_000);
     let requests = 0;
     while (requests < opts.maxRequests && Date.now() - started < opts.maxMs) {
@@ -196,6 +226,8 @@ export async function runRingCentralSync(opts: { maxRequests: number; maxMs: num
         .select({ id: phoneCalls.id, phoneNumber: phoneCalls.phoneNumber, direction: phoneCalls.direction, startedAt: phoneCalls.startedAt, rcSessionId: phoneCalls.rcSessionId, durationSec: phoneCalls.durationSec, result: phoneCalls.result, userId: phoneCalls.userId, rcExtensionName: phoneCalls.rcExtensionName })
         .from(phoneCalls)
         .where(and(gte(phoneCalls.startedAt, new Date(from.getTime() - 15 * 60_000)), lte(phoneCalls.startedAt, new Date(to.getTime() + 15 * 60_000))));
+      // Productivity numbers: every outside call, patient or not (no outside numbers stored).
+      await saveCallStats(records, exts);
       for (const raw of records) {
         const m = mapCallLogRecord(raw as Parameters<typeof mapCallLogRecord>[0]);
         if (!m?.otherNumber) continue;
