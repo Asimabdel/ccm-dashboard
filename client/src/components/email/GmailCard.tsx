@@ -36,7 +36,9 @@ export function GmailCard() {
     const p = new URLSearchParams(window.location.search);
     const msg = p.get("gmail");
     if (!msg) return;
-    msg === "connected" ? toast.success("Practice mailbox connected. New emails are checked every 2 minutes.") : toast.error(msg);
+    if (msg === "connected") toast.success("Practice mailbox connected. New emails are checked every 2 minutes.");
+    else if (msg === "fax-connected") toast.success("Fax mailbox connected. New faxes are checked every 2 minutes.");
+    else toast.error(msg);
     p.delete("gmail");
     window.history.replaceState(null, "", `${window.location.pathname}${p.toString() ? `?${p}` : ""}`);
     refresh();

@@ -1329,10 +1329,10 @@ export async function buildNameDobIndex(): Promise<Map<string, { key: string; pa
 }
 
 /** Care coordinator first; else the least-busy front-desk person at the patient's clinic; else that clinic's front-desk queue. */
-export async function careTeamAssignee(subjectKey: string) {
+export async function careTeamAssignee(subjectKey: string, opts: { skipCoordinator?: boolean } = {}) {
   const d = await db();
   const care = await subjectCare(subjectKey);
-  if (care?.coordinatorId) {
+  if (care?.coordinatorId && !opts.skipCoordinator) {
     const [u] = await d.select({ id: users.id, role: users.role }).from(users).where(eq(users.id, care.coordinatorId)).limit(1);
     if (u && u.role !== "user") return { assignedUserId: u.id as number | null, assignedRole: null as string | null, clinicId: care.clinicId, who: "care coordinator" };
   }

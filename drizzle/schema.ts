@@ -719,7 +719,7 @@ export const WORK_TASK_PRIORITIES = ["low", "normal", "high", "urgent"] as const
 export const WORK_TASK_STATUSES = ["open", "in_progress", "waiting", "completed", "cancelled"] as const;
 export const WORK_TASK_CATEGORIES = [
   "patient_call", "referral", "prior_auth", "lab_followup", "form", "medication_request",
-  "care_management", "rpm", "front_desk", "provider_request", "administrative", "other", "patient_email",
+  "care_management", "rpm", "front_desk", "provider_request", "administrative", "other", "patient_email", "fax_filing",
 ] as const;
 
 /** A general work item for any role (not the monthly CCM worklist). */
@@ -991,6 +991,51 @@ export const rcCallStats = mysqlTable("rcCallStats", {
 }, (t) => ({
   dateIdx: index("rcCallStats_date_idx").on(t.workDate),
   extDateIdx: index("rcCallStats_ext_date_idx").on(t.extensionId, t.workDate),
+}));
+
+/**
+ * Incoming faxes (arriving by email). The fax itself stays in the mailbox; this keeps where it
+ * is, who it's for, and whether it's been filed in Practice Fusion.
+ */
+export const faxes = mysqlTable("faxes", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Which connected mailbox it came from: "practice" or "fax". */
+  mailbox: varchar("mailbox", { length: 10 }).notNull(),
+  gmailId: varchar("gmailId", { length: 64 }).notNull().unique(),
+  threadId: varchar("threadId", { length: 64 }),
+  messageIdHeader: varchar("messageIdHeader", { length: 255 }),
+  fromEmail: varchar("fromEmail", { length: 320 }),
+  fromName: varchar("fromName", { length: 255 }),
+  fromNumber: varchar("fromNumber", { length: 20 }),
+  subject: varchar("subject", { length: 255 }),
+  receivedAt: datetime("receivedAt").notNull(),
+  attachmentId: text("attachmentId"),
+  filename: varchar("filename", { length: 255 }),
+  mimeType: varchar("mimeType", { length: 80 }),
+  sizeBytes: int("sizeBytes"),
+  pages: int("pages"),
+  status: mysqlEnum("status", ["new", "needs_patient", "to_file", "filed", "not_patient"]).notNull(),
+  docType: varchar("docType", { length: 30 }),
+  aiPatientName: varchar("aiPatientName", { length: 255 }),
+  aiDob: varchar("aiDob", { length: 10 }),
+  aiSender: varchar("aiSender", { length: 255 }),
+  aiSummary: varchar("aiSummary", { length: 255 }),
+  aiError: varchar("aiError", { length: 255 }),
+  aiAt: datetime("aiAt"),
+  /** A name-only match the AI found; staff confirm it. */
+  suggestedKey: varchar("suggestedKey", { length: 120 }),
+  suggestedName: varchar("suggestedName", { length: 255 }),
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  patientId: int("patientId").references(() => patients.id),
+  patientName: varchar("patientName", { length: 255 }),
+  /** ai (name + DOB) | manual */
+  matchMethod: varchar("matchMethod", { length: 20 }),
+  taskId: int("taskId"),
+  filedByUserId: int("filedByUserId").references(() => users.id),
+  filedAt: datetime("filedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  statusIdx: index("faxes_status_idx").on(t.status, t.receivedAt),
 }));
 
 /** Practice knowledge base (SOPs / workflows). */

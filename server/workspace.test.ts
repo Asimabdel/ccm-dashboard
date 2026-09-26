@@ -26,6 +26,7 @@ import { extractPhones, matchEmailSender, parseFromHeader, stripQuotedText } fro
 import { ageOn, evaluateTesting, parseSex, recognizeTest } from "../shared/testing";
 import { PLANS, checkInsurance, patientLine } from "../shared/insurance";
 import { orderMetrics, progressOf, usualPerDay, weekdaysLeftInMonth } from "../shared/metrics";
+import { isFaxEmail, matchFaxPatient, parseFaxMeta, parseFaxReading } from "../shared/fax";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
 
@@ -547,5 +548,40 @@ describe("RingCentral call stats (every call, per person)", () => {
   });
   it("only admins can see the team's numbers", async () => {
     await expect(appRouter.createCaller(ctxFor("staff")).workspace.metrics.team({ date: "2026-09-26" })).rejects.toThrow(/admin/);
+  });
+});
+
+describe("fax inbox", () => {
+  const pdf = [{ filename: "fax.pdf", mimeType: "application/pdf" }];
+  it("spots fax emails: a PDF/TIFF from a fax service or with 'fax' in the subject", () => {
+    expect(isFaxEmail({ fromEmail: "notify@ringcentral.com", subject: "New Fax Message from (713) 555-0199", attachments: pdf })).toBe(true);
+    expect(isFaxEmail({ fromEmail: "someone@clinic.example", subject: "Incoming fax: lab results", attachments: [{ filename: "scan.TIF", mimeType: "image/tiff" }] })).toBe(true);
+    expect(isFaxEmail({ fromEmail: "patient@example.com", subject: "My insurance card", attachments: pdf })).toBe(false);
+    expect(isFaxEmail({ fromEmail: "notify@ringcentral.com", subject: "Voicemail", attachments: [] })).toBe(false);
+    expect(isFaxEmail({ fromEmail: "faxes@ourservice.example", subject: "Doc", attachments: pdf }, ["ourservice.example"])).toBe(true);
+    expect(parseFaxMeta("New Fax Message from (713) 555-0199 - 3 page(s)", "")).toEqual({ fromNumber: "7135550199", pages: 3 });
+  });
+  it("keeps only valid fields from the AI's answer", () => {
+    expect(parseFaxReading('Here you go:\n```json\n{"patientName":"TESTPERSON, JANE Q","dob":"1960-01-02","documentType":"lab_result","sender":"Gulf Coast Lab","summary":"Lab report"}\n```'))
+      .toEqual({ patientName: "TESTPERSON, JANE Q", dob: "1960-01-02", documentType: "lab_result", sender: "Gulf Coast Lab", summary: "Lab report" });
+    expect(parseFaxReading('{"patientName":"null","dob":"01/02/1960","documentType":"blood work"}')).toMatchObject({ patientName: null, dob: null, documentType: "other" });
+    expect(parseFaxReading("no json")).toBeNull();
+  });
+  it("assigns only on name + date of birth; a name alone is a suggestion", () => {
+    const people = [
+      { key: "p:1", patientId: 1, name: "Jane Testperson", dob: "1960-01-02" },
+      { key: "p:2", patientId: 2, name: "John Sample", dob: "1970-05-05" },
+      { key: "p:3", patientId: 3, name: "John Sample", dob: "1980-06-06" },
+    ];
+    expect(matchFaxPatient("TESTPERSON, JANE Q", "1960-01-02", people)).toMatchObject({ person: { key: "p:1" }, sure: true });
+    expect(matchFaxPatient("Jane Testperson", null, people)).toMatchObject({ person: { key: "p:1" }, sure: false });
+    expect(matchFaxPatient("J. Testperson", "1960-01-02", people)).toMatchObject({ person: { key: "p:1" }, sure: false });
+    expect(matchFaxPatient("John Sample", null, people)).toBeNull(); // two John Samples
+    expect(matchFaxPatient("John Sample", "1980-06-06", people)).toMatchObject({ person: { key: "p:3" }, sure: true });
+    expect(matchFaxPatient(null, "1960-01-02", people)).toBeNull();
+  });
+  it("fax settings are admin-only and MAs can't see faxes", async () => {
+    await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.fax.status()).rejects.toThrow(/admin/);
+    await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.fax.list({ filter: "all" })).rejects.toThrow();
   });
 });

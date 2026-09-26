@@ -50,11 +50,15 @@ export const handler = async (event: any, context: any) => {
   // Every 2 minutes: new emails in the practice mailbox → patient-email tasks.
   if (event && event.__job === "gmail-sync" && !event.requestContext && !event.version) {
     const { runGmailSync, runGmailBackfill } = await import("../gmailSync");
+    const { readPendingFaxes } = await import("../faxInbox");
     const started = Date.now();
-    const sync = await runGmailSync({ maxMs: 14_000, manual: false });
+    const sync = await runGmailSync({ maxMs: 9_000, manual: false });
+    const faxBox = await runGmailSync({ slot: "fax", maxMs: 4_000, manual: false });
+    // Faxes waiting for the AI read (each takes a few seconds; none starts after 17s so the run ends before 30s).
+    const faxRead = await readPendingFaxes({ deadline: started + 17_000 });
     // Then keep loading earlier emails ("Load the last 30 days") with the time left.
     const backfill = "skipped" in sync ? null : await runGmailBackfill({ deadline: started + 23_000 });
-    return { ...sync, backfill };
+    return { ...sync, faxBox, faxRead, backfill };
   }
   if (event && event.__job === "ringcentral-sync" && !event.requestContext && !event.version) {
     const { runRingCentralSync } = await import("../ringcentralSync");

@@ -73,6 +73,7 @@ export const TASK_CATEGORY_LABELS = {
   administrative: "Administrative",
   other: "Other",
   patient_email: "Patient email",
+  fax_filing: "Fax to file",
 } as const;
 export type TaskCategory = keyof typeof TASK_CATEGORY_LABELS;
 

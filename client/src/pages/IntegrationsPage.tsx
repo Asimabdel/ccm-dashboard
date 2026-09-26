@@ -7,6 +7,7 @@ import { Btn, ErrorNote, Loading, PageHeader, Panel, inputCls } from "@/componen
 import { useRingCentral } from "@/components/phone/ringcentralStore";
 import { CallLogSyncCard } from "@/components/phone/CallLogSyncCard";
 import { GmailCard } from "@/components/email/GmailCard";
+import { FaxCard } from "@/components/email/FaxCard";
 import { trpc } from "@/lib/trpc";
 
 const REDIRECT_URI = "https://apps.ringcentral.com/integration/ringcentral-embeddable/latest/redirect.html";
@@ -88,6 +89,7 @@ export default function IntegrationsPage() {
           <CallLogSyncCard />
 
           <GmailCard />
+          <FaxCard />
         </div>
       )}
     </CCMDashboardLayout>

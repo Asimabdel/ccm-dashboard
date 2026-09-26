@@ -5,6 +5,8 @@
 // staff member picks the patient; that address is then remembered.
 //
 // Runs every 2 minutes from an EventBridge schedule (lambda.ts, {"__job":"gmail-sync"}).
+// Faxes (a PDF/TIFF from a fax service) skip the patient-email flow and go to the Fax inbox
+// (server/faxInbox.ts). A second, fax-only mailbox can be connected with the same Google app.
 // "Load the last 30 days" pulls in earlier inbox emails a chunk per run; those are matched
 // and shown on the Patient emails page but never create tasks (they were handled in Gmail).
 // Google is reached through the allowlist relay (server/egress.ts). Scope: gmail.readonly.
@@ -12,8 +14,9 @@ import { SignJWT, jwtVerify } from "jose";
 import { and, asc, desc, eq, gte, inArray } from "drizzle-orm";
 import { getDb } from "./db";
 import { ENV } from "./_core/env";
-import { appSettings, emailContacts, emailMessages, users, workTaskActivities, workTasks } from "../drizzle/schema";
+import { appSettings, emailContacts, emailMessages, faxes, users, workTaskActivities, workTasks } from "../drizzle/schema";
 import { gmailMessageLink, matchEmailSender, parseFromHeader, stripQuotedText, type EmailMatchIndex, type EmailSubject } from "../shared/email";
+import { isFaxEmail, isFaxFile, type FaxAttachment } from "../shared/fax";
 import { nameKey, parseCsvRows, parseDateValue } from "../shared/workspace";
 import { localDateStr } from "../shared/workforce";
 import { openSecret, sealSecret } from "./secretBox";
@@ -22,8 +25,14 @@ import {
   WorkspaceError, audit, buildNameDobIndex, buildNameIndex, buildPhoneIndex, careTeamAssignee, createTask, searchSubjects, subjectCare, type WorkspaceActor,
 } from "./workspaceDb";
 
-const CONFIG_KEY = "gmail";
-const STATE_KEY = "gmail_state";
+/** "practice" = the practice mailbox (patient emails + faxes); "fax" = an optional fax-only mailbox. */
+export type MailSlot = "practice" | "fax";
+const KEYS: Record<MailSlot, { config: string; state: string }> = {
+  practice: { config: "gmail", state: "gmail_state" },
+  fax: { config: "gmail_fax", state: "gmail_fax_state" },
+};
+const CONFIG_KEY = KEYS.practice.config;
+const STATE_KEY = KEYS.practice.state;
 const SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
 const GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me";
 const CALLBACK_PATH = "/api/integrations/google/callback";
@@ -57,8 +66,24 @@ async function readSetting<T>(key: string): Promise<T | null> {
 async function writeSetting(key: string, value: unknown, userId: number | null) {
   await (await db()).insert(appSettings).values({ key, value, updatedByUserId: userId }).onDuplicateKeyUpdate({ set: { value, updatedByUserId: userId } });
 }
-async function config(): Promise<GmailConfig> {
-  return { enabled: false, clientId: "", clientSecretEnc: "", refreshTokenEnc: "", mailbox: null, connectedByUserId: null, historyId: null, ...((await readSetting<GmailConfig>(CONFIG_KEY)) ?? {}) };
+async function config(slot: MailSlot = "practice"): Promise<GmailConfig> {
+  const base: GmailConfig = { enabled: false, clientId: "", clientSecretEnc: "", refreshTokenEnc: "", mailbox: null, connectedByUserId: null, historyId: null, ...((await readSetting<GmailConfig>(CONFIG_KEY)) ?? {}) };
+  if (slot === "practice") return base;
+  // The fax mailbox uses the same Google app; only its own sign-in and bookmark are stored.
+  const f = (await readSetting<Partial<GmailConfig>>(KEYS.fax.config)) ?? {};
+  return { ...base, enabled: f.enabled ?? false, refreshTokenEnc: f.refreshTokenEnc ?? "", mailbox: f.mailbox ?? null, connectedByUserId: f.connectedByUserId ?? null, historyId: f.historyId ?? null };
+}
+async function saveConfig(slot: MailSlot, c: GmailConfig, userId: number | null) {
+  if (slot === "practice") return writeSetting(CONFIG_KEY, c, userId);
+  const { enabled, refreshTokenEnc, mailbox, connectedByUserId, historyId } = c;
+  return writeSetting(KEYS.fax.config, { enabled, refreshTokenEnc, mailbox, connectedByUserId, historyId }, userId);
+}
+
+/** The fax-only mailbox, for the Fax inbox card. */
+export async function faxMailboxStatus() {
+  const c = await config("fax");
+  const state = { ...EMPTY_STATE, ...((await readSetting<GmailState>(KEYS.fax.state)) ?? {}) };
+  return { connected: !!c.refreshTokenEnc, mailbox: c.mailbox, lastSuccessAt: state.lastSuccessAt, lastError: state.lastError };
 }
 
 // ---- Admin: status, app credentials, connect / disconnect ----
@@ -86,19 +111,24 @@ export async function getGmailStatus() {
 export async function saveGmailApp(actor: WorkspaceActor, input: { clientId: string; clientSecret?: string | null }) {
   const c = await config();
   const next: GmailConfig = { ...c, clientId: input.clientId.trim(), clientSecretEnc: input.clientSecret?.trim() ? sealSecret(input.clientSecret.trim()) : c.clientSecretEnc };
-  if (next.clientId !== c.clientId) { next.refreshTokenEnc = ""; next.mailbox = null; next.historyId = null; next.enabled = false; tokenCache = null; }
+  if (next.clientId !== c.clientId) {
+    // A different Google app: both mailboxes must sign in again.
+    next.refreshTokenEnc = ""; next.mailbox = null; next.historyId = null; next.enabled = false;
+    await saveConfig("fax", { ...(await config("fax")), refreshTokenEnc: "", mailbox: null, historyId: null, enabled: false }, actor.id);
+    tokenCache.practice = null; tokenCache.fax = null;
+  }
   await writeSetting(CONFIG_KEY, next, actor.id);
   await audit(actor, "manage_access", { entityType: "integration", description: "Gmail: saved Google app credentials" });
   return { ok: true };
 }
 
 /** Google sign-in URL for connecting the mailbox. The signed `state` ties the reply to this admin. */
-export async function gmailConnectUrl(actor: WorkspaceActor, origin: string) {
+export async function gmailConnectUrl(actor: WorkspaceActor, origin: string, slot: MailSlot = "practice") {
   const c = await config();
   if (!c.clientId || !c.clientSecretEnc) throw new WorkspaceError("Save the Google Client ID and Client Secret first.");
   if (!ALLOWED_ORIGINS.includes(origin)) throw new WorkspaceError("Connect the mailbox from mypcpcare.com.");
   const redirectUri = `${origin}${CALLBACK_PATH}`;
-  const state = await new SignJWT({ uid: actor.id, redirectUri, purpose: "gmail-connect" })
+  const state = await new SignJWT({ uid: actor.id, redirectUri, purpose: "gmail-connect", slot })
     .setProtectedHeader({ alg: "HS256" }).setExpirationTime("15m").sign(new TextEncoder().encode(ENV.cookieSecret));
   const params = new URLSearchParams({ client_id: c.clientId, redirect_uri: redirectUri, response_type: "code", scope: SCOPE, access_type: "offline", prompt: "consent", include_granted_scopes: "false", state });
   return { url: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`, redirectUri };
@@ -108,7 +138,7 @@ export async function gmailConnectUrl(actor: WorkspaceActor, origin: string) {
 export async function handleGmailCallback(query: Record<string, unknown>): Promise<string> {
   const back = (msg: string) => `/integrations?gmail=${encodeURIComponent(msg)}`;
   if (query.error) return back(`Google sign-in was cancelled (${String(query.error)}).`);
-  let claims: { uid?: number; redirectUri?: string; purpose?: string };
+  let claims: { uid?: number; redirectUri?: string; purpose?: string; slot?: MailSlot };
   try {
     claims = (await jwtVerify(String(query.state ?? ""), new TextEncoder().encode(ENV.cookieSecret))).payload as typeof claims;
   } catch {
@@ -118,7 +148,8 @@ export async function handleGmailCallback(query: Record<string, unknown>): Promi
   const d = await db();
   const [admin] = await d.select({ id: users.id, name: users.name, role: users.role }).from(users).where(eq(users.id, claims.uid)).limit(1);
   if (admin?.role !== "admin") return back("Only an admin can connect the practice mailbox.");
-  const c = await config();
+  const slot: MailSlot = claims.slot === "fax" ? "fax" : "practice";
+  const c = await config(slot);
   const res = await relayFetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -127,12 +158,16 @@ export async function handleGmailCallback(query: Record<string, unknown>): Promi
   const tok = (await res.json().catch(() => ({}))) as { access_token?: string; refresh_token?: string; expires_in?: number; scope?: string; error_description?: string };
   if (!res.ok || !tok.access_token || !tok.refresh_token) return back(`Google didn't grant access: ${tok.error_description ?? res.statusText}.`);
   if (!String(tok.scope ?? "").includes("gmail.readonly")) return back("Google didn't grant read access to Gmail. Try again and tick the Gmail permission.");
-  tokenCache = { token: tok.access_token, expiresAt: Date.now() + (tok.expires_in ?? 3600) * 1000 };
-  const profile = await gmailGet<{ emailAddress: string; historyId: string }>("/profile");
-  await writeSetting(CONFIG_KEY, { ...c, refreshTokenEnc: sealSecret(tok.refresh_token), mailbox: profile.emailAddress.toLowerCase(), connectedByUserId: admin.id, historyId: profile.historyId, enabled: true }, admin.id);
-  await writeSetting(STATE_KEY, { ...EMPTY_STATE, lastSuccessAt: new Date().toISOString() }, admin.id);
-  await audit({ id: admin.id, name: admin.name, role: "admin", clinicIds: null }, "manage_access", { entityType: "integration", description: `Gmail connected (read-only): ${profile.emailAddress}` });
-  return back("connected");
+  tokenCache[slot] = { token: tok.access_token, expiresAt: Date.now() + (tok.expires_in ?? 3600) * 1000 };
+  const profile = await gmailGet<{ emailAddress: string; historyId: string }>("/profile", slot);
+  if (slot === "fax" && profile.emailAddress.toLowerCase() === (await config("practice")).mailbox) {
+    tokenCache.fax = null;
+    return back("That's the practice mailbox. Faxes that arrive there are picked up automatically; connect a separate fax mailbox only if faxes go somewhere else.");
+  }
+  await saveConfig(slot, { ...c, refreshTokenEnc: sealSecret(tok.refresh_token), mailbox: profile.emailAddress.toLowerCase(), connectedByUserId: admin.id, historyId: profile.historyId, enabled: true }, admin.id);
+  await writeSetting(KEYS[slot].state, { ...EMPTY_STATE, lastSuccessAt: new Date().toISOString() }, admin.id);
+  await audit({ id: admin.id, name: admin.name, role: "admin", clinicIds: null }, "manage_access", { entityType: "integration", description: `Gmail ${slot === "fax" ? "fax mailbox" : "practice mailbox"} connected (read-only): ${profile.emailAddress}` });
+  return back(slot === "fax" ? "fax-connected" : "connected");
 }
 
 export async function setGmailEnabled(actor: WorkspaceActor, enabled: boolean) {
@@ -143,22 +178,23 @@ export async function setGmailEnabled(actor: WorkspaceActor, enabled: boolean) {
   return { ok: true };
 }
 
-export async function disconnectGmail(actor: WorkspaceActor) {
-  const c = await config();
-  await writeSetting(CONFIG_KEY, { ...c, refreshTokenEnc: "", mailbox: null, historyId: null, enabled: false }, actor.id);
-  await (await db()).delete(appSettings).where(eq(appSettings.key, BACKFILL_KEY));
-  tokenCache = null;
-  await audit(actor, "manage_access", { entityType: "integration", description: "Gmail disconnected" });
+export async function disconnectGmail(actor: WorkspaceActor, slot: MailSlot = "practice") {
+  const c = await config(slot);
+  await saveConfig(slot, { ...c, refreshTokenEnc: "", mailbox: null, historyId: null, enabled: false }, actor.id);
+  if (slot === "practice") await (await db()).delete(appSettings).where(eq(appSettings.key, BACKFILL_KEY));
+  tokenCache[slot] = null;
+  await audit(actor, "manage_access", { entityType: "integration", description: `Gmail ${slot === "fax" ? "fax mailbox" : "practice mailbox"} disconnected` });
   return { ok: true };
 }
 
 // ---- Gmail API ----
 
-let tokenCache: { token: string; expiresAt: number } | null = null;
+const tokenCache: Record<MailSlot, { token: string; expiresAt: number } | null> = { practice: null, fax: null };
 
-async function accessToken(): Promise<string> {
-  if (tokenCache && tokenCache.expiresAt > Date.now() + 60_000) return tokenCache.token;
-  const c = await config();
+async function accessToken(slot: MailSlot): Promise<string> {
+  const cached = tokenCache[slot];
+  if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
+  const c = await config(slot);
   if (!c.refreshTokenEnc) throw new Error("The mailbox isn't connected.");
   const res = await relayFetch("https://oauth2.googleapis.com/token", {
     method: "POST",
@@ -169,18 +205,18 @@ async function accessToken(): Promise<string> {
   if (!res.ok || !tok.access_token) {
     throw new Error(tok.error === "invalid_grant" ? "Google access was removed or expired. Click Connect mailbox to reconnect." : `Google sign-in failed (${tok.error ?? res.status}).`);
   }
-  tokenCache = { token: tok.access_token, expiresAt: Date.now() + (tok.expires_in ?? 3600) * 1000 };
+  tokenCache[slot] = { token: tok.access_token, expiresAt: Date.now() + (tok.expires_in ?? 3600) * 1000 };
   return tok.access_token;
 }
 
-async function gmailGet<T>(path: string): Promise<T> {
-  const res = await relayFetch(`${GMAIL}${path}`, { headers: { Authorization: `Bearer ${await accessToken()}`, Accept: "application/json" } });
+async function gmailGet<T>(path: string, slot: MailSlot = "practice"): Promise<T> {
+  const res = await relayFetch(`${GMAIL}${path}`, { headers: { Authorization: `Bearer ${await accessToken(slot)}`, Accept: "application/json" } });
   const body = (await res.json().catch(() => ({}))) as T & { error?: { message?: string } };
   if (!res.ok) throw Object.assign(new Error(`Gmail ${res.status}: ${body.error?.message ?? res.statusText}`), { status: res.status });
   return body;
 }
 
-interface GmailPart { mimeType?: string; body?: { data?: string }; parts?: GmailPart[] }
+interface GmailPart { mimeType?: string; filename?: string; body?: { data?: string; attachmentId?: string; size?: number }; parts?: GmailPart[] }
 interface GmailMessage {
   id: string; threadId: string; labelIds?: string[]; snippet?: string; internalDate?: string;
   payload?: GmailPart & { headers?: { name: string; value: string }[] };
@@ -198,6 +234,28 @@ function bodyText(part: GmailPart | undefined): string {
   if (plain) return plain;
   const html = find(part, "text/html");
   return html ? html.replace(/<(style|script)[\s\S]*?<\/\1>/gi, " ").replace(/<br\s*\/?>|<\/p>|<\/div>/gi, "\n").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/[ \t]+/g, " ") : "";
+}
+
+/** Every attached file in a message (name, type, size, and the id to download it). */
+function attachmentsOf(part: GmailPart | undefined): FaxAttachment[] {
+  const out: FaxAttachment[] = [];
+  const walk = (p?: GmailPart) => {
+    if (!p) return;
+    if (p.filename && p.body?.attachmentId) out.push({ attachmentId: p.body.attachmentId, filename: p.filename, mimeType: p.mimeType ?? "", size: p.body.size ?? 0 });
+    for (const c of p.parts ?? []) walk(c);
+  };
+  walk(part);
+  return out;
+}
+
+/** Download one attachment (a fax PDF) from the mailbox it arrived in. Nothing is stored. */
+export async function gmailAttachment(slot: MailSlot, messageId: string, attachmentId: string): Promise<Buffer> {
+  const r = await gmailGet<{ data?: string }>(`/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`, slot);
+  return Buffer.from((r.data ?? "").replace(/-/g, "+").replace(/_/g, "/"), "base64");
+}
+
+export async function mailboxAddress(slot: MailSlot) {
+  return (await config(slot)).mailbox;
 }
 
 // ---- Matching + assignment ----
@@ -220,8 +278,8 @@ function taskText(m: { fromName: string | null; fromEmail: string | null; subjec
   };
 }
 
-async function systemActor(): Promise<WorkspaceActor> {
-  const c = await config();
+export async function systemActor(slot: MailSlot = "practice"): Promise<WorkspaceActor> {
+  const c = await config(slot);
   const d = await db();
   const [u] = c.connectedByUserId ? await d.select({ id: users.id, name: users.name }).from(users).where(eq(users.id, c.connectedByUserId)).limit(1) : [];
   if (!u) throw new Error("The admin who connected the mailbox no longer exists. Reconnect it.");
@@ -230,14 +288,17 @@ async function systemActor(): Promise<WorkspaceActor> {
 
 // ---- The sync ----
 
-export async function runGmailSync(opts: { maxMs: number; manual: boolean }) {
+export async function runGmailSync(opts: { maxMs: number; manual: boolean; slot?: MailSlot }) {
   const started = Date.now();
-  const c = await config();
-  if (!c.refreshTokenEnc) return { skipped: "The practice mailbox isn't connected." };
+  const slot: MailSlot = opts.slot ?? "practice";
+  const c = await config(slot);
+  if (!c.refreshTokenEnc) return { skipped: slot === "fax" ? "No fax mailbox connected." : "The practice mailbox isn't connected." };
   if (!c.enabled && !opts.manual) return { skipped: "Email sync is paused." };
-  const state: GmailState = { ...EMPTY_STATE, ...((await readSetting<GmailState>(STATE_KEY)) ?? {}) };
+  const state: GmailState = { ...EMPTY_STATE, ...((await readSetting<GmailState>(KEYS[slot].state)) ?? {}) };
   state.lastRunAt = new Date().toISOString();
-  const stats = { processed: 0, assigned: 0, needsPatient: 0, ignored: 0 };
+  const stats = { processed: 0, assigned: 0, needsPatient: 0, ignored: 0, faxes: 0 };
+  const { getFaxSettings, ingestFax } = await import("./faxInbox");
+  const faxSenders = (await getFaxSettings()).senders;
   try {
     const d = await db();
     // New inbox messages since the last run.
@@ -247,7 +308,7 @@ export async function runGmailSync(opts: { maxMs: number; manual: boolean }) {
       let pageToken: string | undefined;
       for (let i = 0; i < 5; i++) {
         const h = await gmailGet<{ history?: { messagesAdded?: { message: { id: string; labelIds?: string[] } }[] }[]; historyId?: string; nextPageToken?: string }>(
-          `/history?startHistoryId=${encodeURIComponent(c.historyId ?? "")}&historyTypes=messageAdded&labelId=INBOX&maxResults=100${pageToken ? `&pageToken=${pageToken}` : ""}`);
+          `/history?startHistoryId=${encodeURIComponent(c.historyId ?? "")}&historyTypes=messageAdded&labelId=INBOX&maxResults=100${pageToken ? `&pageToken=${pageToken}` : ""}`, slot);
         for (const e of h.history ?? []) for (const a of e.messagesAdded ?? []) ids.push(a.message.id);
         latestHistory = h.historyId ?? latestHistory;
         if (!h.nextPageToken) break;
@@ -256,27 +317,38 @@ export async function runGmailSync(opts: { maxMs: number; manual: boolean }) {
     } catch (e) {
       // History too old or missing (e.g. after a long pause): look at the last day of the inbox instead.
       if ((e as { status?: number }).status !== 404 && c.historyId) throw e;
-      const list = await gmailGet<{ messages?: { id: string }[] }>(`/messages?q=${encodeURIComponent("in:inbox newer_than:1d")}&maxResults=100`);
+      const list = await gmailGet<{ messages?: { id: string }[] }>(`/messages?q=${encodeURIComponent("in:inbox newer_than:1d")}&maxResults=100`, slot);
       ids = (list.messages ?? []).map((m) => m.id);
-      latestHistory = (await gmailGet<{ historyId: string }>("/profile")).historyId;
+      latestHistory = (await gmailGet<{ historyId: string }>("/profile", slot)).historyId;
     }
     ids = Array.from(new Set(ids));
-    const already = ids.length ? new Set((await d.select({ g: emailMessages.gmailId }).from(emailMessages).where(inArray(emailMessages.gmailId, ids))).map((r) => r.g)) : new Set<string>();
+    const already = ids.length ? new Set([
+      ...(await d.select({ g: emailMessages.gmailId }).from(emailMessages).where(inArray(emailMessages.gmailId, ids))).map((r) => r.g),
+      ...(await d.select({ g: faxes.gmailId }).from(faxes).where(inArray(faxes.gmailId, ids))).map((r) => r.g),
+    ]) : new Set<string>();
     const todo = ids.filter((id) => !already.has(id));
     let complete = true;
     if (todo.length) {
-      const idx = await buildIndex();
-      const actor = await systemActor();
+      const idx = slot === "practice" ? await buildIndex() : null;
+      const actor = slot === "practice" ? await systemActor() : null;
       for (const id of todo) {
         if (Date.now() - started > opts.maxMs) { complete = false; break; }
-        const m = await gmailGet<GmailMessage>(`/messages/${id}?format=full`);
-        const r = await processMessage(m, c.mailbox ?? "", idx, actor);
+        const m = await gmailGet<GmailMessage>(`/messages/${id}?format=full`, slot);
         stats.processed++;
+        // Faxes: anything with a PDF/TIFF in the fax mailbox; fax-service emails in the practice mailbox.
+        const fax = faxFrom(m, slot, faxSenders);
+        if (fax) {
+          await ingestFax(fax);
+          stats.faxes++;
+          continue;
+        }
+        if (slot === "fax" || !idx || !actor) { stats.ignored++; continue; }
+        const r = await processMessage(m, c.mailbox ?? "", idx, actor);
         stats[r]++;
       }
     }
     // Only move the bookmark once everything up to it has been handled.
-    if (complete && latestHistory) await writeSetting(CONFIG_KEY, { ...(await config()), historyId: latestHistory }, null);
+    if (complete && latestHistory) await saveConfig(slot, { ...(await config(slot)), historyId: latestHistory }, null);
     state.lastSuccessAt = new Date().toISOString();
     state.lastError = null;
   } catch (e) {
@@ -285,9 +357,27 @@ export async function runGmailSync(opts: { maxMs: number; manual: boolean }) {
   state.processed += stats.processed;
   state.assigned += stats.assigned;
   state.needsPatient += stats.needsPatient;
-  await writeSetting(STATE_KEY, state, null);
-  console.log(`[gmail-sync] ${JSON.stringify({ ...stats, error: state.lastError })}`); // counts only
+  await writeSetting(KEYS[slot].state, state, null);
+  console.log(`[gmail-sync:${slot}] ${JSON.stringify({ ...stats, error: state.lastError })}`); // counts only
   return { stats, error: state.lastError };
+}
+
+/** If this message is an incoming fax, what the Fax inbox needs to know about it. */
+function faxFrom(m: GmailMessage, slot: MailSlot, extraSenders: string[]) {
+  const labels = m.labelIds ?? [];
+  if (!labels.includes("INBOX") || labels.some((l) => SKIP_LABELS.includes(l))) return null;
+  const header = (name: string) => m.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? null;
+  const from = parseFromHeader(header("From"));
+  const subject = (header("Subject") ?? "").slice(0, 255);
+  const attachments = attachmentsOf(m.payload);
+  const file = attachments.find(isFaxFile);
+  if (!file) return null;
+  if (slot === "practice" && !isFaxEmail({ fromEmail: from.email, subject, attachments }, extraSenders)) return null;
+  return {
+    mailbox: slot, gmailId: m.id, threadId: m.threadId, messageIdHeader: header("Message-ID")?.slice(0, 255) ?? null,
+    fromEmail: from.email, fromName: from.name?.slice(0, 255) ?? null, subject, body: bodyText(m.payload).slice(0, 4000),
+    receivedAt: new Date(Number(m.internalDate ?? Date.now())), attachment: file,
+  };
 }
 
 async function processMessage(m: GmailMessage, mailbox: string, idx: EmailMatchIndex, actor: WorkspaceActor, historical = false): Promise<"assigned" | "needsPatient" | "ignored"> {

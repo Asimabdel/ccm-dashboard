@@ -39,6 +39,7 @@ import IntegrationsPage from "./pages/IntegrationsPage";
 import PatientEmailsPage from "./pages/PatientEmailsPage";
 import InsuranceCheckerPage from "./pages/InsuranceCheckerPage";
 import TeamProgressPage from "./pages/TeamProgressPage";
+import FaxInboxPage from "./pages/FaxInboxPage";
 import { RingCentralPhone } from "./components/phone/RingCentralPhone";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
 
@@ -80,6 +81,7 @@ function Router() {
       <Route path="/patient-emails" component={PatientEmailsPage} />
       <Route path="/insurance" component={InsuranceCheckerPage} />
       <Route path="/team-progress" component={TeamProgressPage} />
+      <Route path="/faxes" component={FaxInboxPage} />
       <Route path="/billing" component={BillingPage} />
       <Route path="/follow-ups" component={FollowUpsPage} />
       <Route path="/reports" component={ReportsPage} />

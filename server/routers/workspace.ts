@@ -20,6 +20,8 @@ import * as rcSync from "../ringcentralSync";
 import * as gmail from "../gmailSync";
 import * as testing from "../testingDb";
 import * as metrics from "../metricsDb";
+import * as fax from "../faxInbox";
+import { FAX_DOC_TYPE_KEYS } from "../../shared/fax";
 import { TEST_KEYS, type TestKey } from "../../shared/testing";
 import { CALL_OUTCOME_LIST } from "../../shared/phone";
 
@@ -357,6 +359,77 @@ export const workspaceRouter = router({
     ignore: protectedProcedure.input(z.number().int().positive()).mutation(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "emailTriage");
       return run(() => gmail.ignoreEmailSender(actor, input));
+    }),
+  }),
+
+  // Fax inbox: faxes arriving by email → patient match → "file in Practice Fusion" task.
+  fax: router({
+    list: protectedProcedure
+      .input(z.object({ filter: z.enum(["needs_patient", "to_file", "filed", "not_patient", "all"]).default("needs_patient") }))
+      .query(async ({ ctx, input }) => {
+        await actorFor(ctx, "emailTriage");
+        return fax.listFaxes(input.filter);
+      }),
+    open: protectedProcedure.input(z.number().int().positive()).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "emailTriage");
+      return run(() => fax.faxFile(actor, input));
+    }),
+    assign: protectedProcedure
+      .input(z.object({ faxId: z.number().int().positive(), subjectKey: z.string().regex(/^(p:\d+|s:.{1,110})$/), docType: z.enum(FAX_DOC_TYPE_KEYS as [string, ...string[]]).nullish() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "emailTriage");
+        return run(() => fax.assignFax(actor, { ...input, docType: (input.docType ?? null) as Parameters<typeof fax.assignFax>[1]["docType"] }));
+      }),
+    notPatient: protectedProcedure.input(z.number().int().positive()).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "emailTriage");
+      return run(() => fax.markNotPatient(actor, input));
+    }),
+    markFiled: protectedProcedure.input(z.number().int().positive()).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "emailTriage");
+      return run(() => fax.markFiled(actor, input));
+    }),
+    reread: protectedProcedure.input(z.number().int().positive()).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "emailTriage");
+      return run(() => fax.rereadFax(actor, input));
+    }),
+    status: protectedProcedure.query(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "emailTriage");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can manage the fax inbox." });
+      const people = await ws.assignableUsers(actor);
+      return {
+        settings: await fax.getFaxSettings(),
+        counts: await fax.faxCounts(),
+        faxMailbox: await gmail.faxMailboxStatus(),
+        practiceMailbox: (await gmail.getGmailStatus()).mailbox,
+        aiReady: !!process.env.BEDROCK_MODEL_ID,
+        people,
+      };
+    }),
+    saveSettings: protectedProcedure
+      .input(z.object({ senders: z.array(z.string().max(200)).max(50), routing: z.enum(["front_desk", "care_team", "user"]), routeUserId: z.number().int().positive().nullable(), ai: z.boolean() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "emailTriage");
+        if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can change fax settings." });
+        return run(() => fax.saveFaxSettings(actor, input));
+      }),
+    connectUrl: protectedProcedure.input(z.object({ origin: z.string().url() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "emailTriage");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can connect the fax mailbox." });
+      return run(() => gmail.gmailConnectUrl(actor, input.origin, "fax"));
+    }),
+    disconnect: protectedProcedure.mutation(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "emailTriage");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can disconnect the fax mailbox." });
+      return run(() => gmail.disconnectGmail(actor, "fax"));
+    }),
+    checkNow: protectedProcedure.mutation(async ({ ctx }) => {
+      await actorFor(ctx, "emailTriage");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can run the fax check." });
+      const started = Date.now();
+      const faxBox = await gmail.runGmailSync({ slot: "fax", maxMs: 6_000, manual: true });
+      const practice = await gmail.runGmailSync({ maxMs: 6_000, manual: true });
+      const read = await fax.readPendingFaxes({ deadline: started + 16_000 });
+      return { faxBox, practice, read, counts: await fax.faxCounts() };
     }),
   }),
 
