@@ -24,6 +24,7 @@ import { appointmentKey } from "./workspaceDb";
 import { formatPhone, mapCallLogRecord, normalizePhone, parseRingCentralCall } from "../shared/phone";
 import { extractPhones, matchEmailSender, parseFromHeader, stripQuotedText } from "../shared/email";
 import { ageOn, evaluateTesting, parseSex, recognizeTest } from "../shared/testing";
+import { PLANS, checkInsurance, patientLine } from "../shared/insurance";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
 
@@ -480,5 +481,24 @@ describe("testing & screenings rules", () => {
     await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.testing.person("p:1")).rejects.toThrow(/access/);
     await expect(appRouter.createCaller(ctxFor("billing")).workspace.testing.overview({ states: ["due"] })).rejects.toThrow(/access/);
     await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.testing.importResults({ csv: "a,b\n1,2" })).rejects.toThrow(/admin/);
+  });
+});
+
+describe("insurance checker", () => {
+  it("answers like the website: Medicaid/CHIP no, listed plans yes, anything else verify", () => {
+    expect(checkInsurance("ae")).toBeNull();
+    expect(checkInsurance("Aetna")).toMatchObject({ result: "yes" });
+    expect(checkInsurance("aetna")!.plans.map((p) => p.name)).toEqual(["Aetna (PPO, HMO, EPO)", "Aetna Medicare Advantage"]);
+    expect(checkInsurance("BCBS")!.plans[0]!.name).toBe("Blue Cross Blue Shield of Texas");
+    expect(checkInsurance("MultiPlan")!.plans[0]!.name).toBe("Claritev (formerly MultiPlan)");
+    expect(checkInsurance("Texas Medicaid")!.result).toBe("no");
+    expect(checkInsurance("Superior STAR Kids")!.result).toBe("no");
+    expect(checkInsurance("Aetna Better Health")!.result).toBe("no");
+    expect(checkInsurance("UnitedHealthcare Community Plan")!.result).toBe("no");
+    expect(checkInsurance("Kaiser")!.result).toBe("maybe");
+    expect(checkInsurance("Humana")!.plans[0]!.note).toMatch(/Dallas/);
+    expect(PLANS).toHaveLength(44);
+    expect(patientLine(checkInsurance("cigna")!, "es")).toBe("Sí — aceptamos Cigna Healthcare of Texas en nuestras 4 clínicas.");
+    expect(patientLine(checkInsurance("medicaid")!, "en")).toContain("$120 first visit, $99 follow-ups");
   });
 });

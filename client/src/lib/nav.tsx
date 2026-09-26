@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, ClipboardList, UserCog, AlertTriangle, Receipt,
   BarChart3, PhoneCall, CalendarClock, ShieldCheck, Building2, Stethoscope, Target,
   UserMinus, Ban, Pill, PhoneOutgoing, Activity, Sunrise, CalendarDays, BriefcaseBusiness,
-  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail,
+  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck,
 } from "lucide-react";
 
 export interface NavItem {
@@ -26,6 +26,7 @@ const OPPORTUNITIES: NavItem = { label: "Opportunities", path: "/opportunities",
 const PATIENTS: NavItem = { label: "Patients", path: "/patients", icon: Users };
 const PLAYBOOKS: NavItem = { label: "Playbooks", path: "/playbooks", icon: BookOpen };
 const EMAILS: NavItem = { label: "Patient emails", path: "/patient-emails", icon: Mail };
+const INSURANCE: NavItem = { label: "Insurance checker", path: "/insurance", icon: BadgeCheck };
 
 // Every employee gets the self-service time clock + schedule pages and the team schedule.
 const ME: NavGroup = {
@@ -40,7 +41,7 @@ const ME: NavGroup = {
 /** Role-based, grouped navigation for the Workspace sidebar. */
 export const NAV_GROUPS: Record<Role, NavGroup[]> = {
   admin: [
-    { label: "Workspace", items: [HOME, MY_WORK, EMAILS, FLOW, OPPORTUNITIES, PATIENTS, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, EMAILS, FLOW, OPPORTUNITIES, PATIENTS, INSURANCE, PLAYBOOKS] },
     {
       label: "Care Management",
       items: [
@@ -78,7 +79,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
     ME,
   ],
   staff: [
-    { label: "Workspace", items: [HOME, MY_WORK, EMAILS, FLOW, OPPORTUNITIES, PATIENTS, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, EMAILS, FLOW, OPPORTUNITIES, PATIENTS, INSURANCE, PLAYBOOKS] },
     {
       label: "Care Management",
       items: [
@@ -94,7 +95,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
     ME,
   ],
   provider: [
-    { label: "Workspace", items: [HOME, MY_WORK, FLOW, OPPORTUNITIES, PATIENTS, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, FLOW, OPPORTUNITIES, PATIENTS, INSURANCE, PLAYBOOKS] },
     {
       label: "Care Management",
       items: [
@@ -105,7 +106,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
     ME,
   ],
   billing: [
-    { label: "Workspace", items: [HOME, MY_WORK, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, INSURANCE, PLAYBOOKS] },
     {
       label: "Revenue",
       items: [
@@ -116,12 +117,12 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
     ME,
   ],
   front_desk: [
-    { label: "Workspace", items: [HOME, MY_WORK, EMAILS, FLOW, OPPORTUNITIES, PATIENTS, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, EMAILS, FLOW, OPPORTUNITIES, PATIENTS, INSURANCE, PLAYBOOKS] },
     { label: "Care Management", items: [{ label: "Follow-ups", path: "/follow-ups", icon: CalendarClock }] },
     ME,
   ],
   // MAs get operational pages only; the server fences CCM/billing data away from them.
-  medical_assistant: [{ label: "Workspace", items: [HOME, FLOW, MY_WORK, PLAYBOOKS] }, ME],
+  medical_assistant: [{ label: "Workspace", items: [HOME, FLOW, MY_WORK, INSURANCE, PLAYBOOKS] }, ME],
 };
 
 /** Flat list per role — used by the ⌘K command palette. */
