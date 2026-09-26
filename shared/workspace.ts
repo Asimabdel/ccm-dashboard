@@ -31,6 +31,8 @@ export const WORKSPACE_CAPS = {
   playbooksView: ["admin", "staff", "provider", "billing", "front_desk", "medical_assistant"],
   /** Create / edit playbooks. */
   playbooksEdit: ["admin"],
+  /** Triage patient emails from the practice mailbox (link a sender to a patient). */
+  emailTriage: ["admin", "staff", "front_desk"],
   /** Full patient record incl. CCM/BHI/APCM detail. MAs get an operational view only. */
   patientFull: ["admin", "staff", "provider", "front_desk"],
 } as const satisfies Record<string, readonly WorkspaceRole[]>;
@@ -70,6 +72,7 @@ export const TASK_CATEGORY_LABELS = {
   provider_request: "Provider request",
   administrative: "Administrative",
   other: "Other",
+  patient_email: "Patient email",
 } as const;
 export type TaskCategory = keyof typeof TASK_CATEGORY_LABELS;
 

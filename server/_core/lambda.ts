@@ -47,6 +47,11 @@ export const handler = async (event: any, context: any) => {
     return { migrated: "workspace", applied: await runWorkspaceMigration() };
   }
   // Every 10 minutes from an EventBridge schedule (IAM-only, same reasoning as __migrate).
+  // Every 2 minutes: new emails in the practice mailbox → patient-email tasks.
+  if (event && event.__job === "gmail-sync" && !event.requestContext && !event.version) {
+    const { runGmailSync } = await import("../gmailSync");
+    return runGmailSync({ maxMs: 22_000, manual: false });
+  }
   if (event && event.__job === "ringcentral-sync" && !event.requestContext && !event.version) {
     const { runRingCentralSync } = await import("../ringcentralSync");
     return runRingCentralSync({ maxRequests: 8, maxMs: 22_000, manual: false });

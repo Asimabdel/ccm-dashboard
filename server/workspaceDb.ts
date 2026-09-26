@@ -856,6 +856,57 @@ export async function buildPhoneIndex(): Promise<Map<string, { key: string; pati
   return out;
 }
 
+/** Everyone an email could be from, by full name (roster + imported schedule); more than one = ambiguous. */
+export async function buildNameIndex(): Promise<Map<string, { key: string; patientId: number | null; name: string }[]>> {
+  const d = await db();
+  const out = new Map<string, { key: string; patientId: number | null; name: string }[]>();
+  const add = (name: string, v: { key: string; patientId: number | null; name: string }) => {
+    const k = nameKey(name);
+    if (!k) return;
+    const list = out.get(k) ?? [];
+    if (!list.some((x) => x.key === v.key)) list.push(v);
+    out.set(k, list);
+  };
+  for (const p of await d.select({ id: patients.id, name: patients.name }).from(patients)) add(p.name, { key: `p:${p.id}`, patientId: p.id, name: p.name });
+  for (const s of Array.from((await loadScheduleSubjects()).values())) if (!s.patientId) add(s.name, { key: s.key, patientId: null, name: s.name });
+  return out;
+}
+
+/** The person behind an Opportunity Finder key: name, clinic (roster → latest visit → provider) and CCM coordinator. */
+export async function subjectCare(key: string): Promise<{ patientId: number | null; name: string; clinicId: number | null; coordinatorId: number | null } | null> {
+  const d = await db();
+  const subjects = await loadScheduleSubjects();
+  const visit = subjects.get(key);
+  const m = key.match(/^p:(\d+)$/);
+  if (m) {
+    const [p] = await d.select({ id: patients.id, name: patients.name, clinicId: patients.clinicId, providerId: patients.providerId, assignedStaffId: patients.assignedStaffId }).from(patients).where(eq(patients.id, Number(m[1]))).limit(1);
+    if (!p) return null;
+    let clinicId = p.clinicId ?? visit?.clinicId ?? null;
+    if (!clinicId && p.providerId) clinicId = (await d.select({ clinicId: providers.clinicId }).from(providers).where(eq(providers.id, p.providerId)).limit(1))[0]?.clinicId ?? null;
+    return { patientId: p.id, name: p.name, clinicId, coordinatorId: p.assignedStaffId };
+  }
+  return visit ? { patientId: null, name: visit.name, clinicId: visit.clinicId, coordinatorId: null } : null;
+}
+
+/** Find patients by name (roster + imported schedule), for linking an email to the right person. */
+export async function searchSubjects(q: string, limit = 20) {
+  const needle = nameKey(q);
+  if (needle.length < 2) return [];
+  const d = await db();
+  const clinicName = new Map((await d.select({ id: clinics.id, name: clinics.name }).from(clinics)).map((c) => [c.id, c.name]));
+  const out: { key: string; patientId: number | null; name: string; dob: string | null; clinicName: string | null; phoneLast4: string | null }[] = [];
+  const roster = await d.select({ id: patients.id, name: patients.name, dob: patients.dateOfBirth, clinicId: patients.clinicId, phone: patients.phoneNumber }).from(patients);
+  for (const p of roster) {
+    if (!nameKey(p.name).includes(needle)) continue;
+    out.push({ key: `p:${p.id}`, patientId: p.id, name: p.name, dob: ymd(p.dob), clinicName: p.clinicId ? clinicName.get(p.clinicId) ?? null : null, phoneLast4: normalizePhone(p.phone)?.slice(-4) ?? null });
+  }
+  for (const s of Array.from((await loadScheduleSubjects()).values())) {
+    if (s.patientId || !nameKey(s.name).includes(needle)) continue;
+    out.push({ key: s.key, patientId: null, name: s.name, dob: ymd(s.dob), clinicName: s.clinicId ? clinicName.get(s.clinicId) ?? null : null, phoneLast4: normalizePhone(s.phone)?.slice(-4) ?? null });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name)).slice(0, limit);
+}
+
 /** Who a phone number belongs to: a CCM-roster patient first, then anyone on the imported schedule. */
 export async function findSubjectByPhone(phone: string): Promise<{ key: string; patientId: number | null; name: string } | null> {
   const d = await db();

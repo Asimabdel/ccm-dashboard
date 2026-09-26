@@ -11,10 +11,9 @@ import { appSettings, phoneCalls, users } from "../drizzle/schema";
 import { mapCallLogRecord } from "../shared/phone";
 import { openSecret, sealSecret } from "./secretBox";
 import { buildPhoneIndex, type WorkspaceActor, audit } from "./workspaceDb";
+import { relayFetch as rcFetch } from "./egress";
 
 const API = "https://platform.ringcentral.com";
-/** On AWS this app has no internet access; RingCentral is reached through this relay (infra/ringcentral-relay). */
-const RELAY_FUNCTION = "ccm-ringcentral-relay";
 const CONFIG_KEY = "ringcentral_sync";
 const STATE_KEY = "ringcentral_sync_state";
 /** First run looks this far back. */
@@ -64,25 +63,6 @@ export async function getSyncStatus() {
 }
 
 // ---- RingCentral API ----
-
-let lambdaClient: import("@aws-sdk/client-lambda").LambdaClient | null = null;
-
-/**
- * fetch() for RingCentral. On Lambda (inside the VPC, no internet) the request goes through the
- * RingCentral-only relay via the private Lambda endpoint; locally it's a plain fetch.
- */
-async function rcFetch(url: string, init: { method?: "GET" | "POST"; headers?: Record<string, string>; body?: string } = {}): Promise<Response> {
-  if (!process.env.AWS_LAMBDA_FUNCTION_NAME) return fetch(url, init);
-  const { LambdaClient, InvokeCommand } = await import("@aws-sdk/client-lambda");
-  lambdaClient ??= new LambdaClient({ region: process.env.AWS_REGION ?? "us-east-1" });
-  const out = await lambdaClient.send(new InvokeCommand({
-    FunctionName: RELAY_FUNCTION,
-    Payload: new TextEncoder().encode(JSON.stringify({ url, method: init.method ?? "GET", headers: init.headers ?? {}, body: init.body ?? null })),
-  }));
-  if (out.FunctionError || !out.Payload) throw new RcError("The RingCentral relay failed.", 502);
-  const r = JSON.parse(new TextDecoder().decode(out.Payload)) as { status: number; headers?: Record<string, string>; body: string };
-  return new Response([204, 205, 304].includes(r.status) ? null : r.body, { status: r.status, headers: r.headers });
-}
 
 let tokenCache: { clientId: string; token: string; expiresAt: number } | null = null;
 let extCache: { at: number; byId: Map<string, { name: string; email: string | null }> } | null = null;

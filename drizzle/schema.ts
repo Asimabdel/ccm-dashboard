@@ -718,7 +718,7 @@ export const WORK_TASK_PRIORITIES = ["low", "normal", "high", "urgent"] as const
 export const WORK_TASK_STATUSES = ["open", "in_progress", "waiting", "completed", "cancelled"] as const;
 export const WORK_TASK_CATEGORIES = [
   "patient_call", "referral", "prior_auth", "lab_followup", "form", "medication_request",
-  "care_management", "rpm", "front_desk", "provider_request", "administrative", "other",
+  "care_management", "rpm", "front_desk", "provider_request", "administrative", "other", "patient_email",
 ] as const;
 
 /** A general work item for any role (not the monthly CCM worklist). */
@@ -848,6 +848,48 @@ export const opportunityActions = mysqlTable("opportunityActions", {
   patientCategoryIdx: index("opportunityActions_patient_cat_idx").on(t.patientId, t.category),
   subjectCategoryIdx: index("opportunityActions_subject_cat_idx").on(t.subjectKey, t.category),
 }));
+
+/**
+ * Emails that arrived in the practice mailbox (Gmail) and what MyPCP did with them.
+ * Keeps a short preview only; the email itself stays in Gmail.
+ */
+export const emailMessages = mysqlTable("emailMessages", {
+  id: int("id").autoincrement().primaryKey(),
+  gmailId: varchar("gmailId", { length: 64 }).notNull().unique(),
+  threadId: varchar("threadId", { length: 64 }),
+  messageIdHeader: varchar("messageIdHeader", { length: 255 }),
+  fromEmail: varchar("fromEmail", { length: 320 }),
+  fromName: varchar("fromName", { length: 255 }),
+  subject: varchar("subject", { length: 255 }),
+  preview: text("preview"),
+  receivedAt: datetime("receivedAt").notNull(),
+  patientId: int("patientId").references(() => patients.id),
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  patientName: varchar("patientName", { length: 255 }),
+  /** address | name | phone | manual */
+  matchMethod: varchar("matchMethod", { length: 20 }),
+  status: mysqlEnum("status", ["assigned", "needs_patient", "ignored"]).notNull(),
+  taskId: int("taskId"),
+  assignedUserId: int("assignedUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  statusIdx: index("emailMessages_status_idx").on(t.status, t.receivedAt),
+  fromIdx: index("emailMessages_from_idx").on(t.fromEmail),
+}));
+
+/** Email addresses MyPCP knows: a patient's (imported or linked by staff), or a non-patient to ignore. */
+export const emailContacts = mysqlTable("emailContacts", {
+  id: int("id").autoincrement().primaryKey(),
+  email: varchar("email", { length: 320 }).notNull().unique(),
+  kind: mysqlEnum("kind", ["patient", "ignore"]).notNull(),
+  patientId: int("patientId").references(() => patients.id),
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  name: varchar("name", { length: 255 }),
+  /** import | linked */
+  source: varchar("source", { length: 20 }).notNull(),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
 
 /** Practice-wide settings (e.g. the RingCentral connection), one JSON value per key. */
 export const appSettings = mysqlTable("appSettings", {

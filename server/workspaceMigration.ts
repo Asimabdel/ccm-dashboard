@@ -15,6 +15,8 @@ import { DEFAULT_PLAYBOOKS } from "../shared/workspace";
 const ENUM_ADDITIONS: { table: string; column: string; values: string[] }[] = [
   { table: "auditLogs", column: "action", values: ["create_task", "update_task", "view_schedule", "import_schedule", "update_appointment", "opportunity_action", "manage_playbook"] },
   { table: "notifications", column: "type", values: ["task"] },
+  // Added 2026-09-25: tasks created from patient emails.
+  { table: "workTasks", column: "category", values: ["patient_email"] },
 ];
 
 export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
@@ -146,6 +148,43 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     INDEX \`playbookVersions_playbook_idx\` (\`playbookId\`),
     CONSTRAINT \`playbookVersions_playbookId_fk\` FOREIGN KEY (\`playbookId\`) REFERENCES \`playbooks\`(\`id\`),
     CONSTRAINT \`playbookVersions_createdByUserId_fk\` FOREIGN KEY (\`createdByUserId\`) REFERENCES \`users\`(\`id\`))` },
+  // Added 2026-09-25: the practice mailbox (Gmail) — processed emails + known addresses.
+  { label: "emailMessages", sql: `CREATE TABLE IF NOT EXISTS \`emailMessages\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`gmailId\` varchar(64) NOT NULL,
+    \`threadId\` varchar(64),
+    \`messageIdHeader\` varchar(255),
+    \`fromEmail\` varchar(320),
+    \`fromName\` varchar(255),
+    \`subject\` varchar(255),
+    \`preview\` text,
+    \`receivedAt\` datetime NOT NULL,
+    \`patientId\` int,
+    \`subjectKey\` varchar(120),
+    \`patientName\` varchar(255),
+    \`matchMethod\` varchar(20),
+    \`status\` ENUM('assigned','needs_patient','ignored') NOT NULL,
+    \`taskId\` int,
+    \`assignedUserId\` int,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    UNIQUE KEY \`emailMessages_gmailId_unique\` (\`gmailId\`),
+    INDEX \`emailMessages_status_idx\` (\`status\`, \`receivedAt\`),
+    INDEX \`emailMessages_from_idx\` (\`fromEmail\`),
+    CONSTRAINT \`emailMessages_patientId_fk\` FOREIGN KEY (\`patientId\`) REFERENCES \`patients\`(\`id\`),
+    CONSTRAINT \`emailMessages_assignedUserId_fk\` FOREIGN KEY (\`assignedUserId\`) REFERENCES \`users\`(\`id\`))` },
+  { label: "emailContacts", sql: `CREATE TABLE IF NOT EXISTS \`emailContacts\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`email\` varchar(320) NOT NULL,
+    \`kind\` ENUM('patient','ignore') NOT NULL,
+    \`patientId\` int,
+    \`subjectKey\` varchar(120),
+    \`name\` varchar(255),
+    \`source\` varchar(20) NOT NULL,
+    \`createdByUserId\` int,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    UNIQUE KEY \`emailContacts_email_unique\` (\`email\`),
+    CONSTRAINT \`emailContacts_patientId_fk\` FOREIGN KEY (\`patientId\`) REFERENCES \`patients\`(\`id\`),
+    CONSTRAINT \`emailContacts_createdByUserId_fk\` FOREIGN KEY (\`createdByUserId\`) REFERENCES \`users\`(\`id\`))` },
   // Added 2026-09-25: RingCentral connection settings + the call log.
   { label: "appSettings", sql: `CREATE TABLE IF NOT EXISTS \`appSettings\` (
     \`key\` varchar(80) PRIMARY KEY,

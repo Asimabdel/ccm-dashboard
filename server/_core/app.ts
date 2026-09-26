@@ -25,6 +25,16 @@ export function createApp(): Express {
   registerOAuthRoutes(app);
   // Read-only CCM/RPM integration API for the separate Clinic Command Center app.
   registerIntegrationRoutes(app);
+  // Google sends the admin back here after connecting the practice mailbox (read-only).
+  app.get("/api/integrations/google/callback", async (req, res) => {
+    try {
+      const { handleGmailCallback } = await import("../gmailSync");
+      res.redirect(await handleGmailCallback(req.query as Record<string, unknown>));
+    } catch (e) {
+      console.error("[gmail] connect failed:", (e as Error).message);
+      res.redirect("/integrations?gmail=" + encodeURIComponent("Connecting the mailbox failed. Try again."));
+    }
+  });
   // tRPC API
   app.use(
     "/api/trpc",

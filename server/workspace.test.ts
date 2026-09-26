@@ -22,6 +22,7 @@ import {
 } from "../shared/workspace";
 import { appointmentKey } from "./workspaceDb";
 import { formatPhone, mapCallLogRecord, normalizePhone, parseRingCentralCall } from "../shared/phone";
+import { extractPhones, matchEmailSender, parseFromHeader, stripQuotedText } from "../shared/email";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
 
@@ -365,5 +366,50 @@ describe("RingCentral call-log sync", () => {
     await expect(fd.workspace.phone.syncStatus()).rejects.toThrow(/admin/);
     await expect(fd.workspace.phone.saveSync({ enabled: true, clientId: "abc", clientSecret: "x", jwt: "y" })).rejects.toThrow(/admin/);
     await expect(fd.workspace.phone.syncNow()).rejects.toThrow(/admin/);
+  });
+});
+
+describe("practice mailbox matching", () => {
+  it("reads the sender", () => {
+    expect(parseFromHeader('"Doe, Jane" <Jane.Doe@Example.com>')).toEqual({ name: "Doe, Jane", email: "jane.doe@example.com" });
+    expect(parseFromHeader("jane@example.com")).toEqual({ name: null, email: "jane@example.com" });
+    expect(parseFromHeader("not an address").email).toBeNull();
+  });
+
+  it("ignores phone numbers in quoted replies (our own signature)", () => {
+    const body = "Please call me back at 832-555-0101.\n\nOn Tue, Sep 22, 2026 at 9:00 AM MyPCP <care@mypcpdr.com> wrote:\n> Call us at (281) 555-0199";
+    expect(extractPhones(stripQuotedText(body))).toEqual(["8325550101"]);
+    expect(extractPhones("cell 713.555.1234, home +1 (281) 555-0000")).toEqual(["7135551234", "2815550000"]);
+  });
+
+  const jane = { key: "p:1", patientId: 1, name: "Jane Doe" };
+  const john = { key: "s:john roe|1950-01-01", patientId: null, name: "John Roe" };
+  const idx = {
+    byEmail: new Map<string, typeof jane | "ignore">([["jane@x.com", jane], ["vendor@supply.com", "ignore"]]),
+    byName: new Map([["jane doe", [jane]], ["john roe", [john]], ["maria lopez", [jane, john]]]),
+    byPhone: new Map([["8325550101", john]]),
+  };
+
+  it("matches by remembered address first, and skips known non-patients", () => {
+    expect(matchEmailSender({ email: "jane@x.com", name: "Someone Else", body: "" }, idx)).toEqual({ subject: jane, method: "address" });
+    expect(matchEmailSender({ email: "vendor@supply.com", name: null, body: "" }, idx)).toEqual({ ignore: true });
+  });
+
+  it("matches a full, unique sender name — never a first name alone or a shared name", () => {
+    expect(matchEmailSender({ email: "new@x.com", name: "Doe, Jane", body: "" }, idx)).toEqual({ subject: jane, method: "name" });
+    expect(matchEmailSender({ email: "new@x.com", name: "Jane", body: "" }, idx)).toBeNull();
+    expect(matchEmailSender({ email: "new@x.com", name: "Maria Lopez", body: "" }, idx)).toBeNull();
+  });
+
+  it("falls back to a phone number the sender wrote", () => {
+    expect(matchEmailSender({ email: "new@x.com", name: "Mom", body: "This is for my father, call 832-555-0101" }, idx)).toEqual({ subject: john, method: "phone" });
+    expect(matchEmailSender({ email: "new@x.com", name: null, body: "no numbers here" }, idx)).toBeNull();
+  });
+
+  it("keeps triage away from MAs and connection settings admin-only", async () => {
+    await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.email.list({ filter: "all" })).rejects.toThrow(/access/);
+    await expect(appRouter.createCaller(ctxFor("billing")).workspace.email.list({ filter: "all" })).rejects.toThrow(/access/);
+    await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.email.status()).rejects.toThrow(/admin/);
+    await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.email.connectUrl({ origin: "https://mypcpcare.com" })).rejects.toThrow(/admin/);
   });
 });

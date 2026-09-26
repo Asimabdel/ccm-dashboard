@@ -17,6 +17,7 @@ import {
 import * as ws from "../workspaceDb";
 import * as phone from "../phoneDb";
 import * as rcSync from "../ringcentralSync";
+import * as gmail from "../gmailSync";
 import { CALL_OUTCOME_LIST } from "../../shared/phone";
 
 // Every Workspace procedure resolves an actor first: who is calling and which
@@ -288,6 +289,65 @@ export const workspaceRouter = router({
       if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can run the RingCentral call-log sync." });
       // Kept under API Gateway's 30s limit; the schedule does the heavy lifting.
       return rcSync.runRingCentralSync({ maxRequests: 4, maxMs: 18_000, manual: true });
+    }),
+  }),
+
+  // Practice mailbox (Gmail, read-only) → patient-email tasks.
+  email: router({
+    status: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "emailTriage");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can manage the practice mailbox connection." });
+      return { ...(await gmail.getGmailStatus()), contacts: await gmail.contactCounts() };
+    }),
+    saveApp: protectedProcedure
+      .input(z.object({ clientId: z.string().trim().min(10).max(200).regex(/^[A-Za-z0-9._-]+$/, "That doesn't look like a Google Client ID."), clientSecret: z.string().trim().max(200).nullish() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "emailTriage");
+        if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can change the practice mailbox connection." });
+        return run(() => gmail.saveGmailApp(actor, input));
+      }),
+    connectUrl: protectedProcedure.input(z.object({ origin: z.string().url() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "emailTriage");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can connect the practice mailbox." });
+      return run(() => gmail.gmailConnectUrl(actor, input.origin));
+    }),
+    setEnabled: protectedProcedure.input(z.boolean()).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "emailTriage");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can change the practice mailbox connection." });
+      return run(() => gmail.setGmailEnabled(actor, input));
+    }),
+    disconnect: protectedProcedure.mutation(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "emailTriage");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can disconnect the practice mailbox." });
+      return run(() => gmail.disconnectGmail(actor));
+    }),
+    syncNow: protectedProcedure.mutation(async ({ ctx }) => {
+      await actorFor(ctx, "emailTriage");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can run the mailbox check." });
+      return gmail.runGmailSync({ maxMs: 18_000, manual: true });
+    }),
+    importContacts: protectedProcedure.input(z.object({ csv: csvText })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "emailTriage");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can import patient email addresses." });
+      return run(() => gmail.importPatientEmails(actor, input.csv));
+    }),
+    list: protectedProcedure.input(z.object({ filter: z.enum(["needs_patient", "all"]).default("needs_patient") })).query(async ({ ctx, input }) => {
+      await actorFor(ctx, "emailTriage");
+      return gmail.listEmails(input.filter);
+    }),
+    search: protectedProcedure.input(z.object({ q: z.string().trim().min(2).max(100) })).query(async ({ ctx, input }) => {
+      await actorFor(ctx, "emailTriage");
+      return gmail.searchSubjects(input.q);
+    }),
+    link: protectedProcedure
+      .input(z.object({ emailId: z.number().int().positive(), subjectKey: z.string().regex(/^(p:\d+|s:.{1,110})$/) }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "emailTriage");
+        return run(() => gmail.linkEmail(actor, input));
+      }),
+    ignore: protectedProcedure.input(z.number().int().positive()).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "emailTriage");
+      return run(() => gmail.ignoreEmailSender(actor, input));
     }),
   }),
 
