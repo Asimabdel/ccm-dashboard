@@ -1254,6 +1254,104 @@ export async function scheduleFillAct(
 
 
 // ---------------------------------------------------------------------------
+// People (CCM roster + everyone seen on the imported schedule) — shared by Testing
+// ---------------------------------------------------------------------------
+
+export interface Person {
+  key: string;
+  patientId: number | null;
+  name: string;
+  dob: string | null;
+  phone: string | null;
+  clinicId: number | null;
+  clinicName: string | null;
+  providerName: string | null;
+  conditions: string[];
+  insurance: string | null;
+  lastSeen: Date | null;
+  nextVisit: Date | null;
+}
+
+/**
+ * Active patients: the CCM roster (except transferred) plus everyone with a completed visit on
+ * the imported schedule. Clinic falls back to the latest visit, then the provider's clinic.
+ */
+export async function loadPeople(actor: WorkspaceActor, clinicId?: number | null): Promise<Person[]> {
+  const d = await db();
+  const scope = scopeClinics(actor, clinicId);
+  const now = new Date();
+  const [pats, subjects, clinicRows, provRows] = await Promise.all([
+    d.select({
+      id: patients.id, name: patients.name, dateOfBirth: patients.dateOfBirth, phoneNumber: patients.phoneNumber, clinicId: patients.clinicId,
+      providerId: patients.providerId, providerName: providers.name, chronicConditions: patients.chronicConditions, bhiConditions: patients.bhiConditions,
+      insurance: patients.insurance, ccmEnrollmentStatus: patients.ccmEnrollmentStatus, lastOfficeVisit: patients.lastOfficeVisit, nextAppointment: patients.nextAppointment,
+    }).from(patients).leftJoin(providers, eq(patients.providerId, providers.id)),
+    loadScheduleSubjects(),
+    d.select({ id: clinics.id, name: clinics.name }).from(clinics),
+    d.select({ id: providers.id, clinicId: providers.clinicId }).from(providers),
+  ]);
+  const clinicName = new Map(clinicRows.map((c) => [c.id, c.name]));
+  const providerClinic = new Map(provRows.map((p) => [p.id, p.clinicId]));
+  const inScope = (id: number | null) => scope === null || (id != null && scope.includes(id));
+  const out: Person[] = [];
+  for (const p of pats) {
+    if (p.ccmEnrollmentStatus === "transferred") continue;
+    const s = subjects.get(`p:${p.id}`);
+    const cid = p.clinicId ?? s?.clinicId ?? (p.providerId ? providerClinic.get(p.providerId) ?? null : null);
+    if (!inScope(cid)) continue;
+    const { lastSeen, nextBooked } = visitDates(s?.visits ?? [], now);
+    const last = lastSeen && (!p.lastOfficeVisit || lastSeen > p.lastOfficeVisit) ? lastSeen : p.lastOfficeVisit;
+    const next = [nextBooked, p.nextAppointment && p.nextAppointment > now ? p.nextAppointment : null].filter((x): x is Date => !!x).sort((a, b) => +a - +b)[0] ?? null;
+    out.push({ key: `p:${p.id}`, patientId: p.id, name: p.name, dob: ymd(p.dateOfBirth), phone: p.phoneNumber ?? s?.phone ?? null, clinicId: cid, clinicName: cid ? clinicName.get(cid) ?? null : null, providerName: p.providerName ?? s?.providerName ?? null, conditions: [...(p.chronicConditions ?? []), ...(p.bhiConditions ?? [])], insurance: p.insurance, lastSeen: last, nextVisit: next });
+  }
+  for (const s of Array.from(subjects.values())) {
+    if (s.patientId || !inScope(s.clinicId)) continue;
+    const { lastSeen, nextBooked } = visitDates(s.visits, now);
+    if (!lastSeen) continue; // never actually came in
+    out.push({ key: s.key, patientId: null, name: s.name, dob: ymd(s.dob), phone: s.phone, clinicId: s.clinicId, clinicName: s.clinicId ? clinicName.get(s.clinicId) ?? null : null, providerName: s.providerName, conditions: [], insurance: null, lastSeen, nextVisit: nextBooked });
+  }
+  return out;
+}
+
+/** name|DOB → person (roster first), for Practice Fusion imports. */
+export async function buildNameDobIndex(): Promise<Map<string, { key: string; patientId: number | null; name: string }>> {
+  const d = await db();
+  const out = new Map<string, { key: string; patientId: number | null; name: string }>();
+  for (const p of await d.select({ id: patients.id, name: patients.name, dob: patients.dateOfBirth }).from(patients)) {
+    const dob = ymd(p.dob);
+    if (dob) out.set(`${nameKey(p.name)}|${dob}`, { key: `p:${p.id}`, patientId: p.id, name: p.name });
+  }
+  for (const s of Array.from((await loadScheduleSubjects()).values())) {
+    const dob = ymd(s.dob);
+    if (dob && !s.patientId && !out.has(`${nameKey(s.name)}|${dob}`)) out.set(`${nameKey(s.name)}|${dob}`, { key: s.key, patientId: null, name: s.name });
+  }
+  return out;
+}
+
+/** Care coordinator first; else the least-busy front-desk person at the patient's clinic; else that clinic's front-desk queue. */
+export async function careTeamAssignee(subjectKey: string) {
+  const d = await db();
+  const care = await subjectCare(subjectKey);
+  if (care?.coordinatorId) {
+    const [u] = await d.select({ id: users.id, role: users.role }).from(users).where(eq(users.id, care.coordinatorId)).limit(1);
+    if (u && u.role !== "user") return { assignedUserId: u.id as number | null, assignedRole: null as string | null, clinicId: care.clinicId, who: "care coordinator" };
+  }
+  if (care?.clinicId) {
+    const desk = await d.select({ id: users.id }).from(users)
+      .innerJoin(staffProfiles, eq(staffProfiles.userId, users.id))
+      .where(and(eq(users.role, "front_desk"), eq(staffProfiles.homeClinicId, care.clinicId), eq(staffProfiles.active, true)));
+    if (desk.length) {
+      const open = await d.select({ userId: workTasks.assignedUserId }).from(workTasks)
+        .where(and(inArray(workTasks.assignedUserId, desk.map((x) => x.id)), inArray(workTasks.status, OPEN_TASK_STATUSES)));
+      const load = (id: number) => open.filter((o) => o.userId === id).length;
+      const pick = desk.map((x) => x.id).sort((a, b) => load(a) - load(b) || a - b)[0]!;
+      return { assignedUserId: pick as number | null, assignedRole: null as string | null, clinicId: care.clinicId, who: "front desk" };
+    }
+  }
+  return { assignedUserId: null as number | null, assignedRole: "front_desk" as string | null, clinicId: care?.clinicId ?? null, who: "front desk queue" };
+}
+
+// ---------------------------------------------------------------------------
 // Home
 // ---------------------------------------------------------------------------
 

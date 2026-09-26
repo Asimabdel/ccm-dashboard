@@ -10,6 +10,7 @@ import {
   json,
   datetime,
   index,
+  uniqueIndex,
 } from "drizzle-orm/mysql-core";
 
 /**
@@ -889,6 +890,40 @@ export const emailContacts = mysqlTable("emailContacts", {
   source: varchar("source", { length: 20 }).notNull(),
   createdByUserId: int("createdByUserId").references(() => users.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+/**
+ * Tests and screenings a patient has had (imported from Practice Fusion or recorded by staff),
+ * plus "not needed" / "declined" decisions. Keyed like the Opportunity Finder ("p:<id>" /
+ * "s:<name>|<dob>") so people who aren't on the CCM roster are covered too.
+ */
+export const patientTests = mysqlTable("patientTests", {
+  id: int("id").autoincrement().primaryKey(),
+  subjectKey: varchar("subjectKey", { length: 120 }).notNull(),
+  patientId: int("patientId").references(() => patients.id),
+  testKey: varchar("testKey", { length: 40 }).notNull(),
+  method: varchar("method", { length: 40 }),
+  performedOn: varchar("performedOn", { length: 10 }).notNull(),
+  status: mysqlEnum("status", ["done", "not_applicable", "declined"]).default("done").notNull(),
+  result: varchar("result", { length: 120 }),
+  note: text("note"),
+  /** import | manual */
+  source: varchar("source", { length: 20 }).notNull(),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  subjectIdx: index("patientTests_subject_idx").on(t.subjectKey),
+  oneRecord: uniqueIndex("patientTests_one_record").on(t.subjectKey, t.testKey, t.performedOn, t.status),
+}));
+
+/** Sex for screening rules (mammograms, cervical, bone density), from the Practice Fusion patient list or staff. */
+export const personDemographics = mysqlTable("personDemographics", {
+  subjectKey: varchar("subjectKey", { length: 120 }).primaryKey(),
+  patientId: int("patientId").references(() => patients.id),
+  sex: mysqlEnum("sex", ["F", "M", "X"]),
+  source: varchar("source", { length: 20 }).notNull(),
+  updatedByUserId: int("updatedByUserId").references(() => users.id),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 
 /** Practice-wide settings (e.g. the RingCentral connection), one JSON value per key. */

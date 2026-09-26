@@ -9,6 +9,7 @@ import { Btn, EmptyState, ErrorNote, Loading, PageHeader, Panel, fmtShortDate, i
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { fmtDay } from "@shared/workforce";
 
 const METHOD: Record<string, string> = { address: "known address", name: "sender's name", phone: "phone number in email", manual: "linked by staff" };
 const fmtTime = (d: Date | string) => new Date(d).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Chicago" });
@@ -114,7 +115,7 @@ function LinkDialog({ email, onClose }: { email: { id: number; from: string }; o
             <button key={p.key} disabled={link.isPending} onClick={() => link.mutate({ emailId: email.id, subjectKey: p.key })}
               className="w-full text-left rounded-lg px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50">
               <span className="block text-sm font-medium text-slate-900 dark:text-slate-50">{p.name}</span>
-              <span className="block text-xs text-slate-500">DOB {p.dob ? fmtShortDate(p.dob) : "unknown"}{p.clinicName ? ` · ${p.clinicName}` : ""}{p.phoneLast4 ? ` · phone …${p.phoneLast4}` : ""}{p.patientId ? "" : " · not on CCM roster"}</span>
+              <span className="block text-xs text-slate-500">DOB {p.dob ? fmtDay(p.dob, { month: "short", day: "numeric", year: "numeric" }) : "unknown"}{p.clinicName ? ` · ${p.clinicName}` : ""}{p.phoneLast4 ? ` · phone …${p.phoneLast4}` : ""}{p.patientId ? "" : " · not on CCM roster"}</span>
             </button>
           ))}
         </div>

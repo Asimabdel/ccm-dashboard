@@ -18,6 +18,8 @@ import * as ws from "../workspaceDb";
 import * as phone from "../phoneDb";
 import * as rcSync from "../ringcentralSync";
 import * as gmail from "../gmailSync";
+import * as testing from "../testingDb";
+import { TEST_KEYS, type TestKey } from "../../shared/testing";
 import { CALL_OUTCOME_LIST } from "../../shared/phone";
 
 // Every Workspace procedure resolves an actor first: who is calling and which
@@ -53,6 +55,7 @@ const clinicId = z.number().int().positive().nullish();
 const flowStatus = z.enum([...FLOW_COLUMNS, "no_show", "cancelled"] as [string, ...string[]]);
 const mappingSchema = z.record(z.string(), z.number().int().min(-1).max(200)).optional();
 const csvText = z.string().min(1).max(5_000_000);
+const subjectKeyRe = /^(p:\d+|s:.{1,110})$/;
 
 export const workspaceRouter = router({
   /** What this person can do in the Workspace, and which clinics they can pick. */
@@ -348,6 +351,64 @@ export const workspaceRouter = router({
     ignore: protectedProcedure.input(z.number().int().positive()).mutation(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "emailTriage");
       return run(() => gmail.ignoreEmailSender(actor, input));
+    }),
+  }),
+
+  // Testing & screenings: who's due (guideline reminders), what they've had, scheduling tasks.
+  testing: router({
+    overview: protectedProcedure
+      .input(z.object({
+        clinicId,
+        test: z.enum(TEST_KEYS as [string, ...string[]]).nullish(),
+        states: z.array(z.enum(["due", "no_record", "due_soon", "needs_info", "current", "declined", "not_applicable"])).min(1).default(["due", "due_soon"]),
+        upcomingDays: z.number().int().min(0).max(60).nullish(),
+        includeActioned: z.boolean().default(false),
+      }))
+      .query(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "opportunitiesView");
+        return run(() => testing.testingOverview(actor, input as Parameters<typeof testing.testingOverview>[1]));
+      }),
+    person: protectedProcedure.input(z.string().regex(subjectKeyRe)).query(async ({ ctx, input }) => {
+      await actorFor(ctx, "patientFull");
+      return run(() => testing.personTesting(input));
+    }),
+    record: protectedProcedure
+      .input(z.object({
+        subjectKey: z.string().regex(subjectKeyRe),
+        testKey: z.enum(TEST_KEYS as [string, ...string[]]),
+        status: z.enum(["done", "not_applicable", "declined"]),
+        performedOn: dateStr,
+        method: z.string().max(40).nullish(),
+        result: z.string().max(120).nullish(),
+        note: z.string().max(1000).nullish(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "patientFull");
+        return run(() => testing.recordTest(actor, { ...input, testKey: input.testKey as TestKey }));
+      }),
+    deleteRecord: protectedProcedure.input(z.number().int().positive()).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "patientFull");
+      return run(() => testing.deleteTestRecord(actor, input));
+    }),
+    setSex: protectedProcedure.input(z.object({ subjectKey: z.string().regex(subjectKeyRe), sex: z.enum(["F", "M", "X"]).nullable() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "patientFull");
+      return run(() => testing.setSex(actor, input));
+    }),
+    act: protectedProcedure
+      .input(z.object({ keys: z.array(z.string().regex(subjectKeyRe)).min(1).max(500), action: z.enum(["reviewed", "task_created", "dismissed"]), assigneeId: z.number().int().positive().nullish() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "opportunitiesAct");
+        return run(() => testing.actOnTesting(actor, input));
+      }),
+    importResults: protectedProcedure.input(z.object({ csv: csvText })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "opportunitiesAct");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can import test results." });
+      return run(() => testing.importTestResults(actor, input.csv));
+    }),
+    importPatients: protectedProcedure.input(z.object({ csv: csvText })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "opportunitiesAct");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can import the patient list." });
+      return run(() => testing.importPatientList(actor, input.csv));
     }),
   }),
 

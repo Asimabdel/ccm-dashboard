@@ -13,6 +13,8 @@ import { addDays, fmtDay, fmtTime, localDateStr } from "@shared/workforce";
 import { OPPORTUNITY_CATEGORY_LIST, OPPORTUNITY_INFO, TASK_CATEGORIES, TASK_CATEGORY_LABELS, WORKSPACE_ROLE_LABELS, type OpportunityCategory } from "@shared/workspace";
 import { cn } from "@/lib/utils";
 import { PhoneLink } from "@/components/phone/PhoneLink";
+import { TestingDue } from "@/components/testing/TestingDue";
+import { FlaskConical } from "lucide-react";
 
 const TASK_CATEGORY_FOR: Record<OpportunityCategory, string> = {
   missed_appointment: "patient_call",
@@ -34,7 +36,8 @@ export default function OpportunitiesPage() {
   const { user } = useAuth({ redirectOnUnauthenticated: true });
   const ws = useWorkspace();
   const [params, setParams] = useUrlParams();
-  const tab = params.get("tab") === "openings" ? "openings" : params.get("tab") === "fill" ? "fill" : "patients";
+  const t = params.get("tab");
+  const tab = t === "openings" || t === "fill" || t === "testing" ? t : "patients";
   const fillProvider = Number(params.get("provider")) || null;
   const category = (params.get("category") as OpportunityCategory) || null;
 
@@ -48,6 +51,7 @@ export default function OpportunitiesPage() {
         {[
           { key: "patients", label: "Patient opportunities", icon: Radar },
           { key: "fill", label: "Fill a schedule", icon: UserSearch },
+          { key: "testing", label: "Testing due", icon: FlaskConical },
           { key: "openings", label: "Open slots", icon: CalendarPlus },
         ].map((t) => (
           <button
@@ -65,6 +69,7 @@ export default function OpportunitiesPage() {
       {user && ws.caps?.opportunitiesView && (
         tab === "openings" ? <Openings clinicId={ws.clinicId} />
           : tab === "fill" ? <FillSchedule providerParam={fillProvider} onProvider={(id) => setParams({ provider: id })} />
+          : tab === "testing" ? <TestingDue clinicId={ws.clinicId} />
           : <PatientOpportunities clinicId={ws.clinicId} category={category} onCategory={(c) => setParams({ category: c })} />
       )}
     </CCMDashboardLayout>

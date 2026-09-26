@@ -23,6 +23,7 @@ import {
 import { appointmentKey } from "./workspaceDb";
 import { formatPhone, mapCallLogRecord, normalizePhone, parseRingCentralCall } from "../shared/phone";
 import { extractPhones, matchEmailSender, parseFromHeader, stripQuotedText } from "../shared/email";
+import { ageOn, evaluateTesting, parseSex, recognizeTest } from "../shared/testing";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
 
@@ -411,5 +412,73 @@ describe("practice mailbox matching", () => {
     await expect(appRouter.createCaller(ctxFor("billing")).workspace.email.list({ filter: "all" })).rejects.toThrow(/access/);
     await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.email.status()).rejects.toThrow(/admin/);
     await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.email.connectUrl({ origin: "https://mypcpcare.com" })).rejects.toThrow(/admin/);
+  });
+});
+
+describe("testing & screenings rules", () => {
+  const today = "2026-09-25";
+  const find = (list: ReturnType<typeof evaluateTesting>, k: string) => list.find((s) => s.key === k);
+
+  it("works out age on a date", () => {
+    expect(ageOn("1960-09-26", today)).toBe(65);
+    expect(ageOn("1960-09-25", today)).toBe(66);
+    expect(ageOn(null, today)).toBeNull();
+  });
+
+  it("diabetes: A1c every 6 months from the last one", () => {
+    const p = { age: 60, sex: "M" as const, conditions: ["Type 2 diabetes mellitus"], medicare: false };
+    expect(find(evaluateTesting(p, [], today), "a1c")!.state).toBe("no_record");
+    expect(find(evaluateTesting(p, [{ testKey: "a1c", performedOn: "2026-06-01", status: "done" }], today), "a1c")).toMatchObject({ state: "current", dueOn: "2026-12-01" });
+    expect(find(evaluateTesting(p, [{ testKey: "a1c", performedOn: "2026-03-01", status: "done" }], today), "a1c")).toMatchObject({ state: "due", dueOn: "2026-09-01" });
+    expect(find(evaluateTesting(p, [{ testKey: "a1c", performedOn: "2026-04-10", status: "done" }], today), "a1c")!.state).toBe("due_soon");
+    // No diabetes → no A1c.
+    expect(find(evaluateTesting({ ...p, conditions: ["Asthma"] }, [], today), "a1c")).toBeUndefined();
+  });
+
+  it("colorectal interval follows the method (colonoscopy 10 years, FIT 1 year)", () => {
+    const p = { age: 55, sex: "F" as const, conditions: [], medicare: false };
+    expect(find(evaluateTesting(p, [{ testKey: "colorectal", performedOn: "2019-01-01", status: "done", method: "colonoscopy" }], today), "colorectal")!.state).toBe("current");
+    expect(find(evaluateTesting(p, [{ testKey: "colorectal", performedOn: "2025-01-01", status: "done", method: "fit" }], today), "colorectal")!.state).toBe("due");
+    expect(find(evaluateTesting({ ...p, age: 40 }, [], today), "colorectal")).toBeUndefined();
+  });
+
+  it("sex-specific screenings need sex on file and only apply to the right ages", () => {
+    const base = { age: 50, conditions: [], medicare: false };
+    expect(find(evaluateTesting({ ...base, sex: null }, [], today), "mammogram")!.state).toBe("needs_info");
+    expect(find(evaluateTesting({ ...base, sex: "M" }, [], today), "mammogram")).toBeUndefined();
+    expect(find(evaluateTesting({ ...base, sex: "F" }, [], today), "mammogram")!.state).toBe("no_record");
+    expect(find(evaluateTesting({ ...base, age: 80, sex: null }, [], today), "mammogram")).toBeUndefined(); // too old either way
+    expect(find(evaluateTesting({ ...base, age: 70, sex: "F" }, [], today), "dexa")!.state).toBe("no_record");
+  });
+
+  it("once-only tests stay done; declined hides for 12 months; not needed is permanent", () => {
+    const p = { age: 40, sex: "F" as const, conditions: [], medicare: false };
+    expect(find(evaluateTesting(p, [{ testKey: "hcv", performedOn: "2015-05-05", status: "done" }], today), "hcv")!.state).toBe("current");
+    expect(find(evaluateTesting(p, [{ testKey: "hiv", performedOn: "2026-01-01", status: "declined" }], today), "hiv")!.state).toBe("declined");
+    expect(find(evaluateTesting(p, [{ testKey: "hiv", performedOn: "2024-01-01", status: "declined" }], today), "hiv")!.state).toBe("no_record");
+    expect(find(evaluateTesting(p, [{ testKey: "cervical", performedOn: "2020-01-01", status: "not_applicable" }], today), "cervical")!.state).toBe("not_applicable");
+  });
+
+  it("recognizes test names from Practice Fusion / lab exports", () => {
+    expect(recognizeTest("Hemoglobin A1c")).toEqual({ key: "a1c", method: null });
+    expect(recognizeTest("HbA1c")).toEqual({ key: "a1c", method: null });
+    expect(recognizeTest("Microalbumin/Creatinine Ratio, Urine")).toEqual({ key: "uacr", method: null });
+    expect(recognizeTest("Comprehensive Metabolic Panel")).toEqual({ key: "egfr", method: null });
+    expect(recognizeTest("Lipid Panel w/ Reflex")).toEqual({ key: "lipid", method: null });
+    expect(recognizeTest("Cologuard")).toEqual({ key: "colorectal", method: "stool_dna" });
+    expect(recognizeTest("Screening colonoscopy")).toEqual({ key: "colorectal", method: "colonoscopy" });
+    expect(recognizeTest("Mammogram, bilateral screening")).toEqual({ key: "mammogram", method: null });
+    expect(recognizeTest("ThinPrep Pap with HPV")).toEqual({ key: "cervical", method: "hpv" });
+    expect(recognizeTest("Hepatitis C Antibody")).toEqual({ key: "hcv", method: null });
+    expect(recognizeTest("CBC with differential")).toBeNull();
+    expect(parseSex("Female")).toBe("F");
+    expect(parseSex("m")).toBe("M");
+    expect(parseSex("")).toBeNull();
+  });
+
+  it("recording tests needs the full patient record; imports are admin-only", async () => {
+    await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.testing.person("p:1")).rejects.toThrow(/access/);
+    await expect(appRouter.createCaller(ctxFor("billing")).workspace.testing.overview({ states: ["due"] })).rejects.toThrow(/access/);
+    await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.testing.importResults({ csv: "a,b\n1,2" })).rejects.toThrow(/admin/);
   });
 });

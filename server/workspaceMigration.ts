@@ -148,6 +148,33 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     INDEX \`playbookVersions_playbook_idx\` (\`playbookId\`),
     CONSTRAINT \`playbookVersions_playbookId_fk\` FOREIGN KEY (\`playbookId\`) REFERENCES \`playbooks\`(\`id\`),
     CONSTRAINT \`playbookVersions_createdByUserId_fk\` FOREIGN KEY (\`createdByUserId\`) REFERENCES \`users\`(\`id\`))` },
+  // Added 2026-09-25: testing & screenings.
+  { label: "patientTests", sql: `CREATE TABLE IF NOT EXISTS \`patientTests\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`subjectKey\` varchar(120) NOT NULL,
+    \`patientId\` int,
+    \`testKey\` varchar(40) NOT NULL,
+    \`method\` varchar(40),
+    \`performedOn\` varchar(10) NOT NULL,
+    \`status\` ENUM('done','not_applicable','declined') NOT NULL DEFAULT 'done',
+    \`result\` varchar(120),
+    \`note\` text,
+    \`source\` varchar(20) NOT NULL,
+    \`createdByUserId\` int,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    INDEX \`patientTests_subject_idx\` (\`subjectKey\`),
+    UNIQUE KEY \`patientTests_one_record\` (\`subjectKey\`, \`testKey\`, \`performedOn\`, \`status\`),
+    CONSTRAINT \`patientTests_patientId_fk\` FOREIGN KEY (\`patientId\`) REFERENCES \`patients\`(\`id\`),
+    CONSTRAINT \`patientTests_createdByUserId_fk\` FOREIGN KEY (\`createdByUserId\`) REFERENCES \`users\`(\`id\`))` },
+  { label: "personDemographics", sql: `CREATE TABLE IF NOT EXISTS \`personDemographics\` (
+    \`subjectKey\` varchar(120) PRIMARY KEY,
+    \`patientId\` int,
+    \`sex\` ENUM('F','M','X'),
+    \`source\` varchar(20) NOT NULL,
+    \`updatedByUserId\` int,
+    \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT \`personDemographics_patientId_fk\` FOREIGN KEY (\`patientId\`) REFERENCES \`patients\`(\`id\`),
+    CONSTRAINT \`personDemographics_updatedByUserId_fk\` FOREIGN KEY (\`updatedByUserId\`) REFERENCES \`users\`(\`id\`))` },
   // Added 2026-09-25: the practice mailbox (Gmail) — processed emails + known addresses.
   { label: "emailMessages", sql: `CREATE TABLE IF NOT EXISTS \`emailMessages\` (
     \`id\` int AUTO_INCREMENT PRIMARY KEY,

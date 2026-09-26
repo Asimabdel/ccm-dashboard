@@ -10,14 +10,14 @@ import { SignJWT, jwtVerify } from "jose";
 import { and, asc, desc, eq, gte, inArray } from "drizzle-orm";
 import { getDb } from "./db";
 import { ENV } from "./_core/env";
-import { appSettings, emailContacts, emailMessages, staffProfiles, users, workTaskActivities, workTasks } from "../drizzle/schema";
+import { appSettings, emailContacts, emailMessages, users, workTaskActivities, workTasks } from "../drizzle/schema";
 import { gmailMessageLink, matchEmailSender, parseFromHeader, stripQuotedText, type EmailMatchIndex, type EmailSubject } from "../shared/email";
 import { nameKey, parseCsvRows, parseDateValue } from "../shared/workspace";
 import { localDateStr } from "../shared/workforce";
 import { openSecret, sealSecret } from "./secretBox";
 import { relayFetch } from "./egress";
 import {
-  WorkspaceError, audit, buildNameIndex, buildPhoneIndex, createTask, searchSubjects, subjectCare, type WorkspaceActor,
+  WorkspaceError, audit, buildNameDobIndex, buildNameIndex, buildPhoneIndex, careTeamAssignee, createTask, searchSubjects, subjectCare, type WorkspaceActor,
 } from "./workspaceDb";
 
 const CONFIG_KEY = "gmail";
@@ -207,29 +207,6 @@ async function buildIndex(): Promise<EmailMatchIndex> {
   return { byEmail, byName: await buildNameIndex(), byPhone: await buildPhoneIndex() };
 }
 
-/** Care coordinator first; else the front-desk person at the patient's clinic (least busy); else that clinic's front-desk queue. */
-async function chooseAssignee(subjectKey: string) {
-  const d = await db();
-  const care = await subjectCare(subjectKey);
-  if (care?.coordinatorId) {
-    const [u] = await d.select({ id: users.id, role: users.role }).from(users).where(eq(users.id, care.coordinatorId)).limit(1);
-    if (u && u.role !== "user") return { assignedUserId: u.id, assignedRole: null, clinicId: care.clinicId, who: "care coordinator" };
-  }
-  if (care?.clinicId) {
-    const desk = await d.select({ id: users.id }).from(users)
-      .innerJoin(staffProfiles, eq(staffProfiles.userId, users.id))
-      .where(and(eq(users.role, "front_desk"), eq(staffProfiles.homeClinicId, care.clinicId), eq(staffProfiles.active, true)));
-    if (desk.length) {
-      const open = await d.select({ userId: workTasks.assignedUserId }).from(workTasks)
-        .where(and(inArray(workTasks.assignedUserId, desk.map((x) => x.id)), inArray(workTasks.status, [...OPEN_STATUSES])));
-      const load = (id: number) => open.filter((o) => o.userId === id).length;
-      const pick = desk.map((x) => x.id).sort((a, b) => load(a) - load(b) || a - b)[0]!;
-      return { assignedUserId: pick, assignedRole: null, clinicId: care.clinicId, who: "front desk" };
-    }
-  }
-  return { assignedUserId: null, assignedRole: "front_desk", clinicId: care?.clinicId ?? null, who: "front desk queue" };
-}
-
 function taskText(m: { fromName: string | null; fromEmail: string | null; subject: string | null; receivedAt: Date; preview: string | null; link: string; method: string }, patientName: string) {
   const who = m.fromName ? `${m.fromName} <${m.fromEmail}>` : m.fromEmail ?? "unknown sender";
   const how = { address: "a remembered email address", name: "the sender's name", phone: "a phone number in the email", manual: "staff" }[m.method] ?? m.method;
@@ -327,7 +304,7 @@ async function processMessage(m: GmailMessage, mailbox: string, idx: EmailMatchI
     await d.insert(emailMessages).values({ ...base, preview, status: match ? "ignored" : "needs_patient" });
     return match ? "ignored" : "needsPatient";
   }
-  const who = await chooseAssignee(match.subject.key);
+  const who = await careTeamAssignee(match.subject.key);
   const text = taskText({ ...base, preview, link: gmailMessageLink(mailbox, messageIdHeader, m.threadId), method: match.method }, match.subject.name);
   const task = await createTask(actor, {
     title: text.title, description: text.description, patientId: match.subject.patientId, clinicId: who.clinicId,
@@ -372,7 +349,7 @@ export async function linkEmail(actor: WorkspaceActor, input: { emailId: number;
     await d.insert(emailContacts).values({ email: m.fromEmail, kind: "patient", patientId: care.patientId, subjectKey: input.subjectKey, name: care.name.slice(0, 255), source: "linked", createdByUserId: actor.id })
       .onDuplicateKeyUpdate({ set: { kind: "patient", patientId: care.patientId, subjectKey: input.subjectKey, name: care.name.slice(0, 255), source: "linked", createdByUserId: actor.id } });
   }
-  const who = await chooseAssignee(input.subjectKey);
+  const who = await careTeamAssignee(input.subjectKey);
   const c = await config();
   const text = taskText({ ...m, link: gmailMessageLink(c.mailbox ?? "", m.messageIdHeader, m.threadId ?? ""), method: "manual" }, care.name);
   let taskId = m.taskId;
@@ -427,17 +404,7 @@ export async function importPatientEmails(actor: WorkspaceActor, csv: string) {
     throw new WorkspaceError("The file needs an Email column, a DOB column, and a Patient name (or First and Last name) column.");
   }
   const d = await db();
-  // name|dob → person, for the roster and the imported schedule.
-  const people = new Map<string, EmailSubject>();
-  const byName = await buildNameIndex();
-  const { patients: pt } = await import("../drizzle/schema");
-  const dobOf = new Map((await d.select({ id: pt.id, dob: pt.dateOfBirth }).from(pt)).map((p) => [p.id, p.dob ? p.dob.toISOString().slice(0, 10) : null]));
-  byName.forEach((list, k) => {
-    for (const s of list) {
-      const dob = s.patientId ? dobOf.get(s.patientId) : s.key.split("|")[1];
-      if (dob) people.set(`${k}|${dob}`, s);
-    }
-  });
+  const people = await buildNameDobIndex();
   const existing = new Map((await d.select({ email: emailContacts.email, source: emailContacts.source }).from(emailContacts)).map((c) => [c.email, c.source]));
   const stats = { rows: rows.length - 1, withEmail: 0, matched: 0, added: 0, keptStaffLinks: 0, notFound: 0 };
   for (const r of rows.slice(1)) {

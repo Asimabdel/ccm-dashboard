@@ -14,8 +14,10 @@ import { TASK_CATEGORY_LABELS, type TaskCategory } from "@shared/workspace";
 import { cn } from "@/lib/utils";
 import { PhoneLink } from "@/components/phone/PhoneLink";
 import { CALL_OUTCOMES, type CallOutcome } from "@shared/phone";
+import { PatientTestingPanel } from "@/components/testing/PatientTestingPanel";
+import { FlaskConical } from "lucide-react";
 
-type Tab = "overview" | "appointments" | "tasks" | "care";
+type Tab = "overview" | "appointments" | "tasks" | "care" | "testing";
 
 /**
  * Patient 360. Operational view (visits, flow, tasks) for everyone with
@@ -49,7 +51,10 @@ function Patient360({ id }: { id: number }) {
     { key: "appointments", label: "Appointments", icon: CalendarDays, count: q.data?.appointments.length },
     { key: "tasks", label: "Tasks", icon: ClipboardList, count: q.data?.openTasks.length },
   ];
-  if (caps?.patientFull) tabs.unshift({ key: "care", label: "Care Management", icon: HeartPulse });
+  if (caps?.patientFull) {
+    tabs.unshift({ key: "care", label: "Care Management", icon: HeartPulse });
+    tabs.push({ key: "testing", label: "Testing", icon: FlaskConical });
+  }
 
   const d = q.data;
   const p = d?.patient;
@@ -144,6 +149,7 @@ function Patient360({ id }: { id: number }) {
           )}
 
           {tab === "care" && caps?.patientFull && <PatientDetailPage embedded patientId={id} />}
+          {tab === "testing" && caps?.patientFull && <Panel><PatientTestingPanel subjectKey={`p:${id}`} /></Panel>}
 
           <NewTaskDialog open={taskOpen} onOpenChange={setTaskOpen} defaults={{ patientId: p.id, patientName: p.name, clinicId: p.clinicId }} />
           <TaskDrawer taskId={Number(params.get("task")) || null} onClose={() => setParams({ task: null })} />
