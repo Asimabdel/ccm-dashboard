@@ -1,0 +1,24 @@
+import { useId } from "react";
+
+/** The MyPCP Dr mark: a stethoscope whose tubing forms a heart (same as the browser-tab icon). */
+export function BrandMark({ size = 28, className }: { size?: number; className?: string }) {
+  const g = useId();
+  return (
+    <svg viewBox="-12 2 224 224" width={size} height={size} className={className} aria-hidden="true">
+      <defs>
+        <linearGradient id={g} x1="0.15" y1="0.1" x2="0.85" y2="1">
+          <stop offset="0" stopColor="#2dd4bf" />
+          <stop offset="1" stopColor="#0e7490" />
+        </linearGradient>
+      </defs>
+      <g fill="none" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M58 22 C58 58 66 84 99 116" stroke="#2dd4bf" strokeWidth="19" />
+        <path d="M140 22 C140 58 132 84 99 116" stroke="#0e7490" strokeWidth="19" />
+        <path d="M99 118 C82 96 56 88 36 98 C14 109 8 138 23 159 C40 183 72 200 99 213 C126 200 158 183 175 159 C190 138 184 109 162 98 C142 88 116 96 99 118 Z" stroke={`url(#${g})`} strokeWidth="26" />
+        <circle cx="99" cy="160" r="17" stroke="#2dd4bf" strokeWidth="10" />
+      </g>
+      <circle cx="58" cy="18" r="16" fill="#2dd4bf" />
+      <circle cx="140" cy="18" r="16" fill="#0e7490" />
+    </svg>
+  );
+}

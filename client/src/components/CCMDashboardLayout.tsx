@@ -12,6 +12,7 @@ import { useIdleLogout } from "@/hooks/useIdleLogout";
 import { useIsMobile } from "@/hooks/useMobile";
 import { useWorkspace } from "@/components/workspace/useWorkspace";
 import { MyProgress } from "@/components/workspace/MyProgress";
+import { BrandMark } from "@/components/BrandMark";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuSeparator, DropdownMenuTrigger,
@@ -138,9 +139,7 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
     >
       <div className={cn("flex items-center h-14 px-4 border-b border-white/5", rail ? "justify-center" : "justify-between")}>
         <button onClick={() => setLocation(ROLE_HOME[user.role] ?? "/home")} className="flex items-center gap-2.5 min-w-0">
-          <div className="w-8 h-8 bg-brand rounded-lg flex items-center justify-center shrink-0">
-            <span className="text-white font-bold text-sm">M</span>
-          </div>
+          <BrandMark size={32} className="shrink-0" />
           {!rail && (
             <div className="leading-tight text-left min-w-0">
               <span className="block text-sm font-bold tracking-wide text-white truncate">MYPCP</span>

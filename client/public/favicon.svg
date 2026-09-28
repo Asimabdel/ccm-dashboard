@@ -1,4 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#cf6228"/>
-  <path d="M14 47V17h8.5L32 30.5 41.5 17H50v30h-8V30.8l-10 13.4-10-13.4V47z" fill="#fff"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-12 2 224 224">
+  <!-- MyPCP Dr mark: a stethoscope whose tubing forms a heart (from the mypcpdr.com logo). -->
+  <defs>
+    <linearGradient id="g" x1="0.15" y1="0.1" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#2dd4bf"/>
+      <stop offset="1" stop-color="#0e7490"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M58 22 C58 58 66 84 99 116" stroke="#2dd4bf" stroke-width="19"/>
+    <path d="M140 22 C140 58 132 84 99 116" stroke="#0e7490" stroke-width="19"/>
+    <path d="M99 118 C82 96 56 88 36 98 C14 109 8 138 23 159 C40 183 72 200 99 213 C126 200 158 183 175 159 C190 138 184 109 162 98 C142 88 116 96 99 118 Z" stroke="url(#g)" stroke-width="26"/>
+    <circle cx="99" cy="160" r="17" stroke="#2dd4bf" stroke-width="10"/>
+  </g>
+  <circle cx="58" cy="18" r="16" fill="#2dd4bf"/>
+  <circle cx="140" cy="18" r="16" fill="#0e7490"/>
 </svg>

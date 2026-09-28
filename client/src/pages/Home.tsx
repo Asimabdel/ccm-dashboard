@@ -1,4 +1,5 @@
 import { useAuth } from "@/_core/hooks/useAuth";
+import { BrandMark } from "@/components/BrandMark";
 import { getLoginUrl } from "@/const";
 import { trpc } from "@/lib/trpc";
 import { useEffect, useState } from "react";
@@ -61,7 +62,7 @@ export default function Home() {
         {/* Left: hero copy */}
         <div>
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/70 border border-slate-200/70 backdrop-blur-sm mb-6 animate-fade-in-up">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <BrandMark size={18} />
             <p className="text-xs font-medium tracking-[0.2em] uppercase text-slate-500">MyPCP Workspace</p>
           </div>
           <h1 className="text-5xl md:text-6xl font-extrabold tracking-tight text-slate-900 leading-[1.05] max-w-2xl">
