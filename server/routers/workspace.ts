@@ -50,6 +50,13 @@ async function actorFor(ctx: Ctx, cap: WorkspaceCap): Promise<ws.WorkspaceActor>
 }
 
 /** Map data-layer errors to tRPC errors with user-safe messages. */
+/** Opportunity Finder (every tab): care coordinators / front desk see their clinic's patients, providers their own. */
+async function oppActor(ctx: Ctx, cap: WorkspaceCap): Promise<ws.WorkspaceActor> {
+  const actor = await actorFor(ctx, cap);
+  const scope = await ws.opportunityScope({ id: ctx.user.id, name: ctx.user.name, role: ctx.user.role });
+  return { ...actor, clinicIds: scope.clinicIds ?? actor.clinicIds, providerIds: scope.providerIds };
+}
+
 /** The page the request came from (for building patient links on the same site); checked against an allowlist later. */
 function reqOrigin(ctx: Ctx): string | null {
   const o = ctx.req?.headers?.origin;
@@ -238,7 +245,7 @@ export const workspaceRouter = router({
   }),
 
   openings: protectedProcedure.input(z.object({ clinicId, days: z.number().int().min(0).max(14).default(3) })).query(async ({ ctx, input }) => {
-    const actor = await actorFor(ctx, "opportunitiesView");
+    const actor = await oppActor(ctx, "opportunitiesView");
     return run(() => ws.openings(actor, input));
   }),
 
@@ -651,7 +658,7 @@ export const workspaceRouter = router({
         includeActioned: z.boolean().default(false),
       }))
       .query(async ({ ctx, input }) => {
-        const actor = await actorFor(ctx, "opportunitiesView");
+        const actor = await oppActor(ctx, "opportunitiesView");
         return run(() => testing.testingOverview(actor, input as Parameters<typeof testing.testingOverview>[1]));
       }),
     person: protectedProcedure.input(z.string().regex(subjectKeyRe)).query(async ({ ctx, input }) => {
@@ -683,7 +690,7 @@ export const workspaceRouter = router({
     act: protectedProcedure
       .input(z.object({ keys: z.array(z.string().regex(subjectKeyRe)).min(1).max(500), action: z.enum(["reviewed", "task_created", "dismissed"]), assigneeId: z.number().int().positive().nullish() }))
       .mutation(async ({ ctx, input }) => {
-        const actor = await actorFor(ctx, "opportunitiesAct");
+        const actor = await oppActor(ctx, "opportunitiesAct");
         return run(() => testing.actOnTesting(actor, input));
       }),
     importResults: protectedProcedure.input(z.object({ csv: csvText })).mutation(async ({ ctx, input }) => {
@@ -699,25 +706,31 @@ export const workspaceRouter = router({
   }),
 
   opportunities: router({
+    /** What this person's Opportunity Finder is limited to (for the note at the top of the page). */
+    scope: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "opportunitiesView");
+      const sc = await ws.opportunityScope({ id: ctx.user.id, name: ctx.user.name, role: ctx.user.role });
+      return { label: sc.label, clinicIds: sc.clinicIds, limitedToProviders: !!sc.providerIds };
+    }),
     summary: protectedProcedure.input(z.object({ clinicId })).query(async ({ ctx, input }) => {
-      const actor = await actorFor(ctx, "opportunitiesView");
+      const actor = await oppActor(ctx, "opportunitiesView");
       return run(() => ws.opportunitySummary(actor, input.clinicId));
     }),
     list: protectedProcedure
       .input(z.object({ category: z.enum(OPPORTUNITY_CATEGORY_LIST as [string, ...string[]]), clinicId, providerId: z.number().int().positive().nullish(), includeActioned: z.boolean().default(false) }))
       .query(async ({ ctx, input }) => {
-        const actor = await actorFor(ctx, "opportunitiesView");
+        const actor = await oppActor(ctx, "opportunitiesView");
         return run(() => ws.opportunityList(actor, input as Parameters<typeof ws.opportunityList>[1]));
       }),
     // Fill a provider's schedule: who is most likely to book with them.
     fillProviders: protectedProcedure.query(async ({ ctx }) => {
-      const actor = await actorFor(ctx, "opportunitiesView");
+      const actor = await oppActor(ctx, "opportunitiesView");
       return run(() => ws.fillProviders(actor));
     }),
     fill: protectedProcedure
       .input(z.object({ providerId: z.number().int().positive(), includeOtherClinics: z.boolean().default(false), includeActioned: z.boolean().default(false) }))
       .query(async ({ ctx, input }) => {
-        const actor = await actorFor(ctx, "opportunitiesView");
+        const actor = await oppActor(ctx, "opportunitiesView");
         return run(() => ws.scheduleFill(actor, input));
       }),
     fillAct: protectedProcedure
@@ -731,7 +744,7 @@ export const workspaceRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        const actor = await actorFor(ctx, "opportunitiesAct");
+        const actor = await oppActor(ctx, "opportunitiesAct");
         return run(() => ws.scheduleFillAct(actor, input));
       }),
     act: protectedProcedure
@@ -746,7 +759,7 @@ export const workspaceRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        const actor = await actorFor(ctx, "opportunitiesAct");
+        const actor = await oppActor(ctx, "opportunitiesAct");
         return run(() => ws.actOnOpportunities(actor, input as Parameters<typeof ws.actOnOpportunities>[1]));
       }),
   }),

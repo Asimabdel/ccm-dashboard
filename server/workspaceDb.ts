@@ -51,6 +51,7 @@ import {
   findOpenings,
   minutesBetween,
   nameKey,
+  sameProviderName,
   nextClinicDay,
   type FlowStatus,
   type OpportunityCategory,
@@ -83,7 +84,51 @@ export interface WorkspaceActor {
   name: string | null;
   role: string;
   clinicIds: number[] | null;
+  /** Opportunity Finder only: a provider sees just their own patients (null / unset = no limit). */
+  providerIds?: number[] | null;
   ip?: string | null;
+}
+
+/** Does this patient belong to one of the actor's providers (always true when there's no provider limit)? */
+const ownsPatient = (actor: WorkspaceActor, providerId: number | null | undefined) =>
+  !actor.providerIds || (providerId != null && actor.providerIds.includes(providerId));
+
+const OPPORTUNITY_LIMITED_ROLES = ["staff", "front_desk", "provider"];
+
+/**
+ * Who someone's Opportunity Finder is limited to. Care coordinators and the front desk see patients
+ * at the clinic(s) they work at (home clinic + where they're scheduled today; floaters see every
+ * clinic); providers see their own patients. Admins, and anyone MyPCP can't place yet (no clinic
+ * or schedule; a provider login not linked to a provider), see everyone.
+ */
+export async function opportunityScope(user: { id: number; name: string | null; role: string }): Promise<{ clinicIds: number[] | null; providerIds: number[] | null; label: string | null }> {
+  const none = { clinicIds: null, providerIds: null, label: null };
+  if (!OPPORTUNITY_LIMITED_ROLES.includes(user.role)) return none;
+  const d = await db();
+  if (user.role === "provider") {
+    const provs = await d.select({ id: providers.id, name: providers.name, userId: providers.userId, aliases: providers.aliases }).from(providers);
+    let mine = provs.filter((p) => p.userId === user.id);
+    if (!mine.length && user.name) mine = provs.filter((p) => p.userId == null && [p.name, ...(p.aliases ?? [])].some((n) => sameProviderName(n, user.name)));
+    if (!mine.length) return none;
+    return { clinicIds: null, providerIds: mine.map((p) => p.id), label: `your patients (${mine.map((p) => p.name).join(", ")})` };
+  }
+  const [profile] = await d.select({ homeClinicId: staffProfiles.homeClinicId, canFloat: staffProfiles.canFloat }).from(staffProfiles).where(eq(staffProfiles.userId, user.id)).limit(1);
+  if (profile?.canFloat) return none;
+  const today = localDateStr();
+  const set = new Set<number>();
+  if (profile?.homeClinicId) set.add(profile.homeClinicId);
+  const todays = await d.select({ clinicId: shifts.clinicId }).from(shifts).where(and(eq(shifts.userId, user.id), eq(shifts.date, today), eq(shifts.status, "scheduled")));
+  todays.forEach((s) => { if (s.clinicId) set.add(s.clinicId); });
+  // Not working today and no home clinic set: use where they're scheduled around now.
+  if (!set.size) {
+    const near = await d.select({ clinicId: shifts.clinicId }).from(shifts)
+      .where(and(eq(shifts.userId, user.id), gte(shifts.date, addDays(today, -14)), lte(shifts.date, addDays(today, 14)), eq(shifts.status, "scheduled")));
+    near.forEach((s) => { if (s.clinicId) set.add(s.clinicId); });
+  }
+  if (!set.size) return none;
+  const ids = Array.from(set);
+  const names = (await d.select({ id: clinics.id, name: clinics.name }).from(clinics).where(inArray(clinics.id, ids))).map((c) => c.name);
+  return { clinicIds: ids, providerIds: null, label: `patients at ${names.join(" and ")}` };
 }
 
 // ---------------------------------------------------------------------------
@@ -149,6 +194,15 @@ export async function getMaClinicIds(userId: number): Promise<number[] | null> {
     .where(and(eq(shifts.userId, userId), eq(shifts.date, localDateStr()), eq(shifts.status, "scheduled")));
   todays.forEach((s) => { if (s.clinicId) set.add(s.clinicId); });
   return Array.from(set);
+}
+
+/** Everyone's Opportunity Finder view, for checking the setup (staff names + clinics only). */
+export async function opportunityScopeReport() {
+  const d = await db();
+  const people = await d.select({ id: users.id, name: users.name, role: users.role }).from(users).where(inArray(users.role, ["staff", "front_desk", "provider"]));
+  const out = [];
+  for (const u of people) out.push({ name: u.name, role: u.role, sees: (await opportunityScope(u)).label ?? "everyone" });
+  return out.sort((a, b) => a.role.localeCompare(b.role) || String(a.name).localeCompare(String(b.name)));
 }
 
 /** Intersect a requested clinic with the actor's allowed clinics. */
@@ -760,7 +814,7 @@ export async function openings(actor: WorkspaceActor, input: { clinicId?: number
     .where(and(gte(appointments.date, today), lte(appointments.date, until), clinicFilter(appointments.clinicId, scope)));
   const fmt = new Intl.DateTimeFormat("en-GB", { timeZone: "America/Chicago", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
   const list = findOpenings(
-    rows.map((r) => ({
+    rows.filter((r) => ownsPatient(actor, r.providerId)).map((r) => ({
       date: r.date,
       time: fmt.format(r.startsAt),
       durationMin: r.durationMin,
@@ -787,6 +841,8 @@ interface ScheduleSubject {
   dob: Date | null;
   phone: string | null;
   clinicId: number | null;
+  /** Provider of the latest visit (null when that visit's provider isn't a known provider). */
+  providerId: number | null;
   providerName: string | null;
   visits: FillVisit[];
 }
@@ -824,7 +880,7 @@ export async function loadScheduleSubjects(): Promise<Map<string, ScheduleSubjec
     const key = subjectKeyFor(r.patientId, r.patientName, r.dateOfBirth);
     let s = subjects.get(key);
     if (!s) {
-      s = { key, patientId: r.patientId, name: r.patientName, dob: r.dateOfBirth, phone: r.phoneNumber, clinicId: r.clinicId, providerName: r.providerDisplay ?? r.providerName, visits: [], latestAt: -Infinity };
+      s = { key, patientId: r.patientId, name: r.patientName, dob: r.dateOfBirth, phone: r.phoneNumber, clinicId: r.clinicId, providerId: r.providerId, providerName: r.providerDisplay ?? r.providerName, visits: [], latestAt: -Infinity };
       subjects.set(key, s);
     }
     const providerKey = r.providerId ? `id:${r.providerId}` : r.providerName?.trim() ? `name:${nameKey(r.providerName)}` : null;
@@ -838,6 +894,7 @@ export async function loadScheduleSubjects(): Promise<Map<string, ScheduleSubjec
       s.phone = r.phoneNumber ?? s.phone;
       s.clinicId = r.clinicId ?? s.clinicId;
       s.providerName = r.providerDisplay ?? r.providerName ?? s.providerName;
+      s.providerId = r.providerId ?? (r.providerName ? null : s.providerId);
     }
   }
   scheduleCache.set("all", { at: Date.now(), subjects });
@@ -995,6 +1052,7 @@ async function loadOpportunityData(actor: WorkspaceActor, clinicId?: number | nu
     // their provider's. (Workspace grouping only; the CCM record isn't changed.)
     const clinicId = p.clinicId ?? subjects.get(`p:${p.id}`)?.clinicId ?? (p.providerId ? providerClinic.get(p.providerId) ?? null : null);
     if (!inScope(clinicId)) continue;
+    if (!ownsPatient(actor, p.providerId ?? subjects.get(`p:${p.id}`)?.providerId)) continue;
     const visits = subjects.get(`p:${p.id}`)?.visits ?? [];
     const { lastSeen, nextBooked } = visitDates(visits, now);
     const lastVisit = lastSeen && (!p.lastOfficeVisit || lastSeen > p.lastOfficeVisit) ? lastSeen : p.lastOfficeVisit;
@@ -1025,6 +1083,7 @@ async function loadOpportunityData(actor: WorkspaceActor, clinicId?: number | nu
   for (const s of Array.from(subjects.values())) {
     if (s.patientId) continue;
     if (scope !== null && (s.clinicId == null || !scope.includes(s.clinicId))) continue;
+    if (!ownsPatient(actor, s.providerId)) continue;
     const matches = evaluateScheduleOpportunities(s.visits, now);
     if (!matches.length) continue;
     const { lastSeen, nextBooked } = visitDates(s.visits, now);
@@ -1146,6 +1205,7 @@ export async function fillProviders(actor: WorkspaceActor) {
   const activity = providerActivity(Array.from(subjects.values()).flatMap((s) => s.visits));
   return provs
     .filter((p) => scope === null || (p.clinicId != null && scope.includes(p.clinicId)))
+    .filter((p) => ownsPatient(actor, p.id))
     .map((p) => {
       const a = activity.get(`id:${p.id}`);
       return { id: p.id, name: p.name, title: p.title, clinicId: p.clinicId, clinicName: clinicRows.find((c) => c.id === p.clinicId)?.name ?? null, seenLast60: a?.seenLast60 ?? 0, active: a ? a.active : false };
@@ -1157,6 +1217,7 @@ async function loadScheduleFill(actor: WorkspaceActor, input: { providerId: numb
   const d = await db();
   const [prov] = await d.select({ id: providers.id, name: providers.name, clinicId: providers.clinicId }).from(providers).where(eq(providers.id, input.providerId)).limit(1);
   if (!prov) throw new WorkspaceError("Provider not found.", "NOT_FOUND");
+  if (!ownsPatient(actor, prov.id)) throw new WorkspaceError("You can only fill your own schedule.", "FORBIDDEN");
   const now = new Date();
   const scope = scopeClinics(actor, null);
   const [subjects, roster, clinicRows] = await Promise.all([
@@ -1309,13 +1370,14 @@ export async function loadPeople(actor: WorkspaceActor, clinicId?: number | null
     const s = subjects.get(`p:${p.id}`);
     const cid = p.clinicId ?? s?.clinicId ?? (p.providerId ? providerClinic.get(p.providerId) ?? null : null);
     if (!inScope(cid)) continue;
+    if (!ownsPatient(actor, p.providerId ?? s?.providerId)) continue;
     const { lastSeen, nextBooked } = visitDates(s?.visits ?? [], now);
     const last = lastSeen && (!p.lastOfficeVisit || lastSeen > p.lastOfficeVisit) ? lastSeen : p.lastOfficeVisit;
     const next = [nextBooked, p.nextAppointment && p.nextAppointment > now ? p.nextAppointment : null].filter((x): x is Date => !!x).sort((a, b) => +a - +b)[0] ?? null;
     out.push({ key: `p:${p.id}`, patientId: p.id, name: p.name, dob: ymd(p.dateOfBirth), phone: p.phoneNumber ?? s?.phone ?? null, clinicId: cid, clinicName: cid ? clinicName.get(cid) ?? null : null, providerName: p.providerName ?? s?.providerName ?? null, conditions: [...(p.chronicConditions ?? []), ...(p.bhiConditions ?? [])], insurance: p.insurance, lastSeen: last, nextVisit: next });
   }
   for (const s of Array.from(subjects.values())) {
-    if (s.patientId || !inScope(s.clinicId)) continue;
+    if (s.patientId || !inScope(s.clinicId) || !ownsPatient(actor, s.providerId)) continue;
     const { lastSeen, nextBooked } = visitDates(s.visits, now);
     if (!lastSeen) continue; // never actually came in
     out.push({ key: s.key, patientId: null, name: s.name, dob: ymd(s.dob), phone: s.phone, clinicId: s.clinicId, clinicName: s.clinicId ? clinicName.get(s.clinicId) ?? null : null, providerName: s.providerName, conditions: [], insurance: null, lastSeen, nextVisit: nextBooked });

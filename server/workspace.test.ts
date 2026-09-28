@@ -13,6 +13,7 @@ import {
   findOpenings,
   mapScheduleStatus,
   nameKey,
+  sameProviderName,
   nextClinicDay,
   parseDateValue,
   parseScheduleCsv,
@@ -701,5 +702,16 @@ describe("patient forms (intake)", () => {
     expect(await pub.patientForms.open({ token: "not a real link token!!" })).toMatchObject({ state: "not_found", formCount: 0 });
     expect(await pub.patientForms.verify({ token: "not a real link token!!", month: "01", day: "01", year: "1950" })).toMatchObject({ ok: false, state: "not_found" });
     await expect(pub.patientForms.load({ session: "x".repeat(40) })).rejects.toThrow(/session/);
+  });
+});
+
+describe("opportunity finder: who sees which patients", () => {
+  it("links a provider login to their provider record by name (titles, order and case ignored)", () => {
+    expect(sameProviderName("Dr. Sarah Chen", "Chen, Sarah")).toBe(true);
+    expect(sameProviderName("SARAH CHEN, MD", "Sarah Chen")).toBe(true);
+    expect(sameProviderName("Maggie Lopez NP", "Magdalene Lopez")).toBe(false);
+    expect(sameProviderName("Sarah Chen", "Sarah Chen-Wu")).toBe(false);
+    expect(sameProviderName("", "")).toBe(false);
+    expect(sameProviderName("Dr.", "MD")).toBe(false);
   });
 });

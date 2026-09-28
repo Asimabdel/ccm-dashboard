@@ -461,6 +461,17 @@ export function parseScheduleCsv(text: string, override?: ScheduleMapping): Sche
 }
 
 /** Lowercased, punctuation-free name used to match schedule rows to patients. */
+/**
+ * Is this the same person's name, ignoring titles ("Dr.", "MD", "NP"…), punctuation, case and
+ * word order ("Chen, Sarah" = "Dr. Sarah Chen")? Used to find a provider login's provider record.
+ */
+export function sameProviderName(a: string | null | undefined, b: string | null | undefined): boolean {
+  const words = (s: string) => nameKey(s).split(" ").filter((w) => w && !PROVIDER_TITLES.has(w)).sort().join(" ");
+  const x = words(a ?? ""), y = words(b ?? "");
+  return !!x && x === y;
+}
+const PROVIDER_TITLES = new Set(["dr", "md", "do", "np", "pa", "fnp", "aprn", "dnp", "pac", "fnpc", "rn", "mr", "mrs", "ms"]);
+
 export function nameKey(name: string): string {
   return normalizePersonName(name)
     .toLowerCase()

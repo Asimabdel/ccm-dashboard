@@ -60,6 +60,11 @@ export const handler = async (event: any, context: any) => {
     const backfill = "skipped" in sync ? null : await runGmailBackfill({ deadline: started + 23_000 });
     return { ...sync, faxBox, faxRead, backfill };
   }
+  // Who sees what in the Opportunity Finder (IAM-only check; staff names and clinics, no patients).
+  if (event && event.__job === "opportunity-scopes" && !event.requestContext && !event.version) {
+    const { opportunityScopeReport } = await import("../workspaceDb");
+    return opportunityScopeReport();
+  }
   // Load the practice's form wording into the Patient forms library (IAM-only; matched by English title).
   if (event && event.__job === "intake-docs" && !event.requestContext && !event.version) {
     const { importDocuments } = await import("../intakeDb");

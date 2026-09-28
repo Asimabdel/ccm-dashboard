@@ -32,6 +32,23 @@ const TASK_CATEGORY_FOR: Record<OpportunityCategory, string> = {
 const SCHEDULE_CATEGORIES = new Set<OpportunityCategory>(["missed_appointment", "cancelled_not_rebooked", "new_patient_no_return", "lapsed_follow_up"]);
 const MAX_SELECT = 500;
 
+/** Care coordinators / front desk see their clinic's patients; providers their own. Say so. */
+function ScopeNote({ clinicId }: { clinicId: number | null }) {
+  const q = trpc.workspace.opportunities.scope.useQuery(undefined, { staleTime: 5 * 60_000 });
+  const s = q.data;
+  if (!s?.label) return null;
+  const otherClinic = !!clinicId && !!s.clinicIds && !s.clinicIds.includes(clinicId);
+  return (
+    <p className="mb-4 flex items-start gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-100">
+      <Info size={15} className="mt-0.5 shrink-0" />
+      <span>
+        Showing {s.label}{s.limitedToProviders ? "" : ", where you work"}.
+        {otherClinic && " The clinic picker is set to a different clinic, so nothing shows: switch it to All clinics."}
+      </span>
+    </p>
+  );
+}
+
 export default function OpportunitiesPage() {
   const { user } = useAuth({ redirectOnUnauthenticated: true });
   const ws = useWorkspace();
@@ -47,6 +64,7 @@ export default function OpportunitiesPage() {
         title="Opportunity Finder"
         subtitle="Patients who may need outreach, based on simple, visible rules. Suggestions only — nothing contacts a patient automatically."
       />
+      {user && ws.caps?.opportunitiesView && <ScopeNote clinicId={ws.clinicId} />}
       <div className="flex gap-1 mb-5 border-b border-slate-200 dark:border-slate-700 overflow-x-auto" role="tablist">
         {[
           { key: "patients", label: "Patient opportunities", icon: Radar },
