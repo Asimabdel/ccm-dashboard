@@ -1120,6 +1120,118 @@ export const bookingRequests = mysqlTable("bookingRequests", {
   statusIdx: index("bookingRequests_status_idx").on(t.status, t.receivedAt),
 }));
 
+/**
+ * Patient forms library: agreements / consents the practice sends (wording pasted in by an admin,
+ * per language). Editing bumps the version; every signature keeps the exact text that was signed.
+ */
+export const intakeDocuments = mysqlTable("intakeDocuments", {
+  id: int("id").autoincrement().primaryKey(),
+  title: json("title").$type<Record<string, string>>().notNull(),
+  body: json("body").$type<Record<string, string>>().notNull(),
+  version: int("version").default(1).notNull(),
+  active: boolean("active").default(true).notNull(),
+  sortOrder: int("sortOrder").default(0).notNull(),
+  updatedByUserId: int("updatedByUserId").references(() => users.id),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+/** Forms sent to one patient: a private link (DOB-checked) that they fill in and sign. */
+export const intakePackets = mysqlTable("intakePackets", {
+  id: int("id").autoincrement().primaryKey(),
+  /** SHA-256 of the link token (the token itself is only kept sealed, for "copy link"). */
+  tokenHash: varchar("tokenHash", { length: 64 }).notNull().unique(),
+  tokenSealed: text("tokenSealed").notNull(),
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  patientId: int("patientId").references(() => patients.id),
+  name: varchar("name", { length: 255 }).notNull(),
+  /** YYYY-MM-DD; the patient must enter it to open the forms. */
+  dob: varchar("dob", { length: 10 }).notNull(),
+  phone: varchar("phone", { length: 30 }),
+  email: varchar("email", { length: 320 }),
+  language: varchar("language", { length: 2 }).default("en").notNull(),
+  /** "medical_intake" and/or "doc:<intakeDocuments.id>", in order. */
+  forms: json("forms").$type<string[]>().notNull(),
+  clinicId: int("clinicId").references(() => clinics.id),
+  status: mysqlEnum("status", ["waiting", "opened", "in_progress", "completed", "filed", "cancelled"]).default("waiting").notNull(),
+  /** email | text | link */
+  sentVia: varchar("sentVia", { length: 10 }),
+  sentAt: datetime("sentAt"),
+  sendCount: int("sendCount").default(0).notNull(),
+  openedAt: datetime("openedAt"),
+  completedAt: datetime("completedAt"),
+  expiresAt: datetime("expiresAt").notNull(),
+  failedDobAttempts: int("failedDobAttempts").default(0).notNull(),
+  lockedUntil: datetime("lockedUntil"),
+  /** Questionnaire answers by form key (saved as the patient goes). */
+  answers: json("answers").$type<Record<string, Record<string, unknown>>>(),
+  taskId: int("taskId"),
+  bookingRequestId: int("bookingRequestId"),
+  filedAt: datetime("filedAt"),
+  filedByUserId: int("filedByUserId").references(() => users.id),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  statusIdx: index("intakePackets_status_idx").on(t.status, t.createdAt),
+  subjectIdx: index("intakePackets_subject_idx").on(t.subjectKey),
+}));
+
+/** One signed form in a packet: who signed, how, when, from where, and the exact text (hashed). */
+export const intakeSignatures = mysqlTable("intakeSignatures", {
+  id: int("id").autoincrement().primaryKey(),
+  packetId: int("packetId").notNull().references(() => intakePackets.id),
+  formKey: varchar("formKey", { length: 40 }).notNull(),
+  formTitle: varchar("formTitle", { length: 255 }).notNull(),
+  language: varchar("language", { length: 2 }).notNull(),
+  formVersion: int("formVersion").notNull(),
+  /** What was signed: the agreement text, or the questionnaire answers + attestation (JSON). */
+  snapshot: mediumtext("snapshot").notNull(),
+  textHash: varchar("textHash", { length: 64 }).notNull(),
+  signerName: varchar("signerName", { length: 160 }).notNull(),
+  /** self | spouse | child | parent | caregiver | guardian | other */
+  signerRelation: varchar("signerRelation", { length: 20 }).notNull(),
+  /** typed | drawn */
+  method: varchar("method", { length: 10 }).notNull(),
+  signatureFileId: int("signatureFileId"),
+  signedAt: datetime("signedAt").notNull(),
+  ip: varchar("ip", { length: 64 }),
+  userAgent: varchar("userAgent", { length: 255 }),
+  /** SHA-256 over everything above: changes if any of it is altered. */
+  docHash: varchar("docHash", { length: 64 }).notNull(),
+}, (t) => ({
+  packetFormUnique: uniqueIndex("intakeSignatures_packet_form_unique").on(t.packetId, t.formKey),
+}));
+
+/** Photos (insurance card, ID) and drawn signatures, base64. */
+export const intakeFiles = mysqlTable("intakeFiles", {
+  id: int("id").autoincrement().primaryKey(),
+  packetId: int("packetId").notNull().references(() => intakePackets.id),
+  /** insurance_front | insurance_back | photo_id | signature */
+  kind: varchar("kind", { length: 30 }).notNull(),
+  mime: varchar("mime", { length: 40 }).notNull(),
+  data: mediumtext("data").notNull(),
+  size: int("size").notNull(),
+  sha256: varchar("sha256", { length: 64 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  packetIdx: index("intakeFiles_packet_idx").on(t.packetId),
+}));
+
+/** Audit trail for a packet (sent, opened, date-of-birth checks, signed, filed…). */
+export const intakeEvents = mysqlTable("intakeEvents", {
+  id: int("id").autoincrement().primaryKey(),
+  packetId: int("packetId").notNull().references(() => intakePackets.id),
+  at: datetime("at").notNull(),
+  type: varchar("type", { length: 30 }).notNull(),
+  userId: int("userId").references(() => users.id),
+  ip: varchar("ip", { length: 64 }),
+  userAgent: varchar("userAgent", { length: 255 }),
+  detail: varchar("detail", { length: 255 }),
+}, (t) => ({
+  packetIdx: index("intakeEvents_packet_idx").on(t.packetId, t.at),
+}));
+
 /** Practice knowledge base (SOPs / workflows). */
 export const playbooks = mysqlTable("playbooks", {
   id: int("id").autoincrement().primaryKey(),

@@ -99,6 +99,7 @@ type AuditAction =
   | "opportunity_action"
   | "manage_playbook"
   | "view_patient"
+  | "update_patient"
   | "manage_access";
 
 export async function audit(actor: WorkspaceActor, action: AuditAction, opts: { entityType?: string; entityId?: number; description?: string } = {}) {
@@ -796,7 +797,7 @@ const scheduleCache = new Map<string, { at: number; subjects: Map<string, Schedu
 
 const subjectKeyFor = (patientId: number | null, name: string, dob: Date | null) => (patientId ? `p:${patientId}` : `s:${nameKey(name)}|${ymd(dob) ?? ""}`);
 
-async function loadScheduleSubjects(): Promise<Map<string, ScheduleSubject>> {
+export async function loadScheduleSubjects(): Promise<Map<string, ScheduleSubject>> {
   const hit = scheduleCache.get("all");
   if (hit && Date.now() - hit.at < 60_000) return hit.subjects;
   const d = await db();

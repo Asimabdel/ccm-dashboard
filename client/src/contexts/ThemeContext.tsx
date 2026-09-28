@@ -14,12 +14,15 @@ interface ThemeProviderProps {
   children: React.ReactNode;
   defaultTheme?: Theme;
   switchable?: boolean;
+  /** Always light here (patient forms, printouts), without touching the saved choice. */
+  forceLight?: boolean;
 }
 
 export function ThemeProvider({
   children,
   defaultTheme = "light",
   switchable = false,
+  forceLight = false,
 }: ThemeProviderProps) {
   const [theme, setTheme] = useState<Theme>(() => {
     if (switchable) {
@@ -37,7 +40,7 @@ export function ThemeProvider({
 
   useEffect(() => {
     const root = document.documentElement;
-    if (theme === "dark") {
+    if (theme === "dark" && !forceLight) {
       root.classList.add("dark");
     } else {
       root.classList.remove("dark");
@@ -46,7 +49,7 @@ export function ThemeProvider({
     if (switchable) {
       localStorage.setItem("theme", theme);
     }
-  }, [theme, switchable]);
+  }, [theme, switchable, forceLight]);
 
   const toggleTheme = switchable
     ? () => {

@@ -60,6 +60,11 @@ export const handler = async (event: any, context: any) => {
     const backfill = "skipped" in sync ? null : await runGmailBackfill({ deadline: started + 23_000 });
     return { ...sync, faxBox, faxRead, backfill };
   }
+  // Load the practice's form wording into the Patient forms library (IAM-only; matched by English title).
+  if (event && event.__job === "intake-docs" && !event.requestContext && !event.version) {
+    const { importDocuments } = await import("../intakeDb");
+    return importDocuments(Array.isArray(event.docs) ? event.docs : []);
+  }
   // A booking from the mypcpdr.com wizard, handed over by the clinic-booking-mailer Lambda (IAM-only).
   if (event && event.__job === "website-booking" && !event.requestContext && !event.version) {
     const { ingestBooking } = await import("../bookingsDb");

@@ -16,10 +16,13 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <script>
       // Apply the saved theme before first paint to avoid a flash of the wrong
-      // theme. With no saved choice, follow the OS preference.
+      // theme. With no saved choice, follow the OS preference. Patient forms
+      // (/f/…) and printouts are always light.
       try {
         var t = localStorage.getItem("theme");
-        if (t === "dark" || (!t && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+        var p = location.pathname;
+        var light = p.indexOf("/f/") === 0 || /\/print$/.test(p);
+        if (!light && (t === "dark" || (!t && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches))) {
           document.documentElement.classList.add("dark");
         }
       } catch (e) {}

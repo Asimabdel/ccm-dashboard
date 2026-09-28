@@ -1,7 +1,7 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
-import { Route, Switch } from "wouter";
+import { Route, Switch, useLocation } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
@@ -42,6 +42,9 @@ import TeamProgressPage from "./pages/TeamProgressPage";
 import FaxInboxPage from "./pages/FaxInboxPage";
 import ChartPage from "./pages/ChartPage";
 import WebsiteBookingsPage from "./pages/WebsiteBookingsPage";
+import IntakeFormsPage from "./pages/IntakeFormsPage";
+import IntakePrintPage from "./pages/IntakePrintPage";
+import PatientFormsPage from "./pages/PatientFormsPage";
 import { RingCentralPhone } from "./components/phone/RingCentralPhone";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
 
@@ -86,6 +89,10 @@ function Router() {
       <Route path="/faxes" component={FaxInboxPage} />
       <Route path="/chart/:key" component={ChartPage} />
       <Route path="/bookings" component={WebsiteBookingsPage} />
+      <Route path="/intake-forms/:id/print" component={IntakePrintPage} />
+      <Route path="/intake-forms" component={IntakeFormsPage} />
+      {/* Public: the page patients open from their forms link (no MyPCP login). */}
+      <Route path="/f/:token" component={PatientFormsPage} />
       <Route path="/billing" component={BillingPage} />
       <Route path="/follow-ups" component={FollowUpsPage} />
       <Route path="/reports" component={ReportsPage} />
@@ -96,14 +103,17 @@ function Router() {
 }
 
 function App() {
+  const [loc] = useLocation();
+  // Patient forms page and printouts: no staff phone, always light.
+  const patientOrPrint = loc.startsWith("/f/") || loc.endsWith("/print");
   return (
     <ErrorBoundary>
-      <ThemeProvider defaultTheme="light" switchable>
+      <ThemeProvider defaultTheme="light" switchable forceLight={patientOrPrint}>
         <TooltipProvider>
           <Toaster />
           <Router />
           {/* Mounted once for the whole app so a call keeps going while you change pages. */}
-          <RingCentralPhone />
+          {!patientOrPrint && <RingCentralPhone />}
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>

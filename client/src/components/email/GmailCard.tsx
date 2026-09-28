@@ -78,7 +78,7 @@ export function GmailCard() {
       <div className="grid lg:grid-cols-5 gap-6 text-sm">
         <div className="lg:col-span-3 space-y-4">
           <p className="text-slate-600 dark:text-slate-300">
-            Reads new emails in the practice inbox (read-only: MyPCP can't send, delete or change anything). Each email from a patient becomes a <b>Patient email</b> task for their care coordinator, or the front desk at their clinic, with a preview and an Open in Gmail link. Emails MyPCP can't match wait on the <Link href="/patient-emails" className="font-semibold underline">Patient emails</Link> page until someone picks the patient.
+            Reads new emails in the practice inbox (MyPCP never deletes or changes emails; if allowed, it sends only the patient-forms emails staff start). Each email from a patient becomes a <b>Patient email</b> task for their care coordinator, or the front desk at their clinic, with a preview and an Open in Gmail link. Emails MyPCP can't match wait on the <Link href="/patient-emails" className="font-semibold underline">Patient emails</Link> page until someone picks the patient.
           </p>
 
           {s?.connected && st && (
@@ -117,6 +117,15 @@ export function GmailCard() {
                 {syncNow.isPending ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Check now
               </Btn>
               <Btn variant="ghost" disabled={disconnect.isPending} onClick={() => { if (confirm("Disconnect the practice mailbox? New emails stop coming in until you connect it again.")) disconnect.mutate(); }}>Disconnect</Btn>
+            </div>
+          )}
+
+          {s?.connected && !s.canSend && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200 space-y-2">
+              <p><b>Emailing patient forms.</b> To email patients their forms link from {s.mailbox ?? "this mailbox"}, reconnect it once and allow <b>Send email on your behalf</b> when Google asks. Nothing already loaded is lost, and MyPCP only sends the forms emails you start.</p>
+              <Btn size="sm" disabled={connect.isPending} onClick={() => connect.mutate({ origin: window.location.origin })}>
+                {connect.isPending && <Loader2 size={14} className="animate-spin" />} Reconnect to allow sending
+              </Btn>
             </div>
           )}
 

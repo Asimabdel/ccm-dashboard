@@ -43,3 +43,14 @@ export function takeDialContext(phone: string | null): DialContext | null {
   pending.delete(phone);
   return c && Date.now() - c.at < 4 * 3600_000 ? c : null;
 }
+
+/** Open a new text message in the built-in phone, filled in and ready to send (staff press Send).
+ *  Returns false when the phone isn't loaded (copy the message instead). */
+export function rcText(rawPhone: string, text: string): boolean {
+  const phone = normalizePhone(rawPhone);
+  const frame = document.querySelector<HTMLIFrameElement>("#rc-widget-adapter-frame");
+  if (!phone || !state.loaded || !frame?.contentWindow) return false;
+  (window as unknown as { RCAdapter?: { setMinimized?: (v: boolean) => void } }).RCAdapter?.setMinimized?.(false);
+  frame.contentWindow.postMessage({ type: "rc-adapter-new-sms", phoneNumber: `+1${phone}`, text }, RC_ORIGIN);
+  return true;
+}

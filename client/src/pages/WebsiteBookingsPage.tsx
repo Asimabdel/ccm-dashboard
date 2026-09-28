@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
-import { Ban, CalendarCheck, CalendarPlus, History, Loader2, PhoneMissed, ShieldAlert, XCircle } from "lucide-react";
+import { Ban, CalendarCheck, CalendarPlus, ClipboardSignature, History, Loader2, PhoneMissed, ShieldAlert, XCircle } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { useWorkspace } from "@/components/workspace/useWorkspace";
 import { Btn, EmptyState, ErrorNote, Loading, PageHeader, Panel, inputCls } from "@/components/workspace/ui";
 import { PhoneLink } from "@/components/phone/PhoneLink";
 import { chartHref } from "@/components/chart/ChartLookup";
+import { SendFormsDialog, type SendPreset } from "@/components/intake/SendFormsDialog";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { BOOKING_STATUS_LABELS, type BookingStatus } from "@shared/booking";
@@ -45,6 +46,7 @@ export default function WebsiteBookingsPage() {
   const stats = trpc.workspace.bookings.stats.useQuery(undefined, { enabled, refetchInterval: 60_000 });
   const utils = trpc.useUtils();
   const [notes, setNotes] = useState<Record<number, string>>({});
+  const [formsFor, setFormsFor] = useState<SendPreset | null>(null);
   const refresh = () => { void utils.workspace.bookings.invalidate(); void utils.workspace.tasks.invalidate(); void utils.workspace.metrics.invalidate(); };
   const set = trpc.workspace.bookings.setStatus.useMutation({
     onSuccess: (_r, v) => { refresh(); setNotes((n) => ({ ...n, [v.id]: "" })); toast.success(BOOKING_STATUS_LABELS[v.status]); },
@@ -129,7 +131,15 @@ export default function WebsiteBookingsPage() {
                       {b.note && <p className="mt-1 whitespace-pre-line text-xs text-slate-500">{b.note}</p>}
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-2">
-                      <PhoneLink phone={b.phone} context={{ patientId: b.patientId, subjectKey: b.subjectKey, name: b.name, source: "website_booking" }} className="text-sm font-semibold text-brand hover:underline" />
+                      <div className="flex items-center gap-2">
+                        {ws.caps?.intakeForms && b.status !== "spam" && b.status !== "earlier" && (
+                          <Btn size="sm" variant="ghost" title="Text or email this person their intake forms"
+                            onClick={() => setFormsFor({ subjectKey: b.subjectKey, name: b.patientName ?? b.name, phone: b.phone, language: b.spanish ? "es" : "en", clinicId: b.clinicId, bookingRequestId: b.id })}>
+                            <ClipboardSignature size={13} /> Send forms
+                          </Btn>
+                        )}
+                        <PhoneLink phone={b.phone} context={{ patientId: b.patientId, subjectKey: b.subjectKey, name: b.name, source: "website_booking" }} className="text-sm font-semibold text-brand hover:underline" />
+                      </div>
                       {open && (
                         <div className="flex flex-wrap justify-end gap-1.5">
                           <input className={cn(inputCls, "h-8 w-44 text-xs")} placeholder="Note (optional)" value={notes[b.id] ?? ""} onChange={(e) => setNotes({ ...notes, [b.id]: e.target.value })} maxLength={500} />
@@ -147,6 +157,7 @@ export default function WebsiteBookingsPage() {
           </ul>
         </Panel>
       )}
+      <SendFormsDialog open={!!formsFor} preset={formsFor} onClose={() => setFormsFor(null)} />
     </CCMDashboardLayout>
   );
 }

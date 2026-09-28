@@ -25,6 +25,8 @@ import * as pf from "../pfFhir";
 import * as pfSync from "../pfSync";
 import * as chart from "../chartDb";
 import * as bookings from "../bookingsDb";
+import * as intake from "../intakeDb";
+import { INTAKE_LANGS } from "../../shared/intake";
 import { FAX_DOC_TYPE_KEYS } from "../../shared/fax";
 import { TEST_KEYS, type TestKey } from "../../shared/testing";
 import { CALL_OUTCOME_LIST } from "../../shared/phone";
@@ -48,6 +50,12 @@ async function actorFor(ctx: Ctx, cap: WorkspaceCap): Promise<ws.WorkspaceActor>
 }
 
 /** Map data-layer errors to tRPC errors with user-safe messages. */
+/** The page the request came from (for building patient links on the same site); checked against an allowlist later. */
+function reqOrigin(ctx: Ctx): string | null {
+  const o = ctx.req?.headers?.origin;
+  return typeof o === "string" ? o : null;
+}
+
 async function run<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
@@ -397,6 +405,99 @@ export const workspaceRouter = router({
       if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can start an import." });
       return run(() => pfSync.requestImport(actor, input));
     }),
+  }),
+
+  // Patient forms (intake + consents, replacing BoldSign): send a private link, see what came back.
+  intake: router({
+    status: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "intakeForms");
+      const { practiceMailSender } = await import("../gmailSync");
+      return practiceMailSender();
+    }),
+    choices: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "intakeForms");
+      return intake.formChoices();
+    }),
+    search: protectedProcedure.input(z.object({ q: z.string().trim().min(2).max(100) })).query(async ({ ctx, input }) => {
+      await actorFor(ctx, "intakeForms");
+      return ws.searchSubjects(input.q);
+    }),
+    contact: protectedProcedure.input(z.object({ subjectKey: z.string().min(3).max(120) })).query(async ({ ctx, input }) => {
+      await actorFor(ctx, "intakeForms");
+      return intake.intakeContact(input.subjectKey);
+    }),
+    create: protectedProcedure
+      .input(z.object({
+        subjectKey: z.string().max(120).nullish(),
+        name: z.string().trim().min(2).max(255),
+        dob: dateStr,
+        phone: z.string().max(30).nullish(),
+        email: z.string().max(320).nullish(),
+        language: z.enum(INTAKE_LANGS),
+        forms: z.array(z.string().max(40)).min(1).max(12),
+        clinicId,
+        bookingRequestId: z.number().int().positive().nullish(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "intakeForms");
+        return run(() => intake.createPacket(actor, input, reqOrigin(ctx)));
+      }),
+    sendEmail: protectedProcedure.input(z.object({ id: z.number().int().positive(), to: z.string().max(320).nullish() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "intakeForms");
+      return run(() => intake.sendByEmail(actor, input.id, reqOrigin(ctx), input.to));
+    }),
+    textMessage: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "intakeForms");
+      return run(() => intake.textMessage(actor, input.id, reqOrigin(ctx)));
+    }),
+    copyLink: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "intakeForms");
+      return run(() => intake.copyLink(actor, input.id, reqOrigin(ctx)));
+    }),
+    list: protectedProcedure.input(z.object({ filter: z.enum(["waiting", "to_file", "filed", "all"]).default("waiting") })).query(async ({ ctx, input }) => {
+      await actorFor(ctx, "intakeForms");
+      return intake.listPackets(input.filter);
+    }),
+    stats: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "intakeForms");
+      return intake.packetStats();
+    }),
+    detail: protectedProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "intakeForms");
+      return run(() => intake.packetDetail(actor, input.id));
+    }),
+    file: protectedProcedure.input(z.object({ id: z.number().int().positive(), fileId: z.number().int().positive() })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "intakeForms");
+      return run(() => intake.packetFile(actor, input.id, input.fileId));
+    }),
+    markFiled: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "intakeForms");
+      return run(() => intake.markFiled(actor, input.id));
+    }),
+    cancel: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "intakeForms");
+      return run(() => intake.cancelPacket(actor, input.id));
+    }),
+    extend: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "intakeForms");
+      return run(() => intake.extendPacket(actor, input.id));
+    }),
+    documents: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "intakeForms");
+      return intake.listDocuments(ctx.user.role === "admin");
+    }),
+    saveDocument: protectedProcedure
+      .input(z.object({
+        id: z.number().int().positive().nullish(),
+        title: z.record(z.string(), z.string().max(200).nullish()),
+        body: z.record(z.string(), z.string().max(60_000).nullish()),
+        active: z.boolean(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "intakeForms");
+        if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can change the forms." });
+        return run(() => intake.saveDocument(actor, input));
+      }),
   }),
 
   // Website bookings (mypcpdr.com booking wizard): call to confirm, record how it went.

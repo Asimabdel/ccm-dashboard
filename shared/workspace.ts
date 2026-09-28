@@ -37,6 +37,8 @@ export const WORKSPACE_CAPS = {
   patientFull: ["admin", "staff", "provider", "front_desk"],
   /** The whole Practice Fusion chart copy (problems, meds, labs, notes…). */
   chartFull: ["admin", "staff", "provider"],
+  /** Send patient forms (intake / consents) and see what patients filled in and signed. */
+  intakeForms: ["admin", "staff", "provider", "front_desk"],
   /** The limited chart: contact, insurance, visits and allergies (minimum necessary for the front desk). */
   chartBasic: ["admin", "staff", "provider", "front_desk"],
 } as const satisfies Record<string, readonly WorkspaceRole[]>;

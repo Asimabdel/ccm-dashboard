@@ -9,7 +9,8 @@
 // (server/faxInbox.ts). A second, fax-only mailbox can be connected with the same Google app.
 // "Load the last 30 days" pulls in earlier inbox emails a chunk per run; those are matched
 // and shown on the Patient emails page but never create tasks (they were handled in Gmail).
-// Google is reached through the allowlist relay (server/egress.ts). Scope: gmail.readonly.
+// Google is reached through the allowlist relay (server/egress.ts). Scope: gmail.readonly, plus
+// gmail.send on the practice mailbox (patient-form invitations go out from it).
 import { SignJWT, jwtVerify } from "jose";
 import { and, asc, desc, eq, gte, inArray } from "drizzle-orm";
 import { getDb } from "./db";
@@ -34,6 +35,7 @@ const KEYS: Record<MailSlot, { config: string; state: string }> = {
 const CONFIG_KEY = KEYS.practice.config;
 const STATE_KEY = KEYS.practice.state;
 const SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
+const SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
 const GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me";
 const CALLBACK_PATH = "/api/integrations/google/callback";
 const ALLOWED_ORIGINS = ["https://mypcpcare.com", "https://www.mypcpcare.com", "http://localhost:3001", "http://localhost:3000"];
@@ -55,6 +57,8 @@ interface GmailConfig {
   mailbox: string | null;
   connectedByUserId: number | null;
   historyId: string | null;
+  /** The practice mailbox was connected with permission to send (patient-form invitations). */
+  canSend?: boolean;
 }
 interface GmailState { lastRunAt: string | null; lastSuccessAt: string | null; lastError: string | null; processed: number; assigned: number; needsPatient: number }
 const EMPTY_STATE: GmailState = { lastRunAt: null, lastSuccessAt: null, lastError: null, processed: 0, assigned: 0, needsPatient: 0 };
@@ -100,6 +104,7 @@ export async function getGmailStatus() {
     connected: !!c.refreshTokenEnc,
     mailbox: c.mailbox,
     enabled: c.enabled,
+    canSend: !!c.refreshTokenEnc && !!c.canSend,
     state,
     hasWaiting: !!waiting,
     hasContacts: !!contacts,
@@ -130,7 +135,7 @@ export async function gmailConnectUrl(actor: WorkspaceActor, origin: string, slo
   const redirectUri = `${origin}${CALLBACK_PATH}`;
   const state = await new SignJWT({ uid: actor.id, redirectUri, purpose: "gmail-connect", slot })
     .setProtectedHeader({ alg: "HS256" }).setExpirationTime("15m").sign(new TextEncoder().encode(ENV.cookieSecret));
-  const params = new URLSearchParams({ client_id: c.clientId, redirect_uri: redirectUri, response_type: "code", scope: SCOPE, access_type: "offline", prompt: "consent", include_granted_scopes: "false", state });
+  const params = new URLSearchParams({ client_id: c.clientId, redirect_uri: redirectUri, response_type: "code", scope: slot === "practice" ? `${SCOPE} ${SEND_SCOPE}` : SCOPE, access_type: "offline", prompt: "consent", include_granted_scopes: "false", state });
   return { url: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`, redirectUri };
 }
 
@@ -164,9 +169,14 @@ export async function handleGmailCallback(query: Record<string, unknown>): Promi
     tokenCache.fax = null;
     return back("That's the practice mailbox. Faxes that arrive there are picked up automatically; connect a separate fax mailbox only if faxes go somewhere else.");
   }
-  await saveConfig(slot, { ...c, refreshTokenEnc: sealSecret(tok.refresh_token), mailbox: profile.emailAddress.toLowerCase(), connectedByUserId: admin.id, historyId: profile.historyId, enabled: true }, admin.id);
-  await writeSetting(KEYS[slot].state, { ...EMPTY_STATE, lastSuccessAt: new Date().toISOString() }, admin.id);
-  await audit({ id: admin.id, name: admin.name, role: "admin", clinicIds: null }, "manage_access", { entityType: "integration", description: `Gmail ${slot === "fax" ? "fax mailbox" : "practice mailbox"} connected (read-only): ${profile.emailAddress}` });
+  const mailbox = profile.emailAddress.toLowerCase();
+  const canSend = slot === "practice" && String(tok.scope ?? "").includes("gmail.send");
+  // Reconnecting the same mailbox (e.g. to allow sending) keeps its place, so nothing that arrived
+  // since the last sync is skipped.
+  const sameMailbox = c.mailbox === mailbox && !!c.historyId;
+  await saveConfig(slot, { ...c, refreshTokenEnc: sealSecret(tok.refresh_token), mailbox, connectedByUserId: admin.id, historyId: sameMailbox ? c.historyId : profile.historyId, enabled: true, canSend }, admin.id);
+  if (!sameMailbox) await writeSetting(KEYS[slot].state, { ...EMPTY_STATE, lastSuccessAt: new Date().toISOString() }, admin.id);
+  await audit({ id: admin.id, name: admin.name, role: "admin", clinicIds: null }, "manage_access", { entityType: "integration", description: `Gmail ${slot === "fax" ? "fax mailbox" : "practice mailbox"} connected (${canSend ? "read + send" : "read-only"}): ${profile.emailAddress}` });
   return back(slot === "fax" ? "fax-connected" : "connected");
 }
 
@@ -252,6 +262,56 @@ function attachmentsOf(part: GmailPart | undefined): FaxAttachment[] {
 export async function gmailAttachment(slot: MailSlot, messageId: string, attachmentId: string): Promise<Buffer> {
   const r = await gmailGet<{ data?: string }>(`/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`, slot);
   return Buffer.from((r.data ?? "").replace(/-/g, "+").replace(/_/g, "/"), "base64");
+}
+
+/** Can MyPCP send email from the practice mailbox (connected with the send permission)? */
+export async function practiceMailSender(): Promise<{ canSend: boolean; mailbox: string | null }> {
+  const c = await config("practice");
+  return { canSend: !!c.refreshTokenEnc && !!c.canSend, mailbox: c.mailbox };
+}
+
+/** Send one email from the practice mailbox (text + HTML). It also lands in the mailbox's Sent folder. */
+export async function sendPracticeEmail(msg: { to: string; subject: string; text: string; html: string; fromName: string }) {
+  const c = await config("practice");
+  if (!c.refreshTokenEnc || !c.mailbox) throw new WorkspaceError("The practice mailbox isn't connected.");
+  if (!c.canSend) throw new WorkspaceError("MyPCP can't send email from the practice mailbox yet. An admin needs to reconnect it (Integrations → Practice mailbox → Reconnect to allow sending).");
+  const to = msg.to.trim();
+  if (!/^[^\s@<>",]+@[^\s@<>",]+\.[^\s@<>",]+$/.test(to)) throw new WorkspaceError("That email address doesn't look right.");
+  const enc = (s: string) => `=?UTF-8?B?${Buffer.from(s, "utf8").toString("base64")}?=`;
+  const b64lines = (s: string) => Buffer.from(s, "utf8").toString("base64").replace(/.{76}/g, "/** Search the practice mailbox (Gmail query syntax); one page of message ids. */\r\n");
+  const boundary = `mypcp-${Date.now().toString(36)}`;
+  const mime = [
+    `From: ${enc(msg.fromName)} <${c.mailbox}>`,
+    `To: <${to}>`,
+    `Subject: ${enc(msg.subject)}`,
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    b64lines(msg.text),
+    `--${boundary}`,
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    b64lines(msg.html),
+    `--${boundary}--`,
+    "",
+  ].join("\r\n");
+  const raw = Buffer.from(mime, "utf8").toString("base64url");
+  const res = await relayFetch(`${GMAIL}/messages/send`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await accessToken("practice")}`, "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ raw }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { id?: string; error?: { message?: string } };
+  if (!res.ok || !body.id) {
+    if (res.status === 403) throw new WorkspaceError("Google refused to send (the mailbox may need to be reconnected to allow sending).");
+    throw new WorkspaceError(`Sending the email failed: ${body.error?.message ?? res.statusText}`);
+  }
+  return { id: body.id };
 }
 
 /** Search the practice mailbox (Gmail query syntax); one page of message ids. */

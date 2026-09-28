@@ -78,6 +78,7 @@ import {
 import { ccmNotesRouter } from "./routers/ccmNotes";
 import { workforceRouter } from "./routers/workforce";
 import { workspaceRouter } from "./routers/workspace";
+import { patientFormsRouter } from "./routers/patientForms";
 import { seedDatabase, isSeeded, currentMonth } from "./seed";
 import { ensureMonthlyTask, ensureMonthlyTasksForPatient, deletePatient, getUpcomingAppointments } from "./db";
 import {
@@ -183,6 +184,8 @@ export const appRouter = router({
   ccmNotesAI: ccmNotesRouter,
   workforce: workforceRouter,
   workspace: workspaceRouter,
+  // Public: the patient's side of patient forms (link + date of birth, no login).
+  patientForms: patientFormsRouter,
 
   auth: router({
     me: publicProcedure.query((opts) => sanitizeUser(opts.ctx.user)),

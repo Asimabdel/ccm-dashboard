@@ -29,6 +29,7 @@ import { orderMetrics, progressOf, usualPerDay, weekdaysLeftInMonth } from "../s
 import { isFaxEmail, matchFaxPatient, parseFaxMeta, parseFaxReading } from "../shared/fax";
 import { chartLine, patientInfo, patientOf, sectionType } from "../shared/fhir";
 import { clinicForLocation, parseBookingEmail, parsePreferred } from "../shared/booking";
+import { MEDICAL_INTAKE, agreementIn, answerText, cleanAnswers, dobFromParts, inviteText, langFromPreferred, missingInSection, stableStringify, textBlocks } from "../shared/intake";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
 
@@ -636,5 +637,69 @@ describe("website bookings", () => {
   it("front desk can work bookings; MAs can't; loading old ones is admin-only", async () => {
     await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.bookings.list({ filter: "open" })).rejects.toThrow(/access/);
     await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.bookings.importEarlier({})).rejects.toThrow(/admin/);
+  });
+});
+
+describe("patient forms (intake)", () => {
+  const about = MEDICAL_INTAKE.sections.find((s) => s.id === "about")!;
+  const meds = MEDICAL_INTAKE.sections.find((s) => s.id === "medications")!;
+  it("asks only the questions that apply, and checks phone / ZIP / email", () => {
+    expect(missingInSection(about, {})).toEqual(["fullName", "phone", "street", "city", "zip"]);
+    const ok = { fullName: "Pat Example", phone: "(281) 555-0101", street: "1 Main St", city: "Katy", zip: "77494" };
+    expect(missingInSection(about, ok)).toEqual([]);
+    expect(missingInSection(about, { ...ok, phone: "555-0101", zip: "7749", email: "pat@" })).toEqual(["phone", "email", "zip"]);
+    // "I'll bring my bottles" needs no list; "I'll list them" needs at least one medicine.
+    expect(missingInSection(meds, { medsMode: "bring" })).toEqual([]);
+    expect(missingInSection(meds, { medsMode: "list", meds: [{ name: " ", dose: "" }] })).toEqual(["meds"]);
+    expect(missingInSection(meds, { medsMode: "list", meds: [{ name: "Metformin", dose: "" }] })).toEqual([]);
+  });
+  it("keeps only known answers from the public page", () => {
+    const a = cleanAnswers(MEDICAL_INTAKE, { fullName: "Pat", hacker: "x", sex: "robot", conditions: ["diabetes", "made-up"], medsMode: "list", meds: [{ name: "A".repeat(500), evil: 1 }], cardFront: "photo:9" });
+    expect(a).toEqual({ fullName: "Pat", conditions: ["diabetes"], medsMode: "list", meds: [{ name: "A".repeat(200), dose: "" }] });
+  });
+  it("reads dates of birth typed as month / day / year", () => {
+    expect(dobFromParts("3", "5", "1950")).toBe("1950-03-05");
+    expect(dobFromParts("02", "30", "1950")).toBeNull();
+    expect(dobFromParts("13", "01", "1950")).toBeNull();
+    expect(dobFromParts("1", "1", "50")).toBeNull();
+  });
+  it("turns pasted wording into headings, bullets and paragraphs; falls back to English", () => {
+    expect(textBlocks("# Consent\n\nI agree to\ntreatment.\n\n- one\n- two")).toEqual([
+      { kind: "heading", text: "Consent" }, { kind: "para", text: "I agree to\ntreatment." }, { kind: "bullets", text: "", items: ["one", "two"] },
+    ]);
+    const doc = { title: { en: "Consent", ar: "موافقة" }, body: { en: "English text", ar: "نص" } };
+    expect(agreementIn(doc, "ar")).toMatchObject({ title: "موافقة", lang: "ar" });
+    expect(agreementIn(doc, "es")).toMatchObject({ title: "Consent", body: "English text", lang: "en" });
+  });
+  it("hashes the same content the same way (key order doesn't matter)", () => {
+    expect(stableStringify({ b: 1, a: [2, { d: 3, c: null }] })).toBe(stableStringify({ a: [2, { c: null, d: 3 }], b: 1 }));
+  });
+  it("invitations carry only the link and the clinic phone (no health details)", () => {
+    const msg = inviteText("es", "https://mypcpcare.com/f/abc", "2815550101");
+    expect(msg).toContain("https://mypcpcare.com/f/abc");
+    expect(msg).toContain("(281) 555-0101");
+    expect(msg.toLowerCase()).not.toMatch(/weight|diabet|consent|medic/);
+    expect(langFromPreferred("Spanish")).toBe("es");
+    expect(langFromPreferred("Arabic")).toBe("ar");
+    expect(langFromPreferred(null)).toBe("en");
+  });
+  it("shows answers in words", () => {
+    const f = MEDICAL_INTAKE.sections.flatMap((s) => s.fields);
+    expect(answerText(f.find((x) => x.id === "conditions")!, ["diabetes", "hypertension"])).toBe("Diabetes, High blood pressure");
+    expect(answerText(f.find((x) => x.id === "conditions")!, ["diabetes"], "es")).toBe("Diabetes");
+    expect(answerText(f.find((x) => x.id === "meds")!, [{ name: "Metformin", dose: "500 mg twice a day" }, { name: "", dose: "" }])).toBe("Metformin — 500 mg twice a day");
+  });
+  it("staff roles can send forms; MAs and billing can't; only admins edit the library", async () => {
+    expect(can("front_desk", "intakeForms")).toBe(true);
+    expect(can("provider", "intakeForms")).toBe(true);
+    expect(can("medical_assistant", "intakeForms")).toBe(false);
+    await expect(appRouter.createCaller(ctxFor("billing")).workspace.intake.list({ filter: "waiting" })).rejects.toThrow(/access/);
+    await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.intake.saveDocument({ title: { en: "X" }, body: { en: "Y" }, active: true })).rejects.toThrow(/admin/);
+  });
+  it("a made-up link reveals nothing and never reaches the database", async () => {
+    const pub = appRouter.createCaller({ user: null, req: { headers: {} } as TrpcContext["req"], res: {} as TrpcContext["res"] });
+    expect(await pub.patientForms.open({ token: "not a real link token!!" })).toMatchObject({ state: "not_found", formCount: 0 });
+    expect(await pub.patientForms.verify({ token: "not a real link token!!", month: "01", day: "01", year: "1950" })).toMatchObject({ ok: false, state: "not_found" });
+    await expect(pub.patientForms.load({ session: "x".repeat(40) })).rejects.toThrow(/session/);
   });
 });
