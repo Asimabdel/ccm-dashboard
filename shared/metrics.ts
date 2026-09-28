@@ -48,6 +48,7 @@ export type DailyGoals = Partial<Record<string, Partial<Record<MetricKey, number
 export const ROLE_GOAL_KEYS: Record<string, MetricKey[]> = {
   staff: ["care_calls", "calls", "booked", "tasks_done"],
   front_desk: ["calls", "booked", "checkins", "tasks_done"],
+  office_manager: ["calls", "booked", "checkins", "tasks_done"],
   medical_assistant: ["roomed", "tasks_done"],
   provider: ["tasks_done"],
   billing: ["tasks_done"],
@@ -55,6 +56,7 @@ export const ROLE_GOAL_KEYS: Record<string, MetricKey[]> = {
 };
 
 export const ROLE_METRIC_LABELS: Record<string, string> = {
+  office_manager: "Office managers",
   staff: "Care coordinators",
   front_desk: "Front desk",
   medical_assistant: "Medical assistants",
@@ -99,6 +101,7 @@ export function fmtMinutes(mins: number): string {
 export const ROLE_PRIMARY: Record<string, MetricKey[]> = {
   staff: ["care_calls", "ccm_month", "calls"],
   front_desk: ["calls", "booked", "checkins"],
+  office_manager: ["calls", "booked", "checkins"],
   medical_assistant: ["roomed", "tasks_done", "hours"],
   provider: ["seen", "waiting", "tasks_left"],
   billing: ["ready_to_bill", "billed_month", "tasks_left"],

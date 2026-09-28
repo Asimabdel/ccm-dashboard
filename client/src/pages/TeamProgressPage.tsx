@@ -24,7 +24,8 @@ export default function TeamProgressPage() {
   const { user } = useAuth({ redirectOnUnauthenticated: true });
   const today = localDateStr();
   const [date, setDate] = useState(today);
-  const q = trpc.workspace.metrics.team.useQuery({ date }, { enabled: user?.role === "admin", refetchInterval: date === today ? 60_000 : false });
+  const allowed = user?.role === "admin" || user?.role === "office_manager";
+  const q = trpc.workspace.metrics.team.useQuery({ date }, { enabled: allowed, refetchInterval: date === today ? 60_000 : false });
   const [open, setOpen] = useState<number | null>(null);
   const data = q.data;
 
@@ -42,7 +43,8 @@ export default function TeamProgressPage() {
           </div>
         }
       />
-      {user && user.role !== "admin" && <ErrorNote message="Only an admin can see the team's numbers." />}
+      {user && !allowed && <ErrorNote message="Only an admin or office manager can see the team's numbers." />}
+      {q.error && <ErrorNote message={q.error.message} />}
       {q.isLoading && <Loading />}
       {q.error && <ErrorNote message={q.error.message} />}
       {data && (
@@ -53,12 +55,14 @@ export default function TeamProgressPage() {
               : <>RingCentral's call log isn't connected, so only calls placed from MyPCP are counted (Admin → Integrations).</>}
           </p>
 
+          {data.totals && (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <Tile icon={PhoneCall} label="Calls" value={data.totals.calls} sub={`${data.totals.made} made · ${data.totals.answered} answered`} />
             <Tile icon={PhoneMissed} label="Missed" value={data.totals.missed} sub={data.ringcentral.active ? "Rang and nobody picked up" : "Needs RingCentral"} />
             <Tile icon={Clock} label="Time on the phone" value={fmtMinutes(data.totals.talkMin)} sub="All calls" />
             <Tile icon={CalendarCheck} label="Appointments booked" value={data.totals.booked} sub="From call outcomes" />
           </div>
+          )}
 
           {ROLE_ORDER.map((role) => {
             const people = data.people.filter((p) => p.role === role);

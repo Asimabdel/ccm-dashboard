@@ -30,14 +30,16 @@ export default function WorkforcePage() {
   });
 
   if (loading || !user) return <div className="min-h-screen flex items-center justify-center bg-white"><Loader2 className="animate-spin text-slate-400" /></div>;
-  if (user.role !== "admin") {
-    return <CCMDashboardLayout title="Workforce"><p className="text-slate-400 font-light">This area is for practice managers.</p></CCMDashboardLayout>;
+  const office = user.role === "office_manager";
+  if (user.role !== "admin" && !office) {
+    return <CCMDashboardLayout title="Workforce"><p className="text-slate-400 font-light">This area is for practice and office managers.</p></CCMDashboardLayout>;
   }
+  const tabs = office ? TABS.filter((t) => t.key !== "roles") : TABS;
 
   return (
     <CCMDashboardLayout title="Workforce">
       <div className="flex flex-wrap gap-1.5 mb-6 p-1.5 bg-white border border-slate-200 rounded-2xl w-fit">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition ${tab === t.key ? "bg-gradient-to-r from-[hsl(17_66%_52%)] to-[hsl(20_72%_46%)] text-white shadow-glow-primary" : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"}`}>
             <t.icon size={15} /> {t.label}
@@ -49,7 +51,7 @@ export default function WorkforcePage() {
       {tab === "timesheets" && <TimesheetsTab />}
       {tab === "timeoff" && <TimeOffTab />}
       {tab === "performance" && <PerformanceTab />}
-      {tab === "roles" && <RolesTab />}
+      {tab === "roles" && !office && <RolesTab />}
       {tab === "people" && <PeopleTab />}
     </CCMDashboardLayout>
   );

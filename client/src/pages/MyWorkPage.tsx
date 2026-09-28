@@ -70,7 +70,7 @@ export default function MyWorkPage() {
   if (!user) return null;
   const today = localDateStr();
   const c = counts.data;
-  const views: typeof VIEWS = user.role === "admin" ? [...VIEWS, { key: "all", label: "All tasks", icon: Layers }] : VIEWS;
+  const views: typeof VIEWS = user.role === "admin" || user.role === "office_manager" ? [...VIEWS, { key: "all", label: user.role === "admin" ? "All tasks" : "All office tasks", icon: Layers }] : VIEWS;
   const filtersActive = !!(status || priority || category || due || params.get("q"));
 
   return (

@@ -418,7 +418,7 @@ export async function getProviderById(providerId: number) {
 }
 
 // Staff queries
-export async function getStaffByRole(role: "admin" | "staff" | "provider" | "billing" | "front_desk" | "medical_assistant" | "user") {
+export async function getStaffByRole(role: "admin" | "office_manager" | "staff" | "provider" | "billing" | "front_desk" | "medical_assistant" | "user") {
   const db = await getDb();
   if (!db) return [];
 
@@ -1355,7 +1355,7 @@ export async function getFirstUserByRole(role: string) {
 }
 
 /** Update a user's role (admin-managed access control). */
-export async function setUserRole(userId: number, role: "admin" | "staff" | "provider" | "billing" | "front_desk" | "medical_assistant" | "user") {
+export async function setUserRole(userId: number, role: "admin" | "office_manager" | "staff" | "provider" | "billing" | "front_desk" | "medical_assistant" | "user") {
   const db = await getDb();
   if (!db) return;
   await db.update(users).set({ role }).where(eq(users.id, userId));
@@ -1404,7 +1404,7 @@ const LOCAL_PREFIX = "local:";
 export async function createMember(input: {
   email: string;
   name?: string | null;
-  role: "admin" | "staff" | "provider" | "billing" | "front_desk" | "medical_assistant" | "user";
+  role: "admin" | "office_manager" | "staff" | "provider" | "billing" | "front_desk" | "medical_assistant" | "user";
   clinicLocation?: string | null;
   passwordHash?: string | null;
 }): Promise<{ created: boolean; pending: boolean }> {

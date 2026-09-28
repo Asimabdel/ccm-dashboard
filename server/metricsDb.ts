@@ -22,7 +22,7 @@ const GOALS_KEY = "daily_goals";
 const RC_STATE_KEY = "ringcentral_sync_state";
 const CCM_DONE = ["completed", "ready_for_billing", "billed"] as const;
 const PHONE_ROLES = ["staff", "front_desk"];
-const TEAM_ROLES = ["admin", "staff", "provider", "billing", "front_desk", "medical_assistant"] as const;
+const TEAM_ROLES = ["admin", "office_manager", "staff", "provider", "billing", "front_desk", "medical_assistant"] as const;
 
 async function db() {
   const d = await getDb();
@@ -109,7 +109,8 @@ async function metricsFor(user: Person, date: string, ctx: MetricsContext): Prom
   const since = clinicLocalToUtc(addDays(date, -30), "00:00");
   const from = addDays(date, -30);
   const month = date.slice(0, 7);
-  const role = user.role;
+  // An office manager works the front desk: same numbers (calls, bookings, check-ins, tasks).
+  const role = user.role === "office_manager" ? "front_desk" : user.role;
   const goals = ctx.goals[role] ?? {};
   const out: Metric[] = [];
   const add = (m: Metric) => out.push({ ...m, goal: m.goal ?? goals[m.key] ?? null });
@@ -278,10 +279,12 @@ export async function myMetrics(user: Person): Promise<MyMetrics> {
 
 // ---- Team progress (admins): everyone's numbers for a day ----
 
-export async function teamMetrics(date: string) {
+/** Everyone's numbers for a day. `onlyUserIds` (an office manager's office) leaves out everyone else and the practice-wide totals. */
+export async function teamMetrics(date: string, onlyUserIds?: Set<number> | null) {
   const d = await db();
   const ctx = await loadContext(date);
   const people = (await d.select({ id: users.id, name: users.name, role: users.role }).from(users).where(inArray(users.role, [...TEAM_ROLES])))
+    .filter((p) => !onlyUserIds || onlyUserIds.has(p.id))
     .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
   const results: { id: number; name: string; role: string; metrics: Metric[] }[] = [];
   for (let i = 0; i < people.length; i += 5) {
@@ -303,6 +306,9 @@ export async function teamMetrics(date: string) {
     if (r.missed) cur.missed++;
     if (madeOrTaken(r)) cur.talkSec += r.durationSec;
     lines.set(k, cur);
+  }
+  if (onlyUserIds) {
+    return { date, totals: null, ringcentral: { active: ctx.rcActive, lastSuccessAt: ctx.rcLastSuccessAt, linkedExtensions: ctx.extToUser.size }, people: results, lines: [] };
   }
   return {
     date,

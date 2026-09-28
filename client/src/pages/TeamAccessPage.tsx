@@ -1,3 +1,4 @@
+import { OFFICE_ASSIGNABLE_ROLES } from "@shared/workspace";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { trpc } from "@/lib/trpc";
@@ -18,12 +19,15 @@ const ROLE_OPTIONS = [
   { value: "staff", label: "CCM Staff / Care Coordinator" },
   { value: "provider", label: "Provider" },
   { value: "billing", label: "Billing" },
+  { value: "office_manager", label: "Office Manager (admin for their home clinic only; no CCM)" },
   { value: "front_desk", label: "Front Desk" },
   { value: "medical_assistant", label: "Medical Assistant (patient flow, tasks & time clock; no CCM data)" },
   { value: "user", label: "No access (pending)" },
 ] as const;
 
 const ASSIGNABLE = ROLE_OPTIONS.filter((r) => r.value !== "user");
+// An office manager gives only these (and manages only their office's staff).
+const OFFICE_ROLES = new Set<string>(OFFICE_ASSIGNABLE_ROLES);
 
 function roleBadge(role: string): string {
   switch (role) {
@@ -33,14 +37,18 @@ function roleBadge(role: string): string {
     case "billing": return "bg-amber-100 text-amber-800";
     case "front_desk": return "bg-cyan-100 text-cyan-700";
     case "medical_assistant": return "bg-rose-100 text-rose-700";
+    case "office_manager": return "bg-indigo-100 text-indigo-700";
     default: return "bg-slate-100 text-slate-500";
   }
 }
 
 export default function TeamAccessPage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
-  const isAdmin = user?.role === "admin";
+  const isOffice = user?.role === "office_manager";
+  const isAdmin = user?.role === "admin" || isOffice;
   const usersQuery = trpc.users.list.useQuery(undefined, { enabled: isAdmin });
+  const giveable = isOffice ? ASSIGNABLE.filter((r) => OFFICE_ROLES.has(r.value)) : ASSIGNABLE;
+  const settable = isOffice ? ROLE_OPTIONS.filter((r) => OFFICE_ROLES.has(r.value) || r.value === "user") : ROLE_OPTIONS;
   const utils = trpc.useUtils();
 
   const [email, setEmail] = useState("");
@@ -90,7 +98,7 @@ export default function TeamAccessPage() {
     return (
       <CCMDashboardLayout title="Team & Access">
         <div className="bg-white rounded-3xl border border-slate-200 p-10 text-center text-slate-500">
-          Team management is restricted to administrators.
+          Team management is for administrators and office managers.
         </div>
       </CCMDashboardLayout>
     );
@@ -106,7 +114,7 @@ export default function TeamAccessPage() {
         <ShieldCheck size={16} className="text-emerald-600 mt-0.5 shrink-0" />
         <span>
           Create a worker login by email and assign a role. Set a temporary password so they can sign in immediately with email + password
-          (they'll be asked to change it on first login). Leave the password blank to instead let them sign in with their own Manus account.
+          (they'll be asked to change it on first login).{isOffice ? " As office manager you manage your office's care coordinators, front desk and MAs; new logins join your office." : " Leave the password blank to instead let them sign in with their own Manus account."}
         </span>
       </div>
 
@@ -142,7 +150,7 @@ export default function TeamAccessPage() {
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1.5">Role</label>
             <select value={newRole} onChange={(e) => setNewRole(e.target.value)} className={`${field} w-full`}>
-              {ASSIGNABLE.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+              {giveable.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
             </select>
           </div>
           <div>
@@ -150,7 +158,7 @@ export default function TeamAccessPage() {
             <input value={clinicLocation} onChange={(e) => setClinicLocation(e.target.value)} placeholder="e.g. Downtown" className={`${field} w-full`} />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1.5">Temporary password <span className="text-slate-400 font-normal">(optional)</span></label>
+            <label className="block text-xs font-semibold text-slate-600 mb-1.5">Temporary password <span className="text-slate-400 font-normal">({isOffice ? "required" : "optional"})</span></label>
             <div className="relative">
               <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Min 8 chars, letter + number" className={`${field} w-full pl-9`} autoComplete="new-password" />
@@ -158,7 +166,7 @@ export default function TeamAccessPage() {
             {password.length > 0 && validatePassword(password) ? (
               <p className="mt-1 text-[11px] text-rose-600">{validatePassword(password)}</p>
             ) : (
-              <p className="mt-1 text-[11px] text-slate-400">Leave blank for Manus-only sign-in, or use 8+ chars with a letter and a number.</p>
+              <p className="mt-1 text-[11px] text-slate-400">{isOffice ? "8+ characters with a letter and a number." : "Leave blank for Manus-only sign-in, or use 8+ chars with a letter and a number."}</p>
             )}
           </div>
           <button type="submit" disabled={createMember.isPending || !email || (password.length > 0 && !!validatePassword(password))}
@@ -223,7 +231,7 @@ export default function TeamAccessPage() {
                         title={isSelf ? "You cannot change your own role" : undefined}
                         onChange={(e) => setRole.mutate({ userId: u.id, role: e.target.value as "admin" | "staff" | "provider" | "billing" | "front_desk" | "medical_assistant" | "user" })}
                       >
-                        {ROLE_OPTIONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+                        {settable.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
                       </select>
                     </td>
                     <td className="px-5 py-3">

@@ -17,7 +17,7 @@ export interface NavGroup {
   items: NavItem[];
 }
 
-export type Role = "admin" | "staff" | "provider" | "billing" | "front_desk" | "medical_assistant";
+export type Role = "admin" | "office_manager" | "staff" | "provider" | "billing" | "front_desk" | "medical_assistant";
 
 const HOME: NavItem = { label: "Home", path: "/home", icon: Home };
 const MY_WORK: NavItem = { label: "My Work", path: "/my-work", icon: ListTodo };
@@ -78,6 +78,19 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
         { label: "Team & Access", path: "/team", icon: UserCog },
         { label: "Integrations", path: "/integrations", icon: PlugZap },
         { label: "Audit Log", path: "/audit", icon: ShieldCheck },
+      ],
+    },
+    ME,
+  ],
+  // Admin for one office (their home clinic): everything here is limited to that office. No CCM pages.
+  office_manager: [
+    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, FLOW, OPPORTUNITIES, INSURANCE, PLAYBOOKS] },
+    {
+      label: "My office",
+      items: [
+        { label: "Workforce", path: "/workforce", icon: BriefcaseBusiness },
+        { label: "Team progress", path: "/team-progress", icon: Gauge },
+        { label: "Staff logins", path: "/team", icon: UserCog },
       ],
     },
     ME,
@@ -152,6 +165,7 @@ export const ROLE_HOME: Record<string, string> = {
   provider: "/refill-requests",
   billing: "/billing",
   front_desk: "/follow-ups",
+  office_manager: "/home",
   medical_assistant: "/home",
   user: "/home",
 };

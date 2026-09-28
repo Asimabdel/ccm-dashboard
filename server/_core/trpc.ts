@@ -31,6 +31,11 @@ export const publicProcedure = t.procedure;
 // (workspace.* checks capabilities per procedure and scopes MAs to their clinics.)
 const WORKFORCE_ONLY_ALLOWED_PREFIXES = ["auth.", "workforce.", "workspace.", "notifications.", "system."];
 
+// Office managers (admin for one office) are fenced the same way, plus the few older procedures
+// their pages use; each of those limits them to their office (staff logins, patient search, clinics).
+const OFFICE_MANAGER_ALLOWED = [...WORKFORCE_ONLY_ALLOWED_PREFIXES, "users.", "members.create", "patients.list", "patients.duplicates", "clinics.list"];
+const allowedFor = (list: string[], path: string) => list.some((p) => (p.endsWith(".") ? path.startsWith(p) : path === p));
+
 const requireUser = t.middleware(async opts => {
   const { ctx, next, path } = opts;
 
@@ -42,6 +47,9 @@ const requireUser = t.middleware(async opts => {
     (WORKFORCE_ONLY_ROLES as readonly string[]).includes(ctx.user.role) &&
     !WORKFORCE_ONLY_ALLOWED_PREFIXES.some((p) => path.startsWith(p))
   ) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this resource." });
+  }
+  if (ctx.user.role === "office_manager" && !allowedFor(OFFICE_MANAGER_ALLOWED, path)) {
     throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this resource." });
   }
 

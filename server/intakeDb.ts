@@ -4,7 +4,7 @@
 // (PF has no document-upload API), with a printable signed copy and a full audit trail.
 import { createHash, randomBytes } from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
-import { and, asc, desc, eq, gte, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { ENV } from "./_core/env";
 import { sealSecret, openSecret } from "./secretBox";
@@ -110,7 +110,7 @@ export async function formChoices() {
 // ---------------------------------------------------------------------------
 
 /** Name, date of birth, phone, email and clinic we already have for a person (to prefill "Send forms"). */
-export async function intakeContact(subjectKey: string) {
+export async function intakeContact(actor: WorkspaceActor, subjectKey: string) {
   const d = await db();
   const care = await subjectCare(subjectKey);
   let name = care?.name ?? null, dob: string | null = null, phone: string | null = null, email: string | null = null, language: IntakeLang = "en";
@@ -127,6 +127,7 @@ export async function intakeContact(subjectKey: string) {
   const [ec] = await d.select({ email: emailContacts.email }).from(emailContacts)
     .where(and(eq(emailContacts.kind, "patient"), pid ? eq(emailContacts.patientId, pid) : eq(emailContacts.subjectKey, subjectKey))).limit(1);
   email = email ?? ec?.email ?? null;
+  if (actor.clinicIds && !inScope(actor, care?.clinicId ?? null)) throw new WorkspaceError("That patient isn't at your office.", "FORBIDDEN");
   const [open] = await d.select({ id: intakePackets.id }).from(intakePackets).where(and(eq(intakePackets.subjectKey, subjectKey), inArray(intakePackets.status, OPEN_PACKET))).limit(1);
   return { subjectKey, patientId: pid, name, dob, phone: normalizePhone(phone) ?? phone, email, language, clinicId: care?.clinicId ?? null, openPacketId: open?.id ?? null };
 }
@@ -154,6 +155,10 @@ export async function createPacket(actor: WorkspaceActor, input: CreatePacketInp
   const care = input.subjectKey ? await subjectCare(input.subjectKey) : null;
   let clinicId = input.clinicId ?? care?.clinicId ?? null;
   if (!clinicId && input.bookingRequestId) clinicId = (await d.select({ c: bookingRequests.clinicId }).from(bookingRequests).where(eq(bookingRequests.id, input.bookingRequestId)).limit(1))[0]?.c ?? null;
+  if (actor.clinicIds) {
+    clinicId = clinicId ?? actor.clinicIds[0] ?? null;
+    if (!inScope(actor, clinicId)) throw new WorkspaceError("You can only send forms for patients at your office.", "FORBIDDEN");
+  }
   const token = randomBytes(24).toString("base64url");
   const email = input.email?.trim().toLowerCase() || null;
   if (email && !/^\S+@\S+\.\S+$/.test(email)) throw new WorkspaceError("That email address doesn't look right.");
@@ -168,9 +173,12 @@ export async function createPacket(actor: WorkspaceActor, input: CreatePacketInp
   return { id, link: linkFor(origin, token) };
 }
 
-async function packetOr404(id: number) {
+/** Office managers only reach their office's packets. */
+const inScope = (actor: WorkspaceActor, clinicId: number | null) => !actor.clinicIds || (clinicId != null && actor.clinicIds.includes(clinicId));
+
+async function packetOr404(id: number, actor: WorkspaceActor) {
   const [p] = await (await db()).select().from(intakePackets).where(eq(intakePackets.id, id)).limit(1);
-  if (!p) throw new WorkspaceError("Those forms weren't found.", "NOT_FOUND");
+  if (!p || !inScope(actor, p.clinicId)) throw new WorkspaceError("Those forms weren't found.", "NOT_FOUND");
   return p;
 }
 const isExpired = (p: { expiresAt: Date }) => p.expiresAt.getTime() < Date.now();
@@ -192,7 +200,7 @@ function assertSendable(p: typeof intakePackets.$inferSelect) {
 
 /** Email the link from the practice mailbox. The email has no health details, only the link. */
 export async function sendByEmail(actor: WorkspaceActor, id: number, origin: string | null, to?: string | null) {
-  const p = await packetOr404(id);
+  const p = await packetOr404(id, actor);
   assertSendable(p);
   const email = (to?.trim().toLowerCase() || p.email || "").trim();
   if (!email) throw new WorkspaceError("There's no email address for this patient.");
@@ -209,7 +217,7 @@ export async function sendByEmail(actor: WorkspaceActor, id: number, origin: str
 
 /** The text message for the RingCentral phone (staff press Send there). */
 export async function textMessage(actor: WorkspaceActor, id: number, origin: string | null) {
-  const p = await packetOr404(id);
+  const p = await packetOr404(id, actor);
   assertSendable(p);
   if (!p.phone) throw new WorkspaceError("There's no phone number for this patient.");
   const message = inviteText(p.language, linkFor(origin, openSecret(p.tokenSealed)), await clinicPhone(p.clinicId));
@@ -219,7 +227,7 @@ export async function textMessage(actor: WorkspaceActor, id: number, origin: str
 }
 
 export async function copyLink(actor: WorkspaceActor, id: number, origin: string | null) {
-  const p = await packetOr404(id);
+  const p = await packetOr404(id, actor);
   assertSendable(p);
   const link = linkFor(origin, openSecret(p.tokenSealed));
   if (!p.sentVia) await markSent(p, "link");
@@ -266,10 +274,10 @@ function inviteEmail(lang: string, link: string, phone: string | null) {
 
 export type PacketFilter = "waiting" | "to_file" | "filed" | "all";
 
-export async function listPackets(filter: PacketFilter) {
+export async function listPackets(actor: WorkspaceActor, filter: PacketFilter) {
   const d = await db();
   const since = new Date(Date.now() - 180 * 86_400_000);
-  const conds = [gte(intakePackets.createdAt, since)];
+  const conds = [gte(intakePackets.createdAt, since), packetScope(actor)];
   if (filter === "waiting") conds.push(inArray(intakePackets.status, OPEN_PACKET));
   else if (filter === "to_file") conds.push(eq(intakePackets.status, "completed"));
   else if (filter === "filed") conds.push(eq(intakePackets.status, "filed"));
@@ -289,13 +297,16 @@ export async function listPackets(filter: PacketFilter) {
   }));
 }
 
-export async function packetStats() {
+const packetScope = (actor: WorkspaceActor) =>
+  actor.clinicIds ? (actor.clinicIds.length ? inArray(intakePackets.clinicId, actor.clinicIds) : sql`1 = 0`) : undefined;
+
+export async function packetStats(actor: WorkspaceActor) {
   const d = await db();
   const since = new Date(Date.now() - 30 * 86_400_000);
   const rows = await d.select({ status: intakePackets.status, createdAt: intakePackets.createdAt, sentAt: intakePackets.sentAt, completedAt: intakePackets.completedAt, expiresAt: intakePackets.expiresAt })
-    .from(intakePackets).where(gte(intakePackets.createdAt, since));
+    .from(intakePackets).where(and(gte(intakePackets.createdAt, since), packetScope(actor)));
   const hours = rows.filter((r) => r.completedAt && r.sentAt).map((r) => (r.completedAt!.getTime() - r.sentAt!.getTime()) / 3_600_000).sort((a, b) => a - b);
-  const toFile = (await d.select({ id: intakePackets.id }).from(intakePackets).where(eq(intakePackets.status, "completed")).limit(500)).length;
+  const toFile = (await d.select({ id: intakePackets.id }).from(intakePackets).where(and(eq(intakePackets.status, "completed"), packetScope(actor))).limit(500)).length;
   return {
     waiting: rows.filter((r) => OPEN_PACKET.includes(r.status as PacketStatus) && r.expiresAt.getTime() > Date.now()).length,
     toFile,
@@ -308,7 +319,7 @@ export async function packetStats() {
 /** Everything about one packet, for the staff view and the printed copy (no photo bytes). */
 export async function packetDetail(actor: WorkspaceActor, id: number) {
   const d = await db();
-  const p = await packetOr404(id);
+  const p = await packetOr404(id, actor);
   const [sigs, files, events, clinic] = await Promise.all([
     d.select().from(intakeSignatures).where(eq(intakeSignatures.packetId, id)).orderBy(asc(intakeSignatures.signedAt)),
     d.select({ id: intakeFiles.id, kind: intakeFiles.kind, mime: intakeFiles.mime, size: intakeFiles.size, sha256: intakeFiles.sha256, createdAt: intakeFiles.createdAt }).from(intakeFiles).where(eq(intakeFiles.packetId, id)),
@@ -352,7 +363,7 @@ async function closeTask(actor: WorkspaceActor, taskId: number | null, to: "comp
 }
 
 export async function markFiled(actor: WorkspaceActor, id: number) {
-  const p = await packetOr404(id);
+  const p = await packetOr404(id, actor);
   if (p.status !== "completed") throw new WorkspaceError(p.status === "filed" ? "Already marked as filed." : "The patient hasn't finished these forms yet.");
   await (await db()).update(intakePackets).set({ status: "filed", filedAt: new Date(), filedByUserId: actor.id }).where(eq(intakePackets.id, id));
   await closeTask(actor, p.taskId, "completed", "Filed in Practice Fusion");
@@ -362,7 +373,7 @@ export async function markFiled(actor: WorkspaceActor, id: number) {
 }
 
 export async function cancelPacket(actor: WorkspaceActor, id: number) {
-  const p = await packetOr404(id);
+  const p = await packetOr404(id, actor);
   if (!OPEN_PACKET.includes(p.status as PacketStatus)) throw new WorkspaceError("Only forms the patient hasn't finished can be cancelled.");
   await (await db()).update(intakePackets).set({ status: "cancelled" }).where(eq(intakePackets.id, id));
   await logEvent(id, "cancelled", { userId: actor.id });
@@ -371,7 +382,7 @@ export async function cancelPacket(actor: WorkspaceActor, id: number) {
 }
 
 export async function extendPacket(actor: WorkspaceActor, id: number) {
-  const p = await packetOr404(id);
+  const p = await packetOr404(id, actor);
   if (!OPEN_PACKET.includes(p.status as PacketStatus)) throw new WorkspaceError("Only forms the patient hasn't finished can be extended.");
   await (await db()).update(intakePackets).set({ expiresAt: new Date(Date.now() + PACKET_EXPIRY_DAYS * 86_400_000), lockedUntil: null, failedDobAttempts: 0 }).where(eq(intakePackets.id, id));
   await logEvent(id, "extended", { userId: actor.id, detail: `${PACKET_EXPIRY_DAYS} more days` });

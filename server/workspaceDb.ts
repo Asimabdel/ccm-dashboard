@@ -3,7 +3,7 @@
 // Access decisions (who may call what) live in server/routers/workspace.ts;
 // the helpers here take an explicit clinic scope so they never widen access.
 import { createHash } from "crypto";
-import { and, asc, desc, eq, gte, inArray, isNull, like, lt, lte, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, like, lt, lte, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import {
   appointments,
   appointmentStatusEvents,
@@ -52,6 +52,7 @@ import {
   minutesBetween,
   nameKey,
   sameProviderName,
+  officeCanManageLogin,
   nextClinicDay,
   type FlowStatus,
   type OpportunityCategory,
@@ -205,6 +206,47 @@ export async function opportunityScopeReport() {
   return out.sort((a, b) => a.role.localeCompare(b.role) || String(a.name).localeCompare(String(b.name)));
 }
 
+/** An office manager's office: their home clinic in Workforce. [] (sees nothing) until one is set. */
+export async function officeClinicIds(userId: number): Promise<number[]> {
+  const [p] = await (await db()).select({ homeClinicId: staffProfiles.homeClinicId }).from(staffProfiles).where(eq(staffProfiles.userId, userId)).limit(1);
+  return p?.homeClinicId ? [p.homeClinicId] : [];
+}
+
+/**
+ * The people an office manager manages: everyone whose home clinic is their office, except admins
+ * and other office managers (they may include themselves). `logins` narrows it to people whose
+ * login they may manage (their office's care coordinators, front desk, MAs, or no access yet).
+ */
+export async function officeStaff(managerId: number, clinicId: number, opts: { logins?: boolean } = {}): Promise<Set<number>> {
+  const rows = await (await db()).select({ id: users.id, role: users.role }).from(staffProfiles).innerJoin(users, eq(users.id, staffProfiles.userId)).where(eq(staffProfiles.homeClinicId, clinicId));
+  return new Set(rows.filter((r) => {
+    if (opts.logins) return r.id !== managerId && officeCanManageLogin(r.role);
+    return r.id === managerId || (r.role !== "admin" && r.role !== "office_manager");
+  }).map((r) => r.id));
+}
+
+/**
+ * Make someone an office manager (IAM-only Lambda job). Checks first: exactly one person by that
+ * name, a home clinic set in Workforce (their office), and at least one other admin left.
+ */
+export async function makeOfficeManager(input: { name: string; apply: boolean }) {
+  const d = await db();
+  const people = (await d.select({ id: users.id, name: users.name, role: users.role }).from(users)).filter((u) => nameKey(u.name ?? "") === nameKey(input.name));
+  if (people.length !== 1) return { ok: false, reason: `${people.length} people are named ${input.name}` };
+  const u = people[0]!;
+  const [office] = await officeClinicIds(u.id);
+  const officeName = office ? (await d.select({ name: clinics.name }).from(clinics).where(eq(clinics.id, office)).limit(1))[0]?.name ?? null : null;
+  const otherAdmins = (await d.select({ name: users.name }).from(users).where(and(eq(users.role, "admin"), ne(users.id, u.id)))).map((a) => a.name);
+  const report = { name: u.name, currentRole: u.role, office: officeName, otherAdmins };
+  if (!office) return { ok: false, reason: "No home clinic is set for them in Workforce", ...report };
+  if (u.role === "admin" && !otherAdmins.length) return { ok: false, reason: "They are the only admin", ...report };
+  if (input.apply && u.role !== "office_manager") {
+    await d.update(users).set({ role: "office_manager" }).where(eq(users.id, u.id));
+    await d.insert(auditLogs).values({ userId: null, userName: "System (Lambda job)", userRole: "admin", action: "manage_access", entityType: "user", entityId: u.id, description: `Role set to office_manager for ${officeName}` });
+  }
+  return { ok: true, applied: input.apply, ...report };
+}
+
 /** Intersect a requested clinic with the actor's allowed clinics. */
 export function scopeClinics(actor: WorkspaceActor, requested?: number | null): number[] | null {
   if (requested) {
@@ -282,7 +324,10 @@ function taskWhere(actor: WorkspaceActor, f: TaskFilters): SQL {
       conds.push(minePlusTeam, eq(workTasks.status, "completed"));
       break;
     case "all":
-      if (actor.role !== "admin") conds.push(minePlusTeam);
+      // Admins see every task. An office manager: every task at their office (limited by clinic above),
+      // but clinic-less tasks only when they're theirs (others may be about other offices' patients).
+      if (actor.role === "office_manager") conds.push(or(isNotNull(workTasks.clinicId), eq(workTasks.assignedUserId, actor.id))!);
+      else if (actor.role !== "admin") conds.push(minePlusTeam);
       break;
   }
   if (f.status) conds.push(eq(workTasks.status, f.status));
@@ -949,29 +994,31 @@ export async function subjectCare(key: string): Promise<{ patientId: number | nu
 }
 
 /** Find patients by name (roster + imported schedule), for linking an email to the right person. */
-export async function searchSubjects(q: string, limit = 20) {
+export async function searchSubjects(q: string, limit = 20, clinicIds: number[] | null = null) {
   const needle = nameKey(q);
   if (needle.length < 2) return [];
   const d = await db();
   const clinicName = new Map((await d.select({ id: clinics.id, name: clinics.name }).from(clinics)).map((c) => [c.id, c.name]));
-  const out: { key: string; patientId: number | null; name: string; dob: string | null; clinicName: string | null; phoneLast4: string | null }[] = [];
+  const out: { key: string; patientId: number | null; name: string; dob: string | null; clinicId: number | null; clinicName: string | null; phoneLast4: string | null }[] = [];
   const roster = await d.select({ id: patients.id, name: patients.name, dob: patients.dateOfBirth, clinicId: patients.clinicId, phone: patients.phoneNumber }).from(patients);
   for (const p of roster) {
     if (!nameKey(p.name).includes(needle)) continue;
-    out.push({ key: `p:${p.id}`, patientId: p.id, name: p.name, dob: ymd(p.dob), clinicName: p.clinicId ? clinicName.get(p.clinicId) ?? null : null, phoneLast4: normalizePhone(p.phone)?.slice(-4) ?? null });
+    out.push({ key: `p:${p.id}`, patientId: p.id, name: p.name, dob: ymd(p.dob), clinicId: p.clinicId, clinicName: p.clinicId ? clinicName.get(p.clinicId) ?? null : null, phoneLast4: normalizePhone(p.phone)?.slice(-4) ?? null });
   }
   for (const s of Array.from((await loadScheduleSubjects()).values())) {
     if (s.patientId || !nameKey(s.name).includes(needle)) continue;
-    out.push({ key: s.key, patientId: null, name: s.name, dob: ymd(s.dob), clinicName: s.clinicId ? clinicName.get(s.clinicId) ?? null : null, phoneLast4: normalizePhone(s.phone)?.slice(-4) ?? null });
+    out.push({ key: s.key, patientId: null, name: s.name, dob: ymd(s.dob), clinicId: s.clinicId, clinicName: s.clinicId ? clinicName.get(s.clinicId) ?? null : null, phoneLast4: normalizePhone(s.phone)?.slice(-4) ?? null });
   }
   // Patients who are only in Practice Fusion (chart copy), not on the roster or schedule.
   const words = q.trim().split(/\s+/).filter((w) => w.length >= 2).slice(0, 3);
   if (words.length) {
     const pf = await d.select({ key: fhirPatients.subjectKey, name: fhirPatients.name, dob: fhirPatients.dob, phone: fhirPatients.phone }).from(fhirPatients)
       .where(and(like(fhirPatients.subjectKey, "f:%"), ...words.map((w) => like(fhirPatients.name, `%${w.replace(/[%_]/g, "")}%`)))).limit(limit);
-    for (const p of pf) if (p.name && nameKey(p.name).includes(needle)) out.push({ key: p.key, patientId: null, name: p.name, dob: p.dob, clinicName: null, phoneLast4: normalizePhone(p.phone)?.slice(-4) ?? null });
+    for (const p of pf) if (p.name && nameKey(p.name).includes(needle)) out.push({ key: p.key, patientId: null, name: p.name, dob: p.dob, clinicId: null, clinicName: null, phoneLast4: normalizePhone(p.phone)?.slice(-4) ?? null });
   }
-  return out.sort((a, b) => a.name.localeCompare(b.name)).slice(0, limit);
+  // Limited to some clinics (office manager): people with no known clinic are left out too.
+  const kept = clinicIds ? out.filter((o) => o.clinicId != null && clinicIds.includes(o.clinicId)) : out;
+  return kept.sort((a, b) => a.name.localeCompare(b.name)).slice(0, limit);
 }
 
 /** Who a phone number belongs to: a CCM-roster patient first, then anyone on the imported schedule. */

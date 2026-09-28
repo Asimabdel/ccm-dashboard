@@ -172,6 +172,16 @@ export async function getShiftById(id: number) {
   return rows[0];
 }
 
+export async function getPunchById(id: number) {
+  const db = await requireDb();
+  return (await db.select().from(timePunches).where(eq(timePunches.id, id)).limit(1))[0];
+}
+
+export async function getTimeOffById(id: number) {
+  const db = await requireDb();
+  return (await db.select().from(timeOffRequests).where(eq(timeOffRequests.id, id)).limit(1))[0];
+}
+
 /** Shifts (with names) and approved/pending time off overlapping a date range. */
 export async function getSchedule(from: string, to: string, clinicId?: number) {
   const db = await requireDb();

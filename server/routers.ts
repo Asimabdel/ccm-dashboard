@@ -76,6 +76,9 @@ import {
   users,
 } from "../drizzle/schema";
 import { ccmNotesRouter } from "./routers/ccmNotes";
+import { officeClinicIds, officeStaff } from "./workspaceDb";
+import { OFFICE_ASSIGNABLE_ROLES, officeCanManageLogin } from "../shared/workspace";
+import { staffProfiles } from "../drizzle/schema";
 import { workforceRouter } from "./routers/workforce";
 import { workspaceRouter } from "./routers/workspace";
 import { patientFormsRouter } from "./routers/patientForms";
@@ -124,7 +127,26 @@ const statusEnum = z.enum([
   "needs_appointment", "documentation_incomplete", "ready_for_billing", "billed",
   "cancelled", "unable_to_reach", "declined_ccm", "inactive",
 ]);
-const roleEnum = z.enum(["admin", "staff", "provider", "billing", "front_desk", "medical_assistant", "user"]);
+const roleEnum = z.enum(["admin", "office_manager", "staff", "provider", "billing", "front_desk", "medical_assistant", "user"]);
+
+/**
+ * Staff logins: admins manage everyone. An office manager manages only logins of their office's
+ * care coordinators / front desk / MAs (never admins, providers, billing, or other offices), and
+ * can only give those roles. Returns null for an admin, or the office + the people they may manage.
+ */
+async function loginScope(ctx: { user: { id: number; role: string } }): Promise<{ office: number; people: Set<number> } | null> {
+  if (ctx.user.role === "admin") return null;
+  if (ctx.user.role !== "office_manager") throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this resource." });
+  const [office] = await officeClinicIds(ctx.user.id);
+  if (!office) throw new TRPCError({ code: "FORBIDDEN", message: "Your office isn't set yet. Ask an admin to set your home clinic in Workforce." });
+  return { office, people: await officeStaff(ctx.user.id, office, { logins: true }) };
+}
+function officeCanTouch(scope: { people: Set<number> } | null, userId: number) {
+  if (scope && !scope.people.has(userId)) throw new TRPCError({ code: "FORBIDDEN", message: "You can only manage logins for your office's staff." });
+}
+function officeCanGive(scope: object | null, role: string) {
+  if (scope && !officeCanManageLogin(role)) throw new TRPCError({ code: "FORBIDDEN", message: `An office manager can give these roles: ${OFFICE_ASSIGNABLE_ROLES.join(", ").replace(/_/g, " ")}.` });
+}
 
 // Statuses that mean the patient was actually called this cycle — these stamp the
 // patient's "Last Called" date automatically.
@@ -274,14 +296,17 @@ export const appRouter = router({
   // ---- Admin: worker access management (RBAC) ----
   users: router({
     list: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx, ["admin"]);
+      const scope = await loginScope(ctx);
       // getAllUsers() already projects out credential fields (no passwordHash).
-      return getAllUsers();
+      const all = await getAllUsers();
+      return scope ? all.filter((u) => scope.people.has(u.id)) : all;
     }),
     setRole: protectedProcedure
       .input(z.object({ userId: z.number(), role: roleEnum }))
       .mutation(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin"]);
+        const scope = await loginScope(ctx);
+        officeCanTouch(scope, input.userId);
+        officeCanGive(scope, input.role);
         // Prevent an admin from accidentally removing their own admin access (lockout guard).
         if (input.userId === ctx.user.id && input.role !== "admin") {
           throw new TRPCError({ code: "BAD_REQUEST", message: "You cannot change your own admin role. Ask another admin to do this." });
@@ -301,7 +326,9 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin"]);
+        const scope = await loginScope(ctx);
+        officeCanTouch(scope, input.id);
+        officeCanGive(scope, input.role);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { id, ...updateData } = input;
@@ -323,7 +350,7 @@ export const appRouter = router({
     remove: protectedProcedure
       .input(z.number())
       .mutation(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin"]);
+        officeCanTouch(await loginScope(ctx), input);
         if (input === ctx.user.id) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "You cannot remove your own admin account." });
         }
@@ -337,7 +364,7 @@ export const appRouter = router({
     resetPassword: protectedProcedure
       .input(z.object({ userId: z.number(), password: z.string() }))
       .mutation(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin"]);
+        officeCanTouch(await loginScope(ctx), input.userId);
         const strengthError = validatePasswordStrength(input.password);
         if (strengthError) {
           throw new TRPCError({ code: "BAD_REQUEST", message: strengthError });
@@ -362,7 +389,17 @@ export const appRouter = router({
         password: z.string().optional(),
       }))
       .mutation(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin"]);
+        const scope = await loginScope(ctx);
+        officeCanGive(scope, input.role);
+        if (scope) {
+          // An office manager creates new logins for their office (with a password so they can sign in
+          // right away). An email that's already in use can only be one of their own staff.
+          if (!input.password) throw new TRPCError({ code: "BAD_REQUEST", message: "Set a starting password for the new login." });
+          const db = await getDb();
+          if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+          const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, input.email.trim().toLowerCase())).limit(1);
+          if (existing) officeCanTouch(scope, existing.id);
+        }
         let passwordHash: string | null = null;
         if (input.password && input.password.length > 0) {
           const strengthError = validatePasswordStrength(input.password);
@@ -378,6 +415,12 @@ export const appRouter = router({
           clinicLocation: input.clinicLocation ?? null,
           passwordHash,
         });
+        if (scope) {
+          // New people belong to the office manager's office (Workforce home clinic).
+          const db = await getDb();
+          const [u] = db ? await db.select({ id: users.id }).from(users).where(eq(users.email, input.email.trim().toLowerCase())).limit(1) : [];
+          if (db && u) await db.insert(staffProfiles).values({ userId: u.id, homeClinicId: scope.office }).onDuplicateKeyUpdate({ set: { homeClinicId: scope.office } });
+        }
         void logAudit(ctx, "manage_access", { entityType: "user", description: `Created login for ${input.email} (${input.role})${passwordHash ? " with password" : ""}` });
         return { success: true, created: result.created, pending: result.pending };
       }),
@@ -436,14 +479,21 @@ export const appRouter = router({
         }).optional()
       )
       .query(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin", "staff", "provider", "billing", "front_desk"]);
+        requireRole(ctx, ["admin", "office_manager", "staff", "provider", "billing", "front_desk"]);
         void logAudit(ctx, "list_patients", { entityType: "patient", description: "Viewed patient list" });
+        if (ctx.user.role === "office_manager") {
+          const [office] = await officeClinicIds(ctx.user.id);
+          if (!office) return [];
+          return getEnrichedPatients({ ...(input || {}), clinicId: office });
+        }
         return getEnrichedPatients(input || {});
       }),
 
     /** Map of normalized name -> { ids, sameDob } for duplicate flagging in the UI. */
     duplicates: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx, ["admin", "staff", "provider", "billing", "front_desk"]);
+      requireRole(ctx, ["admin", "office_manager", "staff", "provider", "billing", "front_desk"]);
+      // Practice-wide name matching: not shown to an office manager (other offices' patients).
+      if (ctx.user.role === "office_manager") return {} as Awaited<ReturnType<typeof getDuplicateNameGroups>>;
       return getDuplicateNameGroups();
     }),
 

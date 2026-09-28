@@ -1,7 +1,7 @@
 // Website bookings: requests from the mypcpdr.com booking wizard land here (the clinic-booking-mailer
 // Lambda hands each one to MyPCP, and still emails Care@ as a backup). Each becomes a "call to confirm"
 // task for the front desk at the chosen clinic; staff mark how it went, and the page tracks the rest.
-import { and, desc, eq, gte, inArray } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { bookingRequests, clinics, users, workTaskActivities, workTasks } from "../drizzle/schema";
 import { BOOKING_STATUS_LABELS, OPEN_BOOKING, clinicForLocation, parseBookingEmail, parsePreferred, type BookingStatus } from "../shared/booking";
@@ -82,10 +82,14 @@ export async function ingestBooking(b: IncomingBooking) {
 
 export type BookingFilter = "open" | "scheduled" | "closed" | "earlier" | "all";
 
-export async function listBookings(filter: BookingFilter) {
+/** Office managers only see their office's requests. */
+const clinicScope = (actor: WorkspaceActor) =>
+  actor.clinicIds ? (actor.clinicIds.length ? inArray(bookingRequests.clinicId, actor.clinicIds) : sql`1 = 0`) : undefined;
+
+export async function listBookings(actor: WorkspaceActor, filter: BookingFilter) {
   const d = await db();
   const since = new Date(Date.now() - 120 * 86_400_000);
-  const conds = [gte(bookingRequests.receivedAt, since)];
+  const conds = [gte(bookingRequests.receivedAt, since), clinicScope(actor)];
   if (filter === "open") conds.push(inArray(bookingRequests.status, OPEN_BOOKING));
   else if (filter === "scheduled") conds.push(eq(bookingRequests.status, "scheduled"));
   else if (filter === "closed") conds.push(inArray(bookingRequests.status, ["not_booked", "spam"]));
@@ -97,11 +101,11 @@ export async function listBookings(filter: BookingFilter) {
 }
 
 /** Header numbers: waiting now, and how fast the first call happens (last 30 days). */
-export async function bookingStats() {
+export async function bookingStats(actor: WorkspaceActor) {
   const d = await db();
   const since = new Date(Date.now() - 30 * 86_400_000);
   const rows = await d.select({ status: bookingRequests.status, receivedAt: bookingRequests.receivedAt, firstContactAt: bookingRequests.firstContactAt, source: bookingRequests.source })
-    .from(bookingRequests).where(gte(bookingRequests.receivedAt, since));
+    .from(bookingRequests).where(and(gte(bookingRequests.receivedAt, since), clinicScope(actor)));
   // Spam and tests don't count.
   const web = rows.filter((r) => r.source === "website" && r.status !== "spam");
   const mins = web.filter((r) => r.firstContactAt).map((r) => (r.firstContactAt!.getTime() - r.receivedAt.getTime()) / 60000).sort((a, b) => a - b);
@@ -117,7 +121,7 @@ export async function bookingStats() {
 export async function setBookingStatus(actor: WorkspaceActor, input: { id: number; status: Exclude<BookingStatus, "new" | "earlier">; note?: string | null }) {
   const d = await db();
   const [b] = await d.select().from(bookingRequests).where(eq(bookingRequests.id, input.id)).limit(1);
-  if (!b) throw new WorkspaceError("Booking not found.", "NOT_FOUND");
+  if (!b || (actor.clinicIds && !(b.clinicId && actor.clinicIds.includes(b.clinicId)))) throw new WorkspaceError("Booking not found.", "NOT_FOUND");
   if (b.status === "earlier") throw new WorkspaceError("That's an earlier booking loaded from email; it was handled back then.");
   const now = new Date();
   const note = input.note?.trim() ? `${b.note ? `${b.note}\n` : ""}${now.toLocaleDateString("en-US", { timeZone: "America/Chicago" })} ${actor.name}: ${input.note.trim()}`.slice(0, 4000) : b.note;

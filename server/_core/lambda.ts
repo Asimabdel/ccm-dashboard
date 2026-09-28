@@ -60,6 +60,11 @@ export const handler = async (event: any, context: any) => {
     const backfill = "skipped" in sync ? null : await runGmailBackfill({ deadline: started + 23_000 });
     return { ...sync, faxBox, faxRead, backfill };
   }
+  // Make someone an office manager for their Workforce home clinic (IAM-only; dry run unless apply).
+  if (event && event.__job === "office-manager" && !event.requestContext && !event.version) {
+    const { makeOfficeManager } = await import("../workspaceDb");
+    return makeOfficeManager({ name: String(event.name ?? ""), apply: event.apply === true });
+  }
   // Who sees what in the Opportunity Finder (IAM-only check; staff names and clinics, no patients).
   if (event && event.__job === "opportunity-scopes" && !event.requestContext && !event.version) {
     const { opportunityScopeReport } = await import("../workspaceDb");

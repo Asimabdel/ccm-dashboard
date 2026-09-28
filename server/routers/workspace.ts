@@ -38,7 +38,9 @@ type Ctx = { user: { id: number; name: string | null; role: string }; req?: { he
 
 async function actorFor(ctx: Ctx, cap: WorkspaceCap): Promise<ws.WorkspaceActor> {
   if (!can(ctx.user.role, cap)) throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this resource." });
-  const clinicIds = ctx.user.role === "medical_assistant" ? await ws.getMaClinicIds(ctx.user.id) : null;
+  const clinicIds = ctx.user.role === "medical_assistant" ? await ws.getMaClinicIds(ctx.user.id)
+    : ctx.user.role === "office_manager" ? await ws.officeClinicIds(ctx.user.id)
+    : null;
   const fwd = ctx.req?.headers?.["x-forwarded-for"];
   return {
     id: ctx.user.id,
@@ -426,12 +428,12 @@ export const workspaceRouter = router({
       return intake.formChoices();
     }),
     search: protectedProcedure.input(z.object({ q: z.string().trim().min(2).max(100) })).query(async ({ ctx, input }) => {
-      await actorFor(ctx, "intakeForms");
-      return ws.searchSubjects(input.q);
+      const actor = await actorFor(ctx, "intakeForms");
+      return ws.searchSubjects(input.q, 20, actor.clinicIds);
     }),
     contact: protectedProcedure.input(z.object({ subjectKey: z.string().min(3).max(120) })).query(async ({ ctx, input }) => {
-      await actorFor(ctx, "intakeForms");
-      return intake.intakeContact(input.subjectKey);
+      const actor = await actorFor(ctx, "intakeForms");
+      return run(() => intake.intakeContact(actor, input.subjectKey));
     }),
     create: protectedProcedure
       .input(z.object({
@@ -462,12 +464,12 @@ export const workspaceRouter = router({
       return run(() => intake.copyLink(actor, input.id, reqOrigin(ctx)));
     }),
     list: protectedProcedure.input(z.object({ filter: z.enum(["waiting", "to_file", "filed", "all"]).default("waiting") })).query(async ({ ctx, input }) => {
-      await actorFor(ctx, "intakeForms");
-      return intake.listPackets(input.filter);
+      const actor = await actorFor(ctx, "intakeForms");
+      return intake.listPackets(actor, input.filter);
     }),
     stats: protectedProcedure.query(async ({ ctx }) => {
-      await actorFor(ctx, "intakeForms");
-      return intake.packetStats();
+      const actor = await actorFor(ctx, "intakeForms");
+      return intake.packetStats(actor);
     }),
     detail: protectedProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "intakeForms");
@@ -510,21 +512,21 @@ export const workspaceRouter = router({
   // Website bookings (mypcpdr.com booking wizard): call to confirm, record how it went.
   bookings: router({
     list: protectedProcedure.input(z.object({ filter: z.enum(["open", "scheduled", "closed", "earlier", "all"]).default("open") })).query(async ({ ctx, input }) => {
-      await actorFor(ctx, "emailTriage");
-      return bookings.listBookings(input.filter);
+      const actor = await actorFor(ctx, "bookings");
+      return bookings.listBookings(actor, input.filter);
     }),
     stats: protectedProcedure.query(async ({ ctx }) => {
-      await actorFor(ctx, "emailTriage");
-      return bookings.bookingStats();
+      const actor = await actorFor(ctx, "bookings");
+      return bookings.bookingStats(actor);
     }),
     setStatus: protectedProcedure
       .input(z.object({ id: z.number().int().positive(), status: z.enum(["no_answer", "scheduled", "not_booked", "spam"]), note: z.string().max(500).nullish() }))
       .mutation(async ({ ctx, input }) => {
-        const actor = await actorFor(ctx, "emailTriage");
+        const actor = await actorFor(ctx, "bookings");
         return run(() => bookings.setBookingStatus(actor, input));
       }),
     importEarlier: protectedProcedure.input(z.object({ pageToken: z.string().max(200).nullish() })).mutation(async ({ ctx, input }) => {
-      const actor = await actorFor(ctx, "emailTriage");
+      const actor = await actorFor(ctx, "bookings");
       if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can load earlier bookings." });
       return run(() => bookings.importEarlierBookings(actor, input));
     }),
@@ -632,7 +634,12 @@ export const workspaceRouter = router({
       return metrics.myMetrics({ id: ctx.user.id, name: ctx.user.name, role: ctx.user.role });
     }),
     team: protectedProcedure.input(z.object({ date: dateStr })).query(async ({ ctx, input }) => {
-      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can see the team's numbers." });
+      if (ctx.user.role === "office_manager") {
+        const [office] = await ws.officeClinicIds(ctx.user.id);
+        if (!office) throw new TRPCError({ code: "FORBIDDEN", message: "Your office isn't set yet. Ask an admin to set your home clinic in Workforce." });
+        return metrics.teamMetrics(input.date, await ws.officeStaff(ctx.user.id, office));
+      }
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin or office manager can see the team's numbers." });
       return metrics.teamMetrics(input.date);
     }),
     goals: protectedProcedure.query(async ({ ctx }) => {

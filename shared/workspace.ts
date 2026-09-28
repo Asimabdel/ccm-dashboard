@@ -10,40 +10,50 @@ import { normalizePersonName } from "./csvImport";
 // Roles & capabilities
 // ---------------------------------------------------------------------------
 
-export type WorkspaceRole = "admin" | "staff" | "provider" | "billing" | "front_desk" | "medical_assistant" | "user";
+export type WorkspaceRole = "admin" | "office_manager" | "staff" | "provider" | "billing" | "front_desk" | "medical_assistant" | "user";
 
 export const WORKSPACE_CAPS = {
   /** My Work task queue. */
-  tasks: ["admin", "staff", "provider", "billing", "front_desk", "medical_assistant"],
+  tasks: ["admin", "office_manager", "staff", "provider", "billing", "front_desk", "medical_assistant"],
   /** Assign tasks to other people. */
-  assignTasks: ["admin", "staff", "provider", "front_desk"],
+  assignTasks: ["admin", "office_manager", "staff", "provider", "front_desk"],
   /** See the Patient Flow board. */
-  flowView: ["admin", "staff", "provider", "front_desk", "medical_assistant"],
+  flowView: ["admin", "office_manager", "staff", "provider", "front_desk", "medical_assistant"],
   /** Move patients between flow columns. */
-  flowUpdate: ["admin", "staff", "provider", "front_desk", "medical_assistant"],
+  flowUpdate: ["admin", "office_manager", "staff", "provider", "front_desk", "medical_assistant"],
   /** Upload the Practice Fusion schedule export. */
   scheduleImport: ["admin", "front_desk"],
   /** See Opportunity Finder lists. */
-  opportunitiesView: ["admin", "staff", "provider", "front_desk"],
+  opportunitiesView: ["admin", "office_manager", "staff", "provider", "front_desk"],
   /** Act on opportunities (create tasks, mark reviewed). */
-  opportunitiesAct: ["admin", "staff", "front_desk"],
+  opportunitiesAct: ["admin", "office_manager", "staff", "front_desk"],
   /** Read playbooks. */
-  playbooksView: ["admin", "staff", "provider", "billing", "front_desk", "medical_assistant"],
+  playbooksView: ["admin", "office_manager", "staff", "provider", "billing", "front_desk", "medical_assistant"],
   /** Create / edit playbooks. */
   playbooksEdit: ["admin"],
+  /** Website booking requests (call to confirm). */
+  bookings: ["admin", "office_manager", "staff", "front_desk"],
   /** Triage patient emails from the practice mailbox (link a sender to a patient). */
   emailTriage: ["admin", "staff", "front_desk"],
   /** Full patient record incl. CCM/BHI/APCM detail. MAs get an operational view only. */
-  patientFull: ["admin", "staff", "provider", "front_desk"],
+  patientFull: ["admin", "office_manager", "staff", "provider", "front_desk"],
   /** The whole Practice Fusion chart copy (problems, meds, labs, notes…). */
   chartFull: ["admin", "staff", "provider"],
   /** Send patient forms (intake / consents) and see what patients filled in and signed. */
-  intakeForms: ["admin", "staff", "provider", "front_desk"],
+  intakeForms: ["admin", "office_manager", "staff", "provider", "front_desk"],
   /** The limited chart: contact, insurance, visits and allergies (minimum necessary for the front desk). */
-  chartBasic: ["admin", "staff", "provider", "front_desk"],
+  chartBasic: ["admin", "office_manager", "staff", "provider", "front_desk"],
 } as const satisfies Record<string, readonly WorkspaceRole[]>;
 
 export type WorkspaceCap = keyof typeof WORKSPACE_CAPS;
+
+/**
+ * Office manager: admin-like, but only for one office (their home clinic in Workforce). They can
+ * give their office's staff these roles, and manage logins only for people who have one of them
+ * (or no access yet). They never touch admins, providers, billing, or other offices.
+ */
+export const OFFICE_ASSIGNABLE_ROLES = ["staff", "front_desk", "medical_assistant"] as const;
+export const officeCanManageLogin = (role: string) => (OFFICE_ASSIGNABLE_ROLES as readonly string[]).includes(role) || role === "user";
 
 export function can(role: string | null | undefined, cap: WorkspaceCap): boolean {
   return !!role && (WORKSPACE_CAPS[cap] as readonly string[]).includes(role);
@@ -96,6 +106,7 @@ export function isTaskOverdue(task: { status: string; dueDate: string | null }, 
 
 export const WORKSPACE_ROLE_LABELS: Record<string, string> = {
   admin: "Admin / Practice Manager",
+  office_manager: "Office Manager",
   staff: "Care Coordinator",
   provider: "Provider",
   billing: "Billing",

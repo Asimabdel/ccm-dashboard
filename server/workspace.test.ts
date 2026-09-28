@@ -14,6 +14,7 @@ import {
   mapScheduleStatus,
   nameKey,
   sameProviderName,
+  officeCanManageLogin,
   nextClinicDay,
   parseDateValue,
   parseScheduleCsv,
@@ -713,5 +714,22 @@ describe("opportunity finder: who sees which patients", () => {
     expect(sameProviderName("Sarah Chen", "Sarah Chen-Wu")).toBe(false);
     expect(sameProviderName("", "")).toBe(false);
     expect(sameProviderName("Dr.", "MD")).toBe(false);
+  });
+});
+
+describe("office manager (admin for one office)", () => {
+  it("gets office operations but not CCM, the mailboxes, or clinical charts", () => {
+    for (const cap of ["tasks", "assignTasks", "flowView", "opportunitiesView", "bookings", "intakeForms", "chartBasic"] as const) expect(can("office_manager", cap)).toBe(true);
+    for (const cap of ["emailTriage", "chartFull", "scheduleImport", "playbooksEdit"] as const) expect(can("office_manager", cap)).toBe(false);
+  });
+  it("only gives and manages care coordinator / front desk / MA logins", () => {
+    for (const r of ["staff", "front_desk", "medical_assistant", "user"]) expect(officeCanManageLogin(r)).toBe(true);
+    for (const r of ["admin", "office_manager", "provider", "billing"]) expect(officeCanManageLogin(r)).toBe(false);
+  });
+  it("is fenced away from older procedures that have no role check (before any data is read)", async () => {
+    const om = appRouter.createCaller(ctxFor("office_manager"));
+    await expect(om.patients.getById(1)).rejects.toThrow(/access/);
+    await expect(om.admin.stats()).rejects.toThrow(/access/);
+    await expect(om.staff.all()).rejects.toThrow(/access/);
   });
 });

@@ -29,7 +29,7 @@ export const users = mysqlTable("users", {
   mustChangePassword: boolean("mustChangePassword").default(false).notNull(),
   // medical_assistant is a workforce-only role: it can use the schedule / time
   // clock / My Day pages but is blocked from every patient (PHI) endpoint.
-  role: mysqlEnum("role", ["admin", "staff", "provider", "billing", "front_desk", "user", "medical_assistant"]).default("user").notNull(),
+  role: mysqlEnum("role", ["admin", "staff", "provider", "billing", "front_desk", "user", "medical_assistant", "office_manager"]).default("user").notNull(),
   // How many days per week this coordinator works — used to compute per-work-day
   // CCM averages and goal pacing on their dashboard.
   workDaysPerWeek: int("workDaysPerWeek").default(5),
@@ -82,7 +82,7 @@ export type InsertProvider = typeof providers.$inferInsert;
 export const teamInvites = mysqlTable("teamInvites", {
   id: int("id").autoincrement().primaryKey(),
   email: varchar("email", { length: 320 }).notNull(),
-  role: mysqlEnum("role", ["admin", "staff", "provider", "billing", "front_desk", "user", "medical_assistant"]).default("staff").notNull(),
+  role: mysqlEnum("role", ["admin", "staff", "provider", "billing", "front_desk", "user", "medical_assistant", "office_manager"]).default("staff").notNull(),
   clinicLocation: varchar("clinicLocation", { length: 255 }),
   invitedByUserId: int("invitedByUserId").references(() => users.id),
   status: mysqlEnum("status", ["pending", "accepted", "revoked"]).default("pending").notNull(),

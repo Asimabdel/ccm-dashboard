@@ -42,7 +42,7 @@ export function TodayTab({ onOpenTimeOff }: { onOpenTimeOff: () => void }) {
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
-        <StatCard label="Scheduled" value={all.filter((x) => x.status === "scheduled").length} sub="across all clinics" />
+        <StatCard label="Scheduled" value={all.filter((x) => x.status === "scheduled").length} sub={board.data?.clinics.length === 1 ? `at ${board.data.clinics[0]!.name}` : "across all clinics"} />
         <StatCard label="Clocked in" value={count("clocked_in")} accent="text-emerald-600" />
         <StatCard label="Late / no-show" value={count("late") + count("no_show")} accent="text-amber-600" />
         <StatCard label="Needs coverage" value={openNeeds} accent={openNeeds ? "text-rose-600" : "text-slate-900"} sub={`${count("called_out")} call-outs`} />

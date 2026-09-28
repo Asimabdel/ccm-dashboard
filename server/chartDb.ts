@@ -7,7 +7,7 @@ import { getDb } from "./db";
 import { fhirPatients, fhirResources } from "../drizzle/schema";
 import { can } from "../shared/workspace";
 import { CHART_SECTIONS, type ChartSection, type FhirResource } from "../shared/fhir";
-import { WorkspaceError, audit, searchSubjects, type WorkspaceActor } from "./workspaceDb";
+import { WorkspaceError, audit, searchSubjects, subjectCare, type WorkspaceActor } from "./workspaceDb";
 
 async function db() {
   const d = await getDb();
@@ -26,11 +26,19 @@ function access(actor: WorkspaceActor): "full" | "basic" {
   throw new WorkspaceError("You don't have access to patient charts.", "FORBIDDEN");
 }
 
+/** Office managers: only patients at their office (people with no known clinic are out of reach). */
+async function assertInScope(actor: WorkspaceActor, subjectKey: string) {
+  if (!actor.clinicIds) return;
+  const care = await subjectCare(subjectKey);
+  if (!care?.clinicId || !actor.clinicIds.includes(care.clinicId)) throw new WorkspaceError("That patient isn't at your office.", "FORBIDDEN");
+}
+
 /** How many of each section to send (labs/vitals can run to thousands). */
 const LIMITS: Partial<Record<ChartSection, number>> = { labs: 400, vitals: 200, otherObs: 150, notes: 200, visits: 200 };
 
 export async function chartFor(actor: WorkspaceActor, subjectKey: string) {
   const level = access(actor);
+  await assertInScope(actor, subjectKey);
   const d = await db();
   const sections = (Object.entries(CHART_SECTIONS) as [ChartSection, (typeof CHART_SECTIONS)[ChartSection]][]).filter(([, v]) => level === "full" || !v.full);
   const wanted = sections.flatMap(([, v]) => v.types as readonly string[]);
@@ -59,6 +67,7 @@ export async function chartItem(actor: WorkspaceActor, id: number) {
   const d = await db();
   const [r] = await d.select().from(fhirResources).where(eq(fhirResources.id, id)).limit(1);
   if (!r) throw new WorkspaceError("Not found.", "NOT_FOUND");
+  await assertInScope(actor, r.subjectKey ?? "");
   const allowed = Object.values(CHART_SECTIONS).filter((v) => level === "full" || !v.full).flatMap((v) => v.types as readonly string[]);
   if (!allowed.includes(r.section)) throw new WorkspaceError("You don't have access to that part of the chart.", "FORBIDDEN");
   await audit(actor, "view_patient", { entityType: "chart", entityId: id, description: `Viewed ${r.resourceType}` });
@@ -71,6 +80,7 @@ export async function chartNote(actor: WorkspaceActor, id: number) {
   const d = await db();
   const [r] = await d.select().from(fhirResources).where(and(eq(fhirResources.id, id), eq(fhirResources.resourceType, "DocumentReference"))).limit(1);
   if (!r) throw new WorkspaceError("Not found.", "NOT_FOUND");
+  await assertInScope(actor, r.subjectKey ?? "");
   const doc = unpack(r.raw);
   const atts = ((doc?.content as { attachment?: { contentType?: string; data?: string; url?: string; title?: string } }[] | undefined) ?? []).map((c) => c.attachment).filter(Boolean);
   // Prefer something readable in the browser: plain text / HTML, then PDF, then anything.
@@ -97,12 +107,13 @@ export async function chartNote(actor: WorkspaceActor, id: number) {
 /** Find any patient — roster, schedule, or only in Practice Fusion. */
 export async function chartSearch(actor: WorkspaceActor, q: string) {
   access(actor);
-  return searchSubjects(q, 25);
+  return searchSubjects(q, 25, actor.clinicIds);
 }
 
 /** Name and DOB for a chart page header (any subject key). */
 export async function chartHeader(actor: WorkspaceActor, subjectKey: string) {
   access(actor);
+  await assertInScope(actor, subjectKey);
   const d = await db();
   const [p] = await d.select({ name: fhirPatients.name, dob: fhirPatients.dob, patientId: fhirPatients.patientId }).from(fhirPatients).where(eq(fhirPatients.subjectKey, subjectKey)).limit(1);
   if (p) return p;

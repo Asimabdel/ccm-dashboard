@@ -18,6 +18,9 @@ const ENUM_ADDITIONS: { table: string; column: string; values: string[] }[] = [
   // Added 2026-09-25: tasks created from patient emails.
   { table: "workTasks", column: "category", values: ["patient_email"] },
   { table: "workTasks", column: "category", values: ["fax_filing"] },
+  // Added 2026-09-28: office manager (admin for one office).
+  { table: "users", column: "role", values: ["office_manager"] },
+  { table: "teamInvites", column: "role", values: ["office_manager"] },
 ];
 
 export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
