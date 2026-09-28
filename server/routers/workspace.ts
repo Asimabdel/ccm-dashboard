@@ -22,6 +22,8 @@ import * as testing from "../testingDb";
 import * as metrics from "../metricsDb";
 import * as fax from "../faxInbox";
 import * as pf from "../pfFhir";
+import * as pfSync from "../pfSync";
+import * as chart from "../chartDb";
 import { FAX_DOC_TYPE_KEYS } from "../../shared/fax";
 import { TEST_KEYS, type TestKey } from "../../shared/testing";
 import { CALL_OUTCOME_LIST } from "../../shared/phone";
@@ -373,6 +375,50 @@ export const workspaceRouter = router({
       const actor = await actorFor(ctx, "tasks");
       if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can change the Practice Fusion connection." });
       return run(() => pf.savePfConfig(actor, input));
+    }),
+    sync: protectedProcedure.query(async ({ ctx }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can see the sync." });
+      const { lockUntil, statusUrl, files, ...s } = await pfSync.getSyncState();
+      return { ...s, files: files.map((f) => ({ type: f.type, status: f.status, size: f.size, offset: f.offset, lines: f.lines })) };
+    }),
+    test: protectedProcedure.mutation(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "tasks");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can test the connection." });
+      return run(() => pfSync.testConnection(actor));
+    }),
+    setEnabled: protectedProcedure.input(z.boolean()).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "tasks");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can change the sync." });
+      return run(() => pfSync.setSyncEnabled(actor, input));
+    }),
+    importNow: protectedProcedure.input(z.enum(["full", "delta"])).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "tasks");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can start an import." });
+      return run(() => pfSync.requestImport(actor, input));
+    }),
+  }),
+
+  // The Practice Fusion chart copy (read-only). Full for clinical roles; limited for the front desk.
+  chart: router({
+    get: protectedProcedure.input(z.string().regex(/^(p:\d+|s:.{1,110}|f:.{1,120})$/)).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "chartBasic");
+      return run(() => chart.chartFor(actor, input));
+    }),
+    item: protectedProcedure.input(z.number().int().positive()).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "chartBasic");
+      return run(() => chart.chartItem(actor, input));
+    }),
+    note: protectedProcedure.input(z.number().int().positive()).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "chartFull");
+      return run(() => chart.chartNote(actor, input));
+    }),
+    search: protectedProcedure.input(z.string().trim().min(2).max(100)).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "chartBasic");
+      return run(() => chart.chartSearch(actor, input));
+    }),
+    header: protectedProcedure.input(z.string().regex(/^(p:\d+|s:.{1,110}|f:.{1,120})$/)).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "chartBasic");
+      return run(() => chart.chartHeader(actor, input));
     }),
   }),
 

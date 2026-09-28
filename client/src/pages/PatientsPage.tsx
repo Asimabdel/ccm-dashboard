@@ -1,5 +1,6 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
+import { ChartLookup } from "@/components/chart/ChartLookup";
 import { trpc } from "@/lib/trpc";
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
@@ -301,6 +302,7 @@ export default function PatientsPage() {
 
   return (
     <CCMDashboardLayout title="Patient Database">
+      <ChartLookup className="max-w-md mb-3" />
       <div className="flex items-center justify-between flex-wrap gap-3 mb-5">
         <div className="relative flex-1 min-w-[240px] max-w-md">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />

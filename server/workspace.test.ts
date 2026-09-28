@@ -27,6 +27,7 @@ import { ageOn, evaluateTesting, parseSex, recognizeTest } from "../shared/testi
 import { PLANS, checkInsurance, patientLine } from "../shared/insurance";
 import { orderMetrics, progressOf, usualPerDay, weekdaysLeftInMonth } from "../shared/metrics";
 import { isFaxEmail, matchFaxPatient, parseFaxMeta, parseFaxReading } from "../shared/fax";
+import { chartLine, patientInfo, patientOf, sectionType } from "../shared/fhir";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
 
@@ -583,5 +584,29 @@ describe("fax inbox", () => {
   it("fax settings are admin-only and MAs can't see faxes", async () => {
     await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.fax.status()).rejects.toThrow(/admin/);
     await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.fax.list({ filter: "all" })).rejects.toThrow();
+  });
+});
+
+describe("Practice Fusion chart (FHIR)", () => {
+  it("turns records into readable chart lines", () => {
+    expect(chartLine({ resourceType: "Condition", code: { coding: [{ system: "http://snomed.info/sct", code: "44054006", display: "Diabetes mellitus type 2" }] }, clinicalStatus: { coding: [{ code: "active" }] }, onsetDateTime: "2018-03-04T00:00:00Z" }))
+      .toMatchObject({ title: "Diabetes mellitus type 2", status: "active", date: "2018-03-04" });
+    expect(chartLine({ resourceType: "Observation", code: { text: "Hemoglobin A1c" }, valueQuantity: { value: 7.23, unit: "%" }, interpretation: [{ coding: [{ code: "H" }] }], effectiveDateTime: "2026-09-01" }))
+      .toMatchObject({ title: "Hemoglobin A1c", value: "7.23 % (H)", date: "2026-09-01" });
+    expect(chartLine({ resourceType: "Observation", code: { text: "Blood pressure" }, component: [{ valueQuantity: { value: 128, unit: "mmHg" } }, { valueQuantity: { value: 82, unit: "mmHg" } }], effectiveDateTime: "2026-09-02" }).value).toBe("128/82 mmHg");
+    expect(chartLine({ resourceType: "Coverage", payor: [{ display: "Aetna" }], subscriberId: "W123", status: "active" })).toMatchObject({ title: "Aetna", value: "Member ID W123" });
+    expect(sectionType({ resourceType: "Observation", category: [{ coding: [{ code: "vital-signs" }] }] })).toBe("Observation:vital-signs");
+    expect(patientOf({ resourceType: "Coverage", beneficiary: { reference: "Patient/abc" } })).toBe("abc");
+    expect(patientOf({ resourceType: "Observation", subject: { reference: "https://x.example/fhir/Patient/p9" } })).toBe("p9");
+  });
+  it("reads a Patient for matching and contact info", () => {
+    expect(patientInfo({ resourceType: "Patient", id: "p1", name: [{ use: "official", given: ["Jane", "Q"], family: "Testperson" }], birthDate: "1960-01-02", gender: "female",
+      telecom: [{ system: "phone", value: "555-0100", use: "home" }, { system: "email", value: "Jane@Example.com" }], identifier: [{ type: { coding: [{ code: "MR" }] }, value: "MRN77" }] }))
+      .toEqual({ fhirId: "p1", name: "Jane Q Testperson", dob: "1960-01-02", sex: "F", phone: "555-0100", email: "jane@example.com", address: null, mrn: "MRN77" });
+  });
+  it("keeps the front desk to the limited chart and MAs out", async () => {
+    await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.chart.get("p:1")).rejects.toThrow(/access/);
+    await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.chart.note(1)).rejects.toThrow(/access/);
+    await expect(appRouter.createCaller(ctxFor("staff")).workspace.pf.importNow("full")).rejects.toThrow(/admin/);
   });
 });

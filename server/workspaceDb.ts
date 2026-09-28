@@ -3,7 +3,7 @@
 // Access decisions (who may call what) live in server/routers/workspace.ts;
 // the helpers here take an explicit clinic scope so they never widen access.
 import { createHash } from "crypto";
-import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, like, lt, lte, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import {
   appointments,
   appointmentStatusEvents,
@@ -24,6 +24,8 @@ import {
   users,
   workTaskActivities,
   workTasks,
+  fhirPatients,
+  fhirResources,
 } from "../drizzle/schema";
 import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
 import { getDb } from "./db";
@@ -904,6 +906,13 @@ export async function searchSubjects(q: string, limit = 20) {
     if (s.patientId || !nameKey(s.name).includes(needle)) continue;
     out.push({ key: s.key, patientId: null, name: s.name, dob: ymd(s.dob), clinicName: s.clinicId ? clinicName.get(s.clinicId) ?? null : null, phoneLast4: normalizePhone(s.phone)?.slice(-4) ?? null });
   }
+  // Patients who are only in Practice Fusion (chart copy), not on the roster or schedule.
+  const words = q.trim().split(/\s+/).filter((w) => w.length >= 2).slice(0, 3);
+  if (words.length) {
+    const pf = await d.select({ key: fhirPatients.subjectKey, name: fhirPatients.name, dob: fhirPatients.dob, phone: fhirPatients.phone }).from(fhirPatients)
+      .where(and(like(fhirPatients.subjectKey, "f:%"), ...words.map((w) => like(fhirPatients.name, `%${w.replace(/[%_]/g, "")}%`)))).limit(limit);
+    for (const p of pf) if (p.name && nameKey(p.name).includes(needle)) out.push({ key: p.key, patientId: null, name: p.name, dob: p.dob, clinicName: null, phoneLast4: normalizePhone(p.phone)?.slice(-4) ?? null });
+  }
   return out.sort((a, b) => a.name.localeCompare(b.name)).slice(0, limit);
 }
 
@@ -1309,6 +1318,17 @@ export async function loadPeople(actor: WorkspaceActor, clinicId?: number | null
     const { lastSeen, nextBooked } = visitDates(s.visits, now);
     if (!lastSeen) continue; // never actually came in
     out.push({ key: s.key, patientId: null, name: s.name, dob: ymd(s.dob), phone: s.phone, clinicId: s.clinicId, clinicName: s.clinicId ? clinicName.get(s.clinicId) ?? null : null, providerName: s.providerName, conditions: [], insurance: null, lastSeen, nextVisit: nextBooked });
+  }
+  // Active diagnoses from the Practice Fusion chart copy (if synced) count too.
+  const dx = await d.select({ key: fhirResources.subjectKey, title: fhirResources.title }).from(fhirResources)
+    .where(and(eq(fhirResources.section, "Condition"), notInArray(fhirResources.status, ["resolved", "inactive", "remission", "entered-in-error"])));
+  if (dx.length) {
+    const byKey = new Map<string, string[]>();
+    for (const r of dx) if (r.key && r.title) byKey.set(r.key, [...(byKey.get(r.key) ?? []), r.title]);
+    for (const p of out) {
+      const extra = byKey.get(p.key);
+      if (extra) p.conditions = Array.from(new Set([...p.conditions, ...extra]));
+    }
   }
   return out;
 }

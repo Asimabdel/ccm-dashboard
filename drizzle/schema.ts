@@ -11,6 +11,7 @@ import {
   datetime,
   index,
   uniqueIndex,
+  mediumtext,
 } from "drizzle-orm/mysql-core";
 
 /**
@@ -1036,6 +1037,54 @@ export const faxes = mysqlTable("faxes", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (t) => ({
   statusIdx: index("faxes_status_idx").on(t.status, t.receivedAt),
+}));
+
+/**
+ * Practice Fusion patients (FHIR Patient) and how each maps to a MyPCP person
+ * ("p:<id>" roster patient, "s:<name>|<dob>" schedule patient, or "f:<fhirId>" chart-only).
+ */
+export const fhirPatients = mysqlTable("fhirPatients", {
+  fhirId: varchar("fhirId", { length: 128 }).primaryKey(),
+  subjectKey: varchar("subjectKey", { length: 120 }).notNull(),
+  patientId: int("patientId").references(() => patients.id),
+  name: varchar("name", { length: 255 }),
+  dob: varchar("dob", { length: 10 }),
+  sex: mysqlEnum("sex", ["F", "M", "X"]),
+  phone: varchar("phone", { length: 40 }),
+  email: varchar("email", { length: 320 }),
+  address: varchar("address", { length: 255 }),
+  mrn: varchar("mrn", { length: 64 }),
+  syncedAt: datetime("syncedAt").notNull(),
+}, (t) => ({
+  subjectIdx: index("fhirPatients_subject_idx").on(t.subjectKey),
+  nameIdx: index("fhirPatients_name_idx").on(t.name),
+}));
+
+/**
+ * A read-only copy of each chart item from Practice Fusion (one FHIR resource per row): the
+ * readable line the Chart shows, plus the full resource (gzip, base64) for detail views.
+ */
+export const fhirResources = mysqlTable("fhirResources", {
+  id: int("id").autoincrement().primaryKey(),
+  resourceType: varchar("resourceType", { length: 40 }).notNull(),
+  /** Chart grouping, e.g. "Condition", "Observation:laboratory". */
+  section: varchar("section", { length: 60 }).notNull(),
+  fhirId: varchar("fhirId", { length: 128 }).notNull(),
+  patientFhirId: varchar("patientFhirId", { length: 128 }),
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  title: varchar("title", { length: 255 }),
+  value: varchar("value", { length: 255 }),
+  status: varchar("status", { length: 40 }),
+  date: varchar("date", { length: 10 }),
+  code: varchar("code", { length: 80 }),
+  raw: mediumtext("raw"),
+  lastUpdated: datetime("lastUpdated"),
+  syncedAt: datetime("syncedAt").notNull(),
+}, (t) => ({
+  oneResource: uniqueIndex("fhirResources_type_id_unique").on(t.resourceType, t.fhirId),
+  subjectIdx: index("fhirResources_subject_idx").on(t.subjectKey, t.section, t.date),
+  syncedIdx: index("fhirResources_synced_idx").on(t.syncedAt),
+  sectionIdx: index("fhirResources_section_idx").on(t.section, t.subjectKey),
 }));
 
 /** Practice knowledge base (SOPs / workflows). */

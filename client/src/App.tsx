@@ -40,6 +40,7 @@ import PatientEmailsPage from "./pages/PatientEmailsPage";
 import InsuranceCheckerPage from "./pages/InsuranceCheckerPage";
 import TeamProgressPage from "./pages/TeamProgressPage";
 import FaxInboxPage from "./pages/FaxInboxPage";
+import ChartPage from "./pages/ChartPage";
 import { RingCentralPhone } from "./components/phone/RingCentralPhone";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
 
@@ -82,6 +83,7 @@ function Router() {
       <Route path="/insurance" component={InsuranceCheckerPage} />
       <Route path="/team-progress" component={TeamProgressPage} />
       <Route path="/faxes" component={FaxInboxPage} />
+      <Route path="/chart/:key" component={ChartPage} />
       <Route path="/billing" component={BillingPage} />
       <Route path="/follow-ups" component={FollowUpsPage} />
       <Route path="/reports" component={ReportsPage} />

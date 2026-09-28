@@ -35,6 +35,10 @@ export const WORKSPACE_CAPS = {
   emailTriage: ["admin", "staff", "front_desk"],
   /** Full patient record incl. CCM/BHI/APCM detail. MAs get an operational view only. */
   patientFull: ["admin", "staff", "provider", "front_desk"],
+  /** The whole Practice Fusion chart copy (problems, meds, labs, notes…). */
+  chartFull: ["admin", "staff", "provider"],
+  /** The limited chart: contact, insurance, visits and allergies (minimum necessary for the front desk). */
+  chartBasic: ["admin", "staff", "provider", "front_desk"],
 } as const satisfies Record<string, readonly WorkspaceRole[]>;
 
 export type WorkspaceCap = keyof typeof WORKSPACE_CAPS;

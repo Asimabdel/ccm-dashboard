@@ -60,6 +60,11 @@ export const handler = async (event: any, context: any) => {
     const backfill = "skipped" in sync ? null : await runGmailBackfill({ deadline: started + 23_000 });
     return { ...sync, faxBox, faxRead, backfill };
   }
+  // Every 2 minutes: the Practice Fusion chart sync (starts nightly or on request, then loads in chunks).
+  if (event && event.__job === "pf-sync" && !event.requestContext && !event.version) {
+    const { runPfSync } = await import("../pfSync");
+    return runPfSync({ deadline: Date.now() + 18_000 });
+  }
   if (event && event.__job === "ringcentral-sync" && !event.requestContext && !event.version) {
     const { runRingCentralSync } = await import("../ringcentralSync");
     return runRingCentralSync({ maxRequests: 8, maxMs: 22_000, manual: false });

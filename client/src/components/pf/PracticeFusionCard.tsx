@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Copy, Database, Loader2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, Database, Loader2, PlugZap, RefreshCw } from "lucide-react";
 import { Btn, Panel, inputCls } from "@/components/workspace/ui";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -28,6 +28,14 @@ export function PracticeFusionCard() {
     onError: (e) => toast.error(e.message),
   });
   const s = q.data;
+  const connected = !!(s?.config.baseUrl && s.config.clientId);
+  const sync = trpc.workspace.pf.sync.useQuery(undefined, { enabled: connected, refetchInterval: (x) => (x.state.data && x.state.data.phase !== "idle" ? 10_000 : 60_000) });
+  const onError = (e: { message: string }) => toast.error(e.message);
+  const test = trpc.workspace.pf.test.useMutation({ onSuccess: (r) => toast.success(`Connected to Practice Fusion (FHIR ${r.fhirVersion ?? "R4"}).`), onError });
+  const enable = trpc.workspace.pf.setEnabled.useMutation({ onSuccess: () => { void utils.workspace.pf.invalidate(); }, onError });
+  const importNow = trpc.workspace.pf.importNow.useMutation({ onSuccess: () => { void utils.workspace.pf.invalidate(); toast.success("Import requested. It starts within 2 minutes and runs in the background."); }, onError });
+  const st = sync.data;
+  const loadedFiles = st?.files.filter((f) => f.status === "loaded").length ?? 0;
 
   return (
     <Panel
@@ -51,6 +59,29 @@ export function PracticeFusionCard() {
               <Btn variant="secondary" disabled={save.isPending} onClick={() => save.mutate(form)}>{save.isPending && <Loader2 size={14} className="animate-spin" />} Save</Btn>
               <p className="text-xs text-slate-500">No password or secret to paste: MyPCP signs in with its own security key.</p>
             </div>
+            {connected && (
+              <div className="rounded-xl border border-slate-200 dark:border-slate-700 px-3 py-3 space-y-2.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Btn size="sm" variant="secondary" disabled={test.isPending} onClick={() => test.mutate()}>{test.isPending ? <Loader2 size={13} className="animate-spin" /> : <PlugZap size={13} />} Test connection</Btn>
+                  <Btn size="sm" disabled={importNow.isPending || (!!st && st.phase !== "idle" && st.phase !== "error")} onClick={() => { if (confirm("Copy every patient's chart from Practice Fusion now? The first import can take a few hours; it runs in the background.")) importNow.mutate("full"); }}>
+                    <RefreshCw size={13} /> Import all charts now
+                  </Btn>
+                  <label className="ml-1 flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={!!st?.enabled} disabled={!st || enable.isPending} onChange={(e) => enable.mutate(e.target.checked)} /> Update every night (2 am)
+                  </label>
+                </div>
+                {st && (
+                  <div className="text-xs text-slate-600 dark:text-slate-300 space-y-1">
+                    {st.phase === "exporting" && <p className="flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> Practice Fusion is preparing the export{st.progress ? ` (${st.progress})` : ""}…</p>}
+                    {st.phase === "downloading" && <p className="flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> Downloading {st.files.length} files…</p>}
+                    {st.phase === "loading" && <p className="flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> Loading: {loadedFiles} of {st.files.length} files done, {Object.values(st.counts).reduce((a, b) => a + b, 0).toLocaleString()} records so far</p>}
+                    {st.phase === "error" && <p className="flex items-start gap-1.5 text-rose-700"><AlertTriangle size={12} className="mt-0.5 shrink-0" /> {st.lastError}</p>}
+                    {st.lastSuccessAt && <p className="flex items-center gap-1.5"><CheckCircle2 size={12} className="text-emerald-600" /> Last update {new Date(st.lastSuccessAt).toLocaleString()} ({st.mode === "delta" ? "changes only" : "full"}){st.phase === "idle" && Object.keys(st.counts).length ? `: ${Object.values(st.counts).reduce((a, b) => a + b, 0).toLocaleString()} records` : ""}</p>}
+                    {!st.lastSuccessAt && st.phase === "idle" && <p>No import yet. Test the connection, then import all charts.</p>}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <div className="lg:col-span-2">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">One-time setup</p>
