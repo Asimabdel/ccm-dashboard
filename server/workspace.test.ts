@@ -28,6 +28,7 @@ import { PLANS, checkInsurance, patientLine } from "../shared/insurance";
 import { orderMetrics, progressOf, usualPerDay, weekdaysLeftInMonth } from "../shared/metrics";
 import { isFaxEmail, matchFaxPatient, parseFaxMeta, parseFaxReading } from "../shared/fax";
 import { chartLine, patientInfo, patientOf, sectionType } from "../shared/fhir";
+import { clinicForLocation, parseBookingEmail, parsePreferred } from "../shared/booking";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
 
@@ -608,5 +609,32 @@ describe("Practice Fusion chart (FHIR)", () => {
     await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.chart.get("p:1")).rejects.toThrow(/access/);
     await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.chart.note(1)).rejects.toThrow(/access/);
     await expect(appRouter.createCaller(ctxFor("staff")).workspace.pf.importNow("full")).rejects.toThrow(/admin/);
+  });
+});
+
+describe("website bookings", () => {
+  const sep27 = new Date("2026-09-27T20:00:00Z"); // 3 pm in Houston
+  it("reads the preferred time the website sends (English and Spanish)", () => {
+    expect(parsePreferred("Tue, Sep 29 · 10:00 AM", sep27)).toEqual({ date: "2026-09-29", time: "10:00 AM", spanish: false });
+    expect(parsePreferred("mar, 29 sept · 2:30 PM", sep27)).toEqual({ date: "2026-09-29", time: "2:30 PM", spanish: true });
+    expect(parsePreferred("Fri, Jan 8 · 9:00 AM", sep27).date).toBe("2027-01-08"); // no year: the next one
+    expect(parsePreferred("", sep27)).toEqual({ date: null, time: null, spanish: false });
+  });
+  it("maps website locations to MyPCP clinics", () => {
+    const clinics = [{ id: 1, name: "Katy" }, { id: 2, name: "Cypress" }, { id: 3, name: "Highland Knolls" }, { id: 4, name: "Westheimer" }];
+    expect(clinicForLocation("Katy - Provincial Blvd", clinics)).toBe(1);
+    expect(clinicForLocation("Katy - Highland Knolls", clinics)).toBe(3);
+    expect(clinicForLocation("Richmond Ave", clinics)).toBe(4);
+    expect(clinicForLocation("Cypress", clinics)).toBe(2);
+    expect(clinicForLocation("", clinics)).toBeNull();
+  });
+  it("reads earlier bookings back out of the booking emails", () => {
+    const text = "New appointment request from mypcpdr.com\n\nName:      Pat Example\nPhone:     (281) 555-0101\nLocation:  Cypress\nProvider:  first available\nVisit:     New patient visit\nPreferred: Wed, Sep 30 · 11:00 AM\n";
+    expect(parseBookingEmail(text)).toEqual({ name: "Pat Example", phone: "(281) 555-0101", location: "Cypress", provider: null, visitType: "New patient visit", preferred: "Wed, Sep 30 · 11:00 AM" });
+    expect(parseBookingEmail("Name: X\nPhone: 123")).toBeNull();
+  });
+  it("front desk can work bookings; MAs can't; loading old ones is admin-only", async () => {
+    await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.bookings.list({ filter: "open" })).rejects.toThrow(/access/);
+    await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.bookings.importEarlier({})).rejects.toThrow(/admin/);
   });
 });

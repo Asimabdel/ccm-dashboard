@@ -254,6 +254,18 @@ export async function gmailAttachment(slot: MailSlot, messageId: string, attachm
   return Buffer.from((r.data ?? "").replace(/-/g, "+").replace(/_/g, "/"), "base64");
 }
 
+/** Search the practice mailbox (Gmail query syntax); one page of message ids. */
+export async function gmailSearch(q: string, pageToken?: string | null) {
+  const r = await gmailGet<{ messages?: { id: string }[]; nextPageToken?: string }>(`/messages?q=${encodeURIComponent(q)}&maxResults=100${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`);
+  return { ids: (r.messages ?? []).map((m) => m.id), next: r.nextPageToken ?? null };
+}
+
+/** One message's date and plain text (practice mailbox). */
+export async function gmailMessageText(id: string) {
+  const m = await gmailGet<GmailMessage>(`/messages/${encodeURIComponent(id)}?format=full`);
+  return { receivedAt: new Date(Number(m.internalDate ?? Date.now())), text: bodyText(m.payload) };
+}
+
 export async function mailboxAddress(slot: MailSlot) {
   return (await config(slot)).mailbox;
 }

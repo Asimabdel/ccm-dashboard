@@ -1087,6 +1087,39 @@ export const fhirResources = mysqlTable("fhirResources", {
   sectionIdx: index("fhirResources_section_idx").on(t.section, t.subjectKey),
 }));
 
+/** Appointment requests from the mypcpdr.com booking wizard (the front desk calls to confirm). */
+export const bookingRequests = mysqlTable("bookingRequests", {
+  id: int("id").autoincrement().primaryKey(),
+  receivedAt: datetime("receivedAt").notNull(),
+  /** website | email (loaded from an earlier booking email) */
+  source: varchar("source", { length: 20 }).notNull(),
+  name: varchar("name", { length: 120 }).notNull(),
+  phone: varchar("phone", { length: 30 }).notNull(),
+  phoneKey: varchar("phoneKey", { length: 10 }),
+  location: varchar("location", { length: 60 }),
+  clinicId: int("clinicId").references(() => clinics.id),
+  provider: varchar("provider", { length: 80 }),
+  visitType: varchar("visitType", { length: 80 }),
+  preferred: varchar("preferred", { length: 100 }),
+  preferredDate: varchar("preferredDate", { length: 10 }),
+  spanish: boolean("spanish").default(false).notNull(),
+  status: mysqlEnum("status", ["new", "no_answer", "scheduled", "not_booked", "spam", "earlier"]).notNull(),
+  attempts: int("attempts").default(0).notNull(),
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  patientId: int("patientId").references(() => patients.id),
+  patientName: varchar("patientName", { length: 255 }),
+  taskId: int("taskId"),
+  assignedUserId: int("assignedUserId").references(() => users.id),
+  firstContactAt: datetime("firstContactAt"),
+  handledByUserId: int("handledByUserId").references(() => users.id),
+  handledAt: datetime("handledAt"),
+  note: text("note"),
+  gmailId: varchar("gmailId", { length: 64 }).unique(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  statusIdx: index("bookingRequests_status_idx").on(t.status, t.receivedAt),
+}));
+
 /** Practice knowledge base (SOPs / workflows). */
 export const playbooks = mysqlTable("playbooks", {
   id: int("id").autoincrement().primaryKey(),

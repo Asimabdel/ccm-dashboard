@@ -60,6 +60,11 @@ export const handler = async (event: any, context: any) => {
     const backfill = "skipped" in sync ? null : await runGmailBackfill({ deadline: started + 23_000 });
     return { ...sync, faxBox, faxRead, backfill };
   }
+  // A booking from the mypcpdr.com wizard, handed over by the clinic-booking-mailer Lambda (IAM-only).
+  if (event && event.__job === "website-booking" && !event.requestContext && !event.version) {
+    const { ingestBooking } = await import("../bookingsDb");
+    return ingestBooking(event.booking ?? {});
+  }
   // Every 2 minutes: the Practice Fusion chart sync (starts nightly or on request, then loads in chunks).
   if (event && event.__job === "pf-sync" && !event.requestContext && !event.version) {
     const { runPfSync } = await import("../pfSync");

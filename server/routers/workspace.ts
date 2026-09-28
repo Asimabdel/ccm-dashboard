@@ -24,6 +24,7 @@ import * as fax from "../faxInbox";
 import * as pf from "../pfFhir";
 import * as pfSync from "../pfSync";
 import * as chart from "../chartDb";
+import * as bookings from "../bookingsDb";
 import { FAX_DOC_TYPE_KEYS } from "../../shared/fax";
 import { TEST_KEYS, type TestKey } from "../../shared/testing";
 import { CALL_OUTCOME_LIST } from "../../shared/phone";
@@ -395,6 +396,29 @@ export const workspaceRouter = router({
       const actor = await actorFor(ctx, "tasks");
       if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can start an import." });
       return run(() => pfSync.requestImport(actor, input));
+    }),
+  }),
+
+  // Website bookings (mypcpdr.com booking wizard): call to confirm, record how it went.
+  bookings: router({
+    list: protectedProcedure.input(z.object({ filter: z.enum(["open", "scheduled", "closed", "earlier", "all"]).default("open") })).query(async ({ ctx, input }) => {
+      await actorFor(ctx, "emailTriage");
+      return bookings.listBookings(input.filter);
+    }),
+    stats: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "emailTriage");
+      return bookings.bookingStats();
+    }),
+    setStatus: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), status: z.enum(["no_answer", "scheduled", "not_booked", "spam"]), note: z.string().max(500).nullish() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "emailTriage");
+        return run(() => bookings.setBookingStatus(actor, input));
+      }),
+    importEarlier: protectedProcedure.input(z.object({ pageToken: z.string().max(200).nullish() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "emailTriage");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can load earlier bookings." });
+      return run(() => bookings.importEarlierBookings(actor, input));
     }),
   }),
 

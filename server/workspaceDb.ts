@@ -1348,6 +1348,23 @@ export async function buildNameDobIndex(): Promise<Map<string, { key: string; pa
   return out;
 }
 
+/** The least-busy front-desk person at a clinic; else that clinic's front-desk queue. */
+export async function frontDeskFor(clinicId: number | null) {
+  const d = await db();
+  if (clinicId) {
+    const desk = await d.select({ id: users.id }).from(users)
+      .innerJoin(staffProfiles, eq(staffProfiles.userId, users.id))
+      .where(and(eq(users.role, "front_desk"), eq(staffProfiles.homeClinicId, clinicId), eq(staffProfiles.active, true)));
+    if (desk.length) {
+      const open = await d.select({ userId: workTasks.assignedUserId }).from(workTasks)
+        .where(and(inArray(workTasks.assignedUserId, desk.map((x) => x.id)), inArray(workTasks.status, OPEN_TASK_STATUSES)));
+      const load = (id: number) => open.filter((o) => o.userId === id).length;
+      return { assignedUserId: desk.map((x) => x.id).sort((a, b) => load(a) - load(b) || a - b)[0]! as number | null, assignedRole: null as string | null };
+    }
+  }
+  return { assignedUserId: null as number | null, assignedRole: "front_desk" as string | null };
+}
+
 /** Care coordinator first; else the least-busy front-desk person at the patient's clinic; else that clinic's front-desk queue. */
 export async function careTeamAssignee(subjectKey: string, opts: { skipCoordinator?: boolean } = {}) {
   const d = await db();
