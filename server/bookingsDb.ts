@@ -102,7 +102,8 @@ export async function bookingStats() {
   const since = new Date(Date.now() - 30 * 86_400_000);
   const rows = await d.select({ status: bookingRequests.status, receivedAt: bookingRequests.receivedAt, firstContactAt: bookingRequests.firstContactAt, source: bookingRequests.source })
     .from(bookingRequests).where(gte(bookingRequests.receivedAt, since));
-  const web = rows.filter((r) => r.source === "website");
+  // Spam and tests don't count.
+  const web = rows.filter((r) => r.source === "website" && r.status !== "spam");
   const mins = web.filter((r) => r.firstContactAt).map((r) => (r.firstContactAt!.getTime() - r.receivedAt.getTime()) / 60000).sort((a, b) => a - b);
   return {
     waiting: web.filter((r) => OPEN_BOOKING.includes(r.status as BookingStatus)).length,
@@ -121,7 +122,7 @@ export async function setBookingStatus(actor: WorkspaceActor, input: { id: numbe
   const now = new Date();
   const note = input.note?.trim() ? `${b.note ? `${b.note}\n` : ""}${now.toLocaleDateString("en-US", { timeZone: "America/Chicago" })} ${actor.name}: ${input.note.trim()}`.slice(0, 4000) : b.note;
   await d.update(bookingRequests).set({
-    status: input.status, attempts: input.status === "no_answer" ? b.attempts + 1 : b.attempts, firstContactAt: b.firstContactAt ?? now,
+    status: input.status, attempts: input.status === "no_answer" ? b.attempts + 1 : b.attempts, firstContactAt: b.firstContactAt ?? (input.status === "spam" ? null : now),
     handledByUserId: actor.id, handledAt: now, note,
   }).where(eq(bookingRequests.id, b.id));
   if (b.taskId) {
