@@ -35,6 +35,16 @@ export function createApp(): Express {
       res.redirect("/integrations?gmail=" + encodeURIComponent("Connecting the mailbox failed. Try again."));
     }
   });
+  // Practice Fusion checks MyPCP's sign-in against this public key (SMART Backend Services).
+  app.get("/.well-known/jwks.json", async (_req, res) => {
+    try {
+      const { getJwks } = await import("../pfFhir");
+      res.set("Cache-Control", "public, max-age=300").json(await getJwks());
+    } catch (e) {
+      console.error("[jwks] failed:", (e as Error).message);
+      res.status(503).json({ error: "unavailable" });
+    }
+  });
   // tRPC API
   app.use(
     "/api/trpc",

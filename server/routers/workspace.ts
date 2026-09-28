@@ -21,6 +21,7 @@ import * as gmail from "../gmailSync";
 import * as testing from "../testingDb";
 import * as metrics from "../metricsDb";
 import * as fax from "../faxInbox";
+import * as pf from "../pfFhir";
 import { FAX_DOC_TYPE_KEYS } from "../../shared/fax";
 import { TEST_KEYS, type TestKey } from "../../shared/testing";
 import { CALL_OUTCOME_LIST } from "../../shared/phone";
@@ -359,6 +360,19 @@ export const workspaceRouter = router({
     ignore: protectedProcedure.input(z.number().int().positive()).mutation(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "emailTriage");
       return run(() => gmail.ignoreEmailSender(actor, input));
+    }),
+  }),
+
+  // Practice Fusion (read-only FHIR bulk export) connection.
+  pf: router({
+    status: protectedProcedure.input(z.object({ origin: z.string().url() })).query(async ({ ctx, input }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can manage the Practice Fusion connection." });
+      return pf.pfStatus(new URL(input.origin).origin);
+    }),
+    save: protectedProcedure.input(z.object({ baseUrl: z.string().max(300), clientId: z.string().max(200) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "tasks");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can change the Practice Fusion connection." });
+      return run(() => pf.savePfConfig(actor, input));
     }),
   }),
 
