@@ -71,6 +71,8 @@ function ClinicPicker() {
  * header (`pageTitle={false}`); `clinicPicker` adds the clinic filter to the top bar.
  */
 export function CCMDashboardLayout({ children, title, clinicPicker = false, pageTitle = true }: { children: React.ReactNode; title?: string; clinicPicker?: boolean; pageTitle?: boolean }) {
+  // Browser tab: "Fax inbox · MyPCP".
+  useEffect(() => { document.title = title ? `${title} · MyPCP` : "MyPCP"; }, [title]);
   const { user, logout, refresh } = useAuth();
   const { theme, toggleTheme, switchable } = useTheme();
   const [location, setLocation] = useLocation();
