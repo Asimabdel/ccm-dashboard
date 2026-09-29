@@ -18,9 +18,10 @@ const ALLOWED = [
   { host: "oauth2.googleapis.com", path: "/token" }, // Gmail: OAuth token exchange/refresh
   { host: "gmail.googleapis.com", path: "/gmail/v1/users/me/" }, // Gmail API (read-only scope)
   { hostSuffix: ".practicefusion.com", path: "/" }, // Practice Fusion FHIR (read-only bulk export)
+  { host: "api.availity.com", path: "/availity/v1/" }, // Availity: insurance eligibility (270/271) + payer list
 ];
-const FORWARD_HEADERS = ["authorization", "content-type", "accept", "prefer"];
-const RETURN_HEADERS = ["content-type", "retry-after", "content-location", "x-progress", "expires"];
+const FORWARD_HEADERS = ["authorization", "content-type", "accept", "prefer", "x-api-mock-scenario-id"];
+const RETURN_HEADERS = ["content-type", "retry-after", "content-location", "x-progress", "expires", "x-api-mock-response"];
 const MAX_BODY = 5_500_000; // Lambda responses are capped at 6 MB
 const PART = 16 * 1024 * 1024;
 

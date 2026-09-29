@@ -5,6 +5,9 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { PageHeader, Panel, SectionLabel, inputCls } from "@/components/workspace/ui";
 import { cn } from "@/lib/utils";
+import { useUrlParams, useWorkspace } from "@/components/workspace/useWorkspace";
+import { ScheduleCoverage } from "@/components/insurance/ScheduleCoverage";
+import { CalendarCheck } from "lucide-react";
 import {
   CLINIC_PHONE, PLANS, PLAN_GROUP_LABELS, SELF_PAY, checkInsurance, insNorm, patientLine,
   type InsuranceAnswer, type PlanGroup,
@@ -22,6 +25,9 @@ const RESULT_STYLE = {
  */
 export default function InsuranceCheckerPage() {
   useAuth({ redirectOnUnauthenticated: true });
+  const { caps } = useWorkspace();
+  const [params, setParams] = useUrlParams();
+  const view = params.get("tab") === "schedule" && caps?.eligibility ? "schedule" : "plans";
   const [q, setQ] = useState("");
   const [lang, setLang] = useState<"en" | "es">("en");
   const answer = checkInsurance(q);
@@ -31,6 +37,17 @@ export default function InsuranceCheckerPage() {
   return (
     <CCMDashboardLayout title="Insurance checker" pageTitle={false}>
       <PageHeader title="Insurance checker" subtitle="Do we take this plan? Same list and answers as the checker on mypcpdr.com." />
+      {caps?.eligibility && (
+        <div className="mb-5 flex gap-1 overflow-x-auto border-b border-slate-200 dark:border-slate-700" role="tablist">
+          {([{ k: "plans", label: "Do we take this plan?", icon: ShieldCheck }, { k: "schedule", label: "Next clinic day's coverage", icon: CalendarCheck }] as const).map((t) => (
+            <button key={t.k} role="tab" aria-selected={view === t.k} onClick={() => setParams({ tab: t.k === "plans" ? null : t.k })}
+              className={cn("-mb-px flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium", view === t.k ? "border-brand text-slate-900 dark:text-slate-50" : "border-transparent text-slate-500 hover:text-slate-800")}>
+              <t.icon size={15} /> {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {view === "schedule" ? <ScheduleCoverage /> : (
       <div className="grid lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 space-y-5">
           <Panel>
@@ -87,6 +104,7 @@ export default function InsuranceCheckerPage() {
           </Panel>
         </div>
       </div>
+      )}
     </CCMDashboardLayout>
   );
 }

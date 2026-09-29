@@ -1232,6 +1232,54 @@ export const intakeEvents = mysqlTable("intakeEvents", {
   packetIdx: index("intakeEvents_packet_idx").on(t.packetId, t.at),
 }));
 
+/** A patient's insurance as MyPCP knows it (for eligibility checks): Availity payer + member ID. */
+export const coverageOnFile = mysqlTable("coverageOnFile", {
+  subjectKey: varchar("subjectKey", { length: 120 }).primaryKey(),
+  patientId: int("patientId").references(() => patients.id),
+  /** Availity payer ID (from Availity's payer list). */
+  payerId: varchar("payerId", { length: 40 }).notNull(),
+  payerName: varchar("payerName", { length: 160 }),
+  memberId: varchar("memberId", { length: 60 }).notNull(),
+  groupNumber: varchar("groupNumber", { length: 60 }),
+  /** manual | check */
+  source: varchar("source", { length: 20 }).notNull(),
+  updatedByUserId: int("updatedByUserId").references(() => users.id),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+/** Eligibility checks sent to Availity (by staff, or the nightly check of the next day's schedule). */
+export const eligibilityChecks = mysqlTable("eligibilityChecks", {
+  id: int("id").autoincrement().primaryKey(),
+  subjectKey: varchar("subjectKey", { length: 120 }).notNull(),
+  patientId: int("patientId").references(() => patients.id),
+  patientName: varchar("patientName", { length: 255 }),
+  payerId: varchar("payerId", { length: 40 }).notNull(),
+  payerName: varchar("payerName", { length: 160 }),
+  memberId: varchar("memberId", { length: 60 }).notNull(),
+  /** Date of service asked about (YYYY-MM-DD). */
+  asOfDate: varchar("asOfDate", { length: 10 }).notNull(),
+  /** manual | nightly */
+  trigger: varchar("trigger", { length: 10 }).notNull(),
+  /** demo | production */
+  mode: varchar("mode", { length: 12 }).notNull(),
+  clinicId: int("clinicId").references(() => clinics.id),
+  availityId: varchar("availityId", { length: 64 }),
+  status: mysqlEnum("status", ["pending", "complete", "error"]).default("pending").notNull(),
+  statusCode: varchar("statusCode", { length: 4 }),
+  /** CoverageSummary (shared/eligibility.ts). */
+  summary: json("summary"),
+  /** Availity's full answer, gzip + base64. */
+  raw: mediumtext("raw"),
+  error: varchar("error", { length: 500 }),
+  requestedByUserId: int("requestedByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  subjectIdx: index("eligibilityChecks_subject_idx").on(t.subjectKey, t.createdAt),
+  dateIdx: index("eligibilityChecks_date_idx").on(t.asOfDate, t.trigger),
+  pendingIdx: index("eligibilityChecks_status_idx").on(t.status, t.createdAt),
+}));
+
 /** Practice knowledge base (SOPs / workflows). */
 export const playbooks = mysqlTable("playbooks", {
   id: int("id").autoincrement().primaryKey(),

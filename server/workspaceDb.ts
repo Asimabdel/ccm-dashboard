@@ -896,7 +896,7 @@ interface ScheduleSubject {
 // minute per Lambda instance. Imports and flow-board moves clear it.
 const scheduleCache = new Map<string, { at: number; subjects: Map<string, ScheduleSubject> }>();
 
-const subjectKeyFor = (patientId: number | null, name: string, dob: Date | null) => (patientId ? `p:${patientId}` : `s:${nameKey(name)}|${ymd(dob) ?? ""}`);
+export const subjectKeyFor = (patientId: number | null, name: string, dob: Date | null) => (patientId ? `p:${patientId}` : `s:${nameKey(name)}|${ymd(dob) ?? ""}`);
 
 export async function loadScheduleSubjects(): Promise<Map<string, ScheduleSubject>> {
   const hit = scheduleCache.get("all");

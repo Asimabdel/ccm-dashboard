@@ -2,7 +2,8 @@
 // so requests go through the allowlist-only relay Lambda (infra/ringcentral-relay) over the
 // private Lambda VPC endpoint. Locally (dev/tests) it's a plain fetch.
 //
-// The relay only allows: RingCentral's API, Google's OAuth token endpoint and the Gmail API.
+// The relay only allows: RingCentral's API, Google's OAuth token endpoint and the Gmail API,
+// Practice Fusion's FHIR API, and Availity's API (insurance eligibility).
 const RELAY_FUNCTION = "ccm-ringcentral-relay";
 
 let lambdaClient: import("@aws-sdk/client-lambda").LambdaClient | null = null;

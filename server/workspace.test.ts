@@ -31,6 +31,7 @@ import { orderMetrics, progressOf, usualPerDay, weekdaysLeftInMonth } from "../s
 import { isFaxEmail, matchFaxPatient, parseFaxMeta, parseFaxReading } from "../shared/fax";
 import { chartLine, patientInfo, patientOf, sectionType } from "../shared/fhir";
 import { clinicForLocation, parseBookingEmail, parsePreferred } from "../shared/booking";
+import { pcpIsOurs, splitName, summarizeCoverage } from "../shared/eligibility";
 import { MEDICAL_INTAKE, agreementIn, answerText, cleanAnswers, dobFromParts, inviteText, langFromPreferred, missingInSection, stableStringify, textBlocks } from "../shared/intake";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
@@ -731,5 +732,51 @@ describe("office manager (admin for one office)", () => {
     await expect(om.patients.getById(1)).rejects.toThrow(/access/);
     await expect(om.admin.stats()).rejects.toThrow(/access/);
     await expect(om.staff.all()).rejects.toThrow(/access/);
+  });
+});
+
+describe("insurance eligibility (Availity)", () => {
+  const answer = {
+    id: "abc", statusCode: "4", payer: { payerId: "TEST", name: "Sample Health Plan" },
+    plans: [{
+      status: "Active Coverage", statusCode: "1", groupName: "Sample Advantage HMO", groupNumber: "G123", insuranceType: "Medicare Advantage",
+      eligibilityStartDate: "2026-01-01", eligibilityEndDate: "2026-12-31",
+      primaryCareProvider: { firstName: "Sarah", lastName: "Chen" },
+      benefits: [
+        { name: "Professional (Physician) Visit - Office", amounts: { inNetwork: { copayments: [{ amount: "20" }], coinsurance: [{ percent: "0.2" }] }, outOfNetwork: { copayments: [{ amount: "75" }] } } },
+        { name: "Health Benefit Plan Coverage", amounts: { inNetwork: { deductibles: [{ level: "individual", total: "1500", remaining: "350.5" }] } } },
+        { name: "Specialist", amounts: { inNetwork: { copayments: [{ amount: "45" }] } } },
+      ],
+    }],
+  };
+  it("reads active, plan, office copay (in-network), deductible left, coinsurance and PCP", () => {
+    const s = summarizeCoverage(answer);
+    expect(s.active).toBe(true);
+    expect(s.payerName).toBe("Sample Health Plan");
+    expect(s.plans[0]).toMatchObject({ name: "Sample Advantage HMO", groupNumber: "G123", start: "2026-01-01", end: "2026-12-31" });
+    expect(s.officeCopay).toBe("$20");
+    expect(s.deductibleRemaining).toBe("$350.50");
+    expect(s.coinsurance).toBe("20%");
+    expect(s.pcp).toBe("Sarah Chen");
+    expect(s.highlights).toContain("Specialist: copay $45");
+  });
+  it("inactive, unknown and error answers", () => {
+    expect(summarizeCoverage({ plans: [{ status: "Inactive", statusCode: "6" }] }).active).toBe(false);
+    expect(summarizeCoverage({ plans: [] }).active).toBeNull();
+    expect(summarizeCoverage({ statusCode: "19", validationMessages: [{ field: "memberId", errorMessage: "Invalid member ID" }] }).messages).toEqual(["Invalid member ID"]);
+  });
+  it("splits names the way payers want them", () => {
+    expect(splitName("DOE, JANE M")).toEqual({ first: "JANE", last: "DOE" });
+    expect(splitName("Jane Marie Doe")).toEqual({ first: "Jane", last: "Doe" });
+  });
+  it("tells whether the PCP on file is one of ours", () => {
+    expect(pcpIsOurs("SARAH CHEN MD", ["Dr. Sarah Chen"])).toBe(true);
+    expect(pcpIsOurs("John Smith", ["Dr. Sarah Chen"])).toBe(false);
+    expect(pcpIsOurs(null, ["Dr. Sarah Chen"])).toBeNull();
+  });
+  it("MAs and billing can't run eligibility checks", () => {
+    expect(can("front_desk", "eligibility")).toBe(true);
+    expect(can("medical_assistant", "eligibility")).toBe(false);
+    expect(can("billing", "eligibility")).toBe(false);
   });
 });

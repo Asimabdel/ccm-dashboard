@@ -31,6 +31,8 @@ export const WORKSPACE_CAPS = {
   playbooksView: ["admin", "office_manager", "staff", "provider", "billing", "front_desk", "medical_assistant"],
   /** Create / edit playbooks. */
   playbooksEdit: ["admin"],
+  /** Check a patient's insurance with Availity (eligibility). */
+  eligibility: ["admin", "office_manager", "staff", "provider", "front_desk"],
   /** Website booking requests (call to confirm). */
   bookings: ["admin", "office_manager", "staff", "front_desk"],
   /** Triage patient emails from the practice mailbox (link a sender to a patient). */

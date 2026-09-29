@@ -60,6 +60,11 @@ export const handler = async (event: any, context: any) => {
     const backfill = "skipped" in sync ? null : await runGmailBackfill({ deadline: started + 23_000 });
     return { ...sync, faxBox, faxRead, backfill };
   }
+  // Evenings (EventBridge): check the next clinic day's patients' insurance with Availity.
+  if (event && event.__job === "eligibility-nightly" && !event.requestContext && !event.version) {
+    const { runNightly } = await import("../availityDb");
+    return runNightly({ deadline: Date.now() + 25_000, date: typeof event.date === "string" ? event.date : undefined });
+  }
   // Make someone an office manager for their Workforce home clinic (IAM-only; dry run unless apply).
   if (event && event.__job === "office-manager" && !event.requestContext && !event.version) {
     const { makeOfficeManager } = await import("../workspaceDb");

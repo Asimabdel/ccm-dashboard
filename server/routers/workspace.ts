@@ -26,6 +26,7 @@ import * as pfSync from "../pfSync";
 import * as chart from "../chartDb";
 import * as bookings from "../bookingsDb";
 import * as intake from "../intakeDb";
+import * as availity from "../availityDb";
 import { INTAKE_LANGS } from "../../shared/intake";
 import { FAX_DOC_TYPE_KEYS } from "../../shared/fax";
 import { TEST_KEYS, type TestKey } from "../../shared/testing";
@@ -413,6 +414,72 @@ export const workspaceRouter = router({
       const actor = await actorFor(ctx, "tasks");
       if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can start an import." });
       return run(() => pfSync.requestImport(actor, input));
+    }),
+  }),
+
+  // Insurance eligibility through Availity (Patient 360 checks + the nightly check of the next day).
+  eligibility: router({
+    status: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "eligibility");
+      const s = await availity.availityStatus();
+      return ctx.user.role === "admin" ? s : { configured: s.configured, mode: s.mode, nightly: s.nightly };
+    }),
+    saveConfig: protectedProcedure
+      .input(z.object({ clientId: z.string().max(200).nullish(), clientSecret: z.string().max(500).nullish(), mode: z.enum(["demo", "production"]), npi: z.string().max(20), orgName: z.string().max(60), nightly: z.boolean() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "eligibility");
+        if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can change the Availity connection." });
+        return run(() => availity.saveAvailityConfig(actor, input));
+      }),
+    test: protectedProcedure.mutation(async ({ ctx }) => {
+      await actorFor(ctx, "eligibility");
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can test the Availity connection." });
+      return run(() => availity.testAvaility());
+    }),
+    payers: protectedProcedure.input(z.object({ q: z.string().max(80) })).query(async ({ ctx, input }) => {
+      await actorFor(ctx, "eligibility");
+      return run(() => availity.searchPayers(input.q));
+    }),
+    defaults: protectedProcedure.input(z.object({ subjectKey: z.string().min(3).max(120) })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "eligibility");
+      return run(() => availity.checkDefaults(actor, input.subjectKey));
+    }),
+    check: protectedProcedure
+      .input(z.object({
+        subjectKey: z.string().min(3).max(120),
+        payerId: z.string().trim().min(1).max(40),
+        payerName: z.string().max(160).nullish(),
+        memberId: z.string().trim().min(1).max(60),
+        groupNumber: z.string().max(60).nullish(),
+        firstName: z.string().trim().min(1).max(60),
+        lastName: z.string().trim().min(1).max(60),
+        dob: dateStr,
+        sex: z.enum(["F", "M", "X", "U"]).nullish(),
+        asOfDate: dateStr.nullish(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "eligibility");
+        return run(() => availity.runCheck(actor, input));
+      }),
+    refresh: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "eligibility");
+      return run(() => availity.getCheck(actor, input.id, true));
+    }),
+    history: protectedProcedure.input(z.object({ subjectKey: z.string().min(3).max(120) })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "eligibility");
+      return run(() => availity.checkHistory(actor, input.subjectKey));
+    }),
+    raw: protectedProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "eligibility");
+      return run(() => availity.checkRaw(actor, input.id));
+    }),
+    removeCoverage: protectedProcedure.input(z.object({ subjectKey: z.string().min(3).max(120) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "eligibility");
+      return run(() => availity.removeCoverage(actor, input.subjectKey));
+    }),
+    schedule: protectedProcedure.input(z.object({ date: dateStr.nullish() })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "eligibility");
+      return run(() => availity.scheduleCoverage(actor, input.date));
     }),
   }),
 
