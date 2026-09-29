@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import {
-  AlertTriangle, BookOpen, CalendarClock, Check, CheckCircle2, ClipboardSignature, Clock, Copy, FileCheck2, FilePlus2, Image as ImageIcon, Loader2, Mail,
-  MessageSquareText, Plus, Printer, Send, XCircle,
+  AlertTriangle, BookOpen, CalendarClock, Check, CheckCircle2, ClipboardSignature, Clock, Copy, FileCheck2, FilePlus2, Globe, Image as ImageIcon, Link2, Loader2, Mail,
+  MessageSquareText, Plus, Printer, Search, Send, XCircle,
 } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
@@ -16,7 +16,8 @@ import { chartHref } from "@/components/chart/ChartLookup";
 import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import {
-  INTAKE_LANGS, LANG_LABELS, MEDICAL_INTAKE, PACKET_STATUS_LABELS, answerText, isVisible, textBlocks, type Answers, type IntakeLang, type PacketStatus,
+  CONSENT_KINDS, CONSENT_LABELS, INTAKE_LANGS, LANG_LABELS, MEDICAL_INTAKE, PACKET_STATUS_LABELS, PUBLIC_SLUG_RE, answerText, isVisible, textBlocks, type Answers,
+  type ConsentKind, type IntakeLang, type PacketStatus,
 } from "@shared/intake";
 
 type Tab = "waiting" | "to_file" | "filed" | "all" | "library";
@@ -42,6 +43,7 @@ const EVENT_LABELS: Record<string, string> = {
   dob_failed: "Wrong date of birth", locked: "Locked after too many wrong dates of birth", dob_ok: "Date of birth confirmed", started: "Started filling in",
   photo_added: "Photo added", signed: "Signed", completed: "All forms finished", viewed: "Viewed by staff", photo_viewed: "Photo viewed by staff",
   filed: "Marked filed in Practice Fusion", cancelled: "Cancelled", extended: "Link extended",
+  declined: "Said no", linked: "Linked to patient", copy_viewed: "Patient opened their copy", dob_ok_copy: "Date of birth confirmed (to see their copy)",
 };
 
 async function copyText(s: string) {
@@ -56,8 +58,11 @@ export default function IntakeFormsPage() {
   const [tab, setTab] = useState<Tab>(deepLink ? "all" : "waiting");
   const [openId, setOpenId] = useState<number | null>(deepLink);
   const [sending, setSending] = useState(false);
+  const [search, setSearch] = useState("");
+  const [q, setQ] = useState("");
+  useEffect(() => { const h = window.setTimeout(() => setQ(search.trim()), 300); return () => window.clearTimeout(h); }, [search]);
   const enabled = !!user && !!ws.caps?.intakeForms;
-  const list = trpc.workspace.intake.list.useQuery({ filter: tab === "library" ? "all" : tab }, { enabled: enabled && tab !== "library", refetchInterval: 30_000 });
+  const list = trpc.workspace.intake.list.useQuery({ filter: tab === "library" ? "all" : tab, q: q.length >= 2 ? q : null }, { enabled: enabled && tab !== "library", refetchInterval: 30_000 });
   const stats = trpc.workspace.intake.stats.useQuery(undefined, { enabled, refetchInterval: 60_000 });
   const mail = trpc.workspace.intake.status.useQuery(undefined, { enabled, staleTime: 60_000 });
   const rows = list.data ?? [];
@@ -101,12 +106,16 @@ export default function IntakeFormsPage() {
         enabled && <Library isAdmin={user?.role === "admin"} />
       ) : (
         <>
+          <div className="mb-3 flex max-w-md items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 dark:border-slate-700 dark:bg-slate-800">
+            <Search size={15} className="shrink-0 text-slate-400" />
+            <input className="h-9 w-full bg-transparent text-sm outline-none" placeholder="Search by patient name (every year)" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
           {list.isLoading && <Loading />}
           {list.error && <ErrorNote message={list.error.message} />}
           {list.data && rows.length === 0 && (
             <Panel>
               <EmptyState icon={ClipboardSignature} title={tab === "to_file" ? "Nothing to file" : "Nothing here yet"}
-                body={tab === "waiting" ? "Click Send forms to text or email a patient their intake forms." : "Finished forms show up here."}
+                body={q.length >= 2 ? "No forms match that name." : tab === "waiting" ? "Click Send forms to text or email a patient their intake forms." : "Finished forms show up here."}
                 action={tab === "waiting" && enabled ? <Btn onClick={() => setSending(true)}><Send size={14} /> Send forms</Btn> : undefined} />
             </Panel>
           )}
@@ -123,17 +132,19 @@ export default function IntakeFormsPage() {
                           {p.expired && <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-700 dark:bg-red-900/40 dark:text-red-200">Link expired</span>}
                           {p.locked && <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-700 dark:bg-red-900/40 dark:text-red-200">Locked (wrong DOB)</span>}
                           {p.language !== "en" && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-800 dark:bg-sky-900/40 dark:text-sky-200">{LANG_LABELS[p.language as IntakeLang] ?? p.language}</span>}
+                          {p.source === "website" && <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-800 dark:bg-violet-900/40 dark:text-violet-200"><Globe size={11} /> Website</span>}
+                          {!p.subjectKey && (p.status === "completed" || p.status === "filed") && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Not linked to a patient</span>}
                         </p>
                         <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-300">
                           {p.forms.map((f) => (
                             <span key={f.key} className="me-2 inline-flex items-center gap-1">
-                              {f.signed ? <Check size={12} className="text-emerald-600" /> : <span className="inline-block size-2 rounded-full bg-slate-300" />}
-                              {f.title}
+                              {f.declined ? <XCircle size={12} className="text-slate-500" /> : f.signed ? <Check size={12} className="text-emerald-600" /> : <span className="inline-block size-2 rounded-full bg-slate-300" />}
+                              {f.title}{f.declined ? " (said no)" : ""}
                             </span>
                           ))}
                         </p>
                         <p className="mt-0.5 text-xs text-slate-500">
-                          {p.sentAt ? `Sent ${when(p.sentAt)}${p.sentVia ? ` by ${p.sentVia}` : ""}${p.sendCount > 1 ? ` (${p.sendCount}×)` : ""}` : `Created ${when(p.createdAt)}, not sent yet`}
+                          {p.source === "website" ? `Filled in on the website ${when(p.createdAt)}` : p.sentAt ? `Sent ${when(p.sentAt)}${p.sentVia ? ` by ${p.sentVia}` : ""}${p.sendCount > 1 ? ` (${p.sendCount}×)` : ""}` : `Created ${when(p.createdAt)}, not sent yet`}
                           {p.openedAt ? ` · opened ${when(p.openedAt)}` : ""}
                           {p.completedAt ? ` · finished ${when(p.completedAt)}` : ""}
                           {p.clinicName ? ` · ${p.clinicName}` : ""}
@@ -234,8 +245,10 @@ function PacketSheet({ id, onClose }: { id: number | null; onClose: () => void }
               </SheetTitle>
               <SheetDescription>
                 DOB {p.dob} · {LANG_LABELS[p.language as IntakeLang] ?? p.language}{p.clinic ? ` · ${p.clinic.name}` : ""}
-                {p.subjectKey ? <> · <Link href={chartHref(p.subjectKey)} className="font-semibold text-brand hover:underline">Chart</Link></> : " · new patient"}
+                {p.subjectKey ? <> · <Link href={chartHref(p.subjectKey)} className="font-semibold text-brand hover:underline">Chart</Link></> : " · not linked to a patient"}
+                {p.source === "website" ? " · from the website" : ""}
               </SheetDescription>
+              {!p.subjectKey && <LinkPatient packetId={p.id} name={p.name} onDone={refresh} />}
               <div className="flex flex-wrap gap-2 pt-2">
                 {(p.status === "completed" || p.status === "filed") && (
                   <a href={`/intake-forms/${p.id}/print`} target="_blank" rel="noreferrer"><Btn size="sm"><Printer size={13} /> Save signed copy (PDF)</Btn></a>
@@ -257,10 +270,17 @@ function PacketSheet({ id, onClose }: { id: number | null; onClose: () => void }
                     const sig = p.signatures.find((x) => x.formKey === f.key);
                     return (
                       <li key={f.key} className="flex items-start gap-2">
-                        {sig ? <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-emerald-600" /> : <Clock size={16} className="mt-0.5 shrink-0 text-slate-400" />}
+                        {sig?.decision === "declined" ? <XCircle size={16} className="mt-0.5 shrink-0 text-slate-500" /> : sig ? <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-emerald-600" /> : <Clock size={16} className="mt-0.5 shrink-0 text-slate-400" />}
                         <div>
                           <p className="font-medium">{f.title}</p>
-                          {sig && <p className="text-xs text-slate-500">Signed by {sig.signerName}{sig.signerRelation !== "self" ? ` (${sig.relationLabel})` : ""} · {sig.method} · {when(sig.signedAt)}</p>}
+                          {sig && (
+                            <p className="text-xs text-slate-500">
+                              {sig.decision === "declined" ? <b className="text-slate-700 dark:text-slate-200">Said no</b> : "Signed"} by {sig.signerName}
+                              {sig.signerRelation !== "self" ? ` (${sig.relationLabel}${sig.authorityLabel ? `: ${sig.authorityLabel}${sig.authorityNote ? `, ${sig.authorityNote}` : ""}` : ""})` : ""}
+                              {sig.decision === "declined" ? "" : ` · ${sig.method}`} · {when(sig.signedAt)}
+                              {sig.consentKind ? ` · records ${CONSENT_LABELS[sig.consentKind]} consent` : ""}
+                            </p>
+                          )}
                         </div>
                       </li>
                     );
@@ -298,6 +318,37 @@ function PacketSheet({ id, onClose }: { id: number | null; onClose: () => void }
         )}
       </SheetContent>
     </Sheet>
+  );
+}
+
+/** Forms that came in without a sure match (e.g. from the website): pick whose they are. Their consents then apply. */
+function LinkPatient({ packetId, name, onDone }: { packetId: number; name: string; onDone: () => void }) {
+  const [q, setQ] = useState(() => name.split(/[\s,]+/).filter(Boolean).slice(-1)[0] ?? "");
+  const search = trpc.workspace.intake.search.useQuery({ q: q.trim() }, { enabled: q.trim().length >= 2 });
+  const link = trpc.workspace.intake.link.useMutation({
+    onSuccess: (r) => { toast.success(r.applied.length ? `Linked. Consent updated on the patient record (${r.applied.map((k) => k.toUpperCase()).join(", ")}).` : "Linked to the patient."); onDone(); },
+    onError: (e) => toast.error(e.message),
+  });
+  return (
+    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm dark:border-amber-900 dark:bg-amber-950/40">
+      <p className="font-semibold text-amber-900 dark:text-amber-200"><Link2 size={14} className="me-1 inline" /> Link to patient</p>
+      <p className="mt-0.5 text-xs text-amber-900/80 dark:text-amber-200/80">
+        These forms aren't matched to a patient yet. Check the name, date of birth and phone, then pick the right person. Any consent they signed is then recorded on that patient.
+      </p>
+      <input className={cn(inputCls, "mt-2")} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search patients by name" />
+      <ul className="mt-2 max-h-56 space-y-1 overflow-y-auto">
+        {(search.data ?? []).map((s) => (
+          <li key={s.key} className="flex items-center justify-between gap-2 rounded-md bg-white px-2 py-1.5 dark:bg-slate-800">
+            <span className="min-w-0 truncate">
+              <b>{s.name}</b>
+              <span className="text-xs text-slate-500">{s.dob ? ` · DOB ${s.dob}` : ""}{s.phoneLast4 ? ` · phone …${s.phoneLast4}` : ""}{s.clinicName ? ` · ${s.clinicName}` : ""}</span>
+            </span>
+            <Btn size="sm" variant="secondary" disabled={link.isPending} onClick={() => { if (window.confirm(`Link these forms to ${s.name}?`)) link.mutate({ id: packetId, subjectKey: s.key }); }}>Link</Btn>
+          </li>
+        ))}
+        {search.data && search.data.length === 0 && <li className="text-xs text-slate-500">No patients match. If they're new, add them in Practice Fusion first.</li>}
+      </ul>
+    </div>
   );
 }
 
@@ -384,6 +435,12 @@ function Library({ isAdmin }: { isAdmin: boolean }) {
                 <div>
                   <p className="font-semibold">{d.title.en} {!d.active && <span className="ms-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500 dark:bg-slate-800">Off</span>}</p>
                   <p className="text-xs text-slate-500">Version {d.version} · {INTAKE_LANGS.filter((l) => d.body[l]).map((l) => LANG_LABELS[l]).join(", ")} · updated {when(d.updatedAt)}</p>
+                  {(d.consentKind || d.publicSlug) && (
+                    <p className="mt-0.5 flex flex-wrap gap-1.5 text-[11px]">
+                      {d.consentKind && <span className="rounded-full bg-teal-50 px-2 py-0.5 font-semibold text-teal-800 dark:bg-teal-900/40 dark:text-teal-200">Consent: {CONSENT_LABELS[d.consentKind]} · patients can say yes or no</span>}
+                      {d.publicSlug && <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 font-semibold text-violet-800 dark:bg-violet-900/40 dark:text-violet-200"><Globe size={11} /> mypcpcare.com/sign/{d.publicSlug}</span>}
+                    </p>
+                  )}
                 </div>
                 {isAdmin && <Btn size="sm" variant="secondary" onClick={() => setEditing(d)}>Edit</Btn>}
               </li>
@@ -402,6 +459,9 @@ function DocEditor({ doc, onClose }: { doc: Doc | null; onClose: () => void }) {
   const [title, setTitle] = useState<Record<string, string>>(() => ({ ...(doc?.title ?? {}) }));
   const [body, setBody] = useState<Record<string, string>>(() => ({ ...(doc?.body ?? {}) }));
   const [active, setActive] = useState(doc?.active ?? true);
+  const [consentKind, setConsentKind] = useState<ConsentKind | "">(doc?.consentKind ?? "");
+  const [slug, setSlug] = useState(doc?.publicSlug ?? "");
+  const slugOk = !slug.trim() || PUBLIC_SLUG_RE.test(slug.trim());
   const [preview, setPreview] = useState(false);
   const save = trpc.workspace.intake.saveDocument.useMutation({
     onSuccess: () => { void utils.workspace.intake.invalidate(); toast.success("Saved"); onClose(); },
@@ -436,6 +496,30 @@ function DocEditor({ doc, onClose }: { doc: Doc | null; onClose: () => void }) {
         ) : (
           <textarea className={cn(inputCls, "h-80 font-mono text-xs leading-relaxed")} dir={lang === "ar" ? "rtl" : "ltr"} value={body[lang] ?? ""} onChange={(e) => setBody({ ...body, [lang]: e.target.value })} maxLength={60_000} />
         )}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-1 block font-medium">This form is a consent for…</span>
+            <select className={inputCls} value={consentKind} onChange={(e) => setConsentKind(e.target.value as ConsentKind | "")}>
+              <option value="">Not a consent (must be signed)</option>
+              {CONSENT_KINDS.map((k) => <option key={k} value={k}>{CONSENT_LABELS[k]}</option>)}
+            </select>
+            <span className="mt-1 block text-xs text-slate-500">
+              {consentKind
+                ? `Patients can agree or say no, and either answer is recorded.${consentKind === "communications" ? "" : ` Signing sets the patient's ${consentKind.toUpperCase()} consent to "consented" (or "declined").`}`
+                : "Patients must sign it to finish (e.g. a treatment agreement)."}
+            </span>
+          </label>
+          <label className="block">
+            <span className="mb-1 block font-medium">Website link (optional)</span>
+            <div className="flex items-center gap-1">
+              <span className="shrink-0 text-xs text-slate-500">mypcpcare.com/sign/</span>
+              <input className={cn(inputCls, !slugOk && "border-red-400")} value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} maxLength={40} placeholder="consent" />
+            </div>
+            <span className="mt-1 block text-xs text-slate-500">
+              {slugOk ? "Anyone with this link can fill in and sign this one form (e.g. linked from mypcpdr.com). Leave blank for no open link." : "Use only lowercase letters, numbers and dashes."}
+            </span>
+          </label>
+        </div>
         <label className="flex items-center gap-2">
           <input type="checkbox" className="size-4 accent-teal-700" checked={active} onChange={(e) => setActive(e.target.checked)} />
           On (can be sent to patients)
@@ -443,7 +527,8 @@ function DocEditor({ doc, onClose }: { doc: Doc | null; onClose: () => void }) {
         {doc && <p className="text-xs text-slate-500">Changing the wording makes a new version. Forms patients already signed keep the exact wording they signed.</p>}
         <div className="flex justify-end gap-2">
           <Btn variant="ghost" onClick={onClose}>Close</Btn>
-          <Btn disabled={save.isPending || !title.en?.trim() || !body.en?.trim()} onClick={() => save.mutate({ id: doc?.id ?? null, title, body, active })}>
+          <Btn disabled={save.isPending || !title.en?.trim() || !body.en?.trim() || !slugOk}
+            onClick={() => save.mutate({ id: doc?.id ?? null, title, body, active, consentKind: consentKind || null, publicSlug: slug.trim() || null })}>
             {save.isPending && <Loader2 size={14} className="animate-spin" />} Save
           </Btn>
         </div>

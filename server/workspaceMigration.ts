@@ -583,6 +583,31 @@ async function upgradeEmailMessages(db: Db): Promise<string[]> {
   return ["emailMessages.historical added"];
 }
 
+/**
+ * Patient forms, consents (added 2026-09-29): consents can be declined and are recorded by kind,
+ * someone signing for a patient states their legal authority, and a form can have an open
+ * website link. Each column is added only if missing.
+ */
+const INTAKE_COLUMNS: { table: string; column: string; ddl: string }[] = [
+  { table: "intakeDocuments", column: "consentKind", ddl: "`consentKind` varchar(20) NULL AFTER `sortOrder`" },
+  { table: "intakeDocuments", column: "publicSlug", ddl: "`publicSlug` varchar(40) NULL AFTER `consentKind`, ADD UNIQUE KEY `intakeDocuments_publicSlug_unique` (`publicSlug`)" },
+  { table: "intakePackets", column: "source", ddl: "`source` varchar(10) NOT NULL DEFAULT 'staff' AFTER `bookingRequestId`" },
+  { table: "intakeSignatures", column: "signerAuthority", ddl: "`signerAuthority` varchar(20) NULL AFTER `signerRelation`" },
+  { table: "intakeSignatures", column: "authorityNote", ddl: "`authorityNote` varchar(160) NULL AFTER `signerAuthority`" },
+  { table: "intakeSignatures", column: "decision", ddl: "`decision` varchar(10) NOT NULL DEFAULT 'signed' AFTER `authorityNote`" },
+  { table: "intakeSignatures", column: "consentKind", ddl: "`consentKind` varchar(20) NULL AFTER `decision`" },
+];
+async function upgradeIntake(db: Db): Promise<string[]> {
+  const applied: string[] = [];
+  for (const c of INTAKE_COLUMNS) {
+    const have = await rows<{ c: string }>(db, sql`SELECT COLUMN_NAME AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${c.table} AND COLUMN_NAME = ${c.column}`);
+    if (have.length) continue;
+    await db.execute(sql.raw("ALTER TABLE `" + c.table + "` ADD COLUMN " + c.ddl));
+    applied.push(`${c.table}.${c.column} added`);
+  }
+  return applied;
+}
+
 /** Indexes behind the top-bar "My progress" counts (added 2026-09-26). */
 const METRIC_INDEXES: { table: string; name: string; cols: string }[] = [
   { table: "phoneCalls", name: "phoneCalls_user_started_idx", cols: "`userId`, `startedAt`" },
@@ -690,6 +715,7 @@ export async function runWorkspaceMigration(): Promise<string[]> {
   applied.push(...(await upgradeShifts(db)));
   applied.push(...(await upgradePhoneCalls(db)));
   applied.push(...(await upgradeEmailMessages(db)));
+  applied.push(...(await upgradeIntake(db)));
   applied.push(...(await ensureMetricIndexes(db)));
   const seeded = await seedPlaybooksIfEmpty(db);
   if (seeded) applied.push(seeded);

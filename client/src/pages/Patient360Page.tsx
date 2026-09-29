@@ -15,11 +15,12 @@ import { cn } from "@/lib/utils";
 import { PhoneLink } from "@/components/phone/PhoneLink";
 import { CALL_OUTCOMES, type CallOutcome } from "@shared/phone";
 import { PatientTestingPanel } from "@/components/testing/PatientTestingPanel";
-import { Database, FlaskConical, ShieldCheck } from "lucide-react";
+import { ClipboardSignature, Database, FlaskConical, ShieldCheck } from "lucide-react";
 import { InsurancePanel } from "@/components/insurance/InsurancePanel";
+import { PatientFormsPanel } from "@/components/intake/PatientFormsPanel";
 import { PatientChartPanel } from "@/components/chart/PatientChartPanel";
 
-type Tab = "overview" | "appointments" | "tasks" | "care" | "testing" | "chart" | "insurance";
+type Tab = "overview" | "appointments" | "tasks" | "care" | "testing" | "chart" | "insurance" | "forms";
 
 /**
  * Patient 360. Operational view (visits, flow, tasks) for everyone with
@@ -57,6 +58,7 @@ function Patient360({ id }: { id: number }) {
     tabs.unshift({ key: "care", label: "Care Management", icon: HeartPulse });
     tabs.push({ key: "testing", label: "Testing", icon: FlaskConical });
   }
+  if (caps?.intakeForms) tabs.push({ key: "forms", label: "Forms", icon: ClipboardSignature });
   if (caps?.eligibility) tabs.push({ key: "insurance", label: "Insurance", icon: ShieldCheck });
   if (caps?.chartBasic) tabs.push({ key: "chart", label: "Chart", icon: Database });
 
@@ -156,6 +158,7 @@ function Patient360({ id }: { id: number }) {
           {tab === "testing" && caps?.patientFull && <Panel><PatientTestingPanel subjectKey={`p:${id}`} /></Panel>}
           {tab === "chart" && caps?.chartBasic && <PatientChartPanel subjectKey={`p:${id}`} />}
           {tab === "insurance" && caps?.eligibility && <InsurancePanel subjectKey={`p:${id}`} />}
+          {tab === "forms" && caps?.intakeForms && <PatientFormsPanel subjectKey={`p:${id}`} />}
 
           <NewTaskDialog open={taskOpen} onOpenChange={setTaskOpen} defaults={{ patientId: p.id, patientName: p.name, clinicId: p.clinicId }} />
           <TaskDrawer taskId={Number(params.get("task")) || null} onClose={() => setParams({ task: null })} />

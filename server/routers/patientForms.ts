@@ -5,7 +5,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { publicProcedure, router } from "../_core/trpc";
 import type { TrpcContext } from "../_core/context";
-import { INTAKE_LANGS, PHOTO_KINDS, SIGNER_RELATIONS, dobFromParts } from "@shared/intake";
+import { INTAKE_LANGS, PHOTO_KINDS, SIGNER_AUTHORITIES, SIGNER_RELATIONS, dobFromParts } from "@shared/intake";
 import * as intake from "../intakeDb";
 
 const token = z.string().min(20).max(64);
@@ -78,10 +78,43 @@ export const patientFormsRouter = router({
       method: z.enum(["typed", "drawn"]),
       drawn: z.string().max(600_000).nullish(),
       esignConsent: z.boolean(),
+      decision: z.enum(["signed", "declined"]).default("signed"),
+      authority: z.enum(SIGNER_AUTHORITIES).nullish(),
+      authorityNote: z.string().max(160).nullish(),
     }))
     .mutation(({ ctx, input }) => {
       brake(ctx, 120);
       const { session: s, ...rest } = input;
       return run(() => intake.patientSign(s, rest, meta(ctx)));
+    }),
+  /** The patient's own copy of what they signed (right after, or later via the link + date of birth). */
+  copy: publicProcedure.input(z.object({ session })).mutation(({ ctx, input }) => {
+    brake(ctx, 60);
+    return run(() => intake.patientCopy(input.session, meta(ctx)));
+  }),
+  // Open website links (mypcpcare.com/sign/<slug>).
+  publicInfo: publicProcedure.input(z.object({ slug: z.string().min(1).max(40) })).mutation(({ ctx, input }) => {
+    brake(ctx, 120);
+    return intake.publicFormInfo(input.slug);
+  }),
+  publicStart: publicProcedure
+    .input(z.object({
+      slug: z.string().min(1).max(40),
+      firstName: z.string().max(100),
+      lastName: z.string().max(100),
+      month: z.string().max(2), day: z.string().max(2), year: z.string().max(4),
+      phone: z.string().max(30),
+      email: z.string().max(320).nullish(),
+      language: z.enum(INTAKE_LANGS),
+      clinicId: z.number().int().positive().nullish(),
+      /** Left empty by people; bots fill every box. */
+      website: z.string().max(200).optional(),
+    }))
+    .mutation(({ ctx, input }) => {
+      // Tighter than the sent-link routes (each start creates a record), but room for a waiting-room tablet.
+      brake(ctx, 40);
+      if (input.website) throw new TRPCError({ code: "BAD_REQUEST", message: "bad" });
+      const { slug, month, day, year, website: _hp, ...rest } = input;
+      return run(() => intake.patientStartPublic(slug, { ...rest, dob: dobFromParts(month, day, year) }, meta(ctx)));
     }),
 });

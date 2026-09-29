@@ -1131,6 +1131,10 @@ export const intakeDocuments = mysqlTable("intakeDocuments", {
   version: int("version").default(1).notNull(),
   active: boolean("active").default(true).notNull(),
   sortOrder: int("sortOrder").default(0).notNull(),
+  /** A consent MyPCP records (communications | ccm | bhi | apcm): the patient may agree or decline. */
+  consentKind: varchar("consentKind", { length: 20 }),
+  /** Open link for the website (mypcpcare.com/sign/<slug>): anyone can fill it in without a sent link. */
+  publicSlug: varchar("publicSlug", { length: 40 }).unique(),
   updatedByUserId: int("updatedByUserId").references(() => users.id),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -1167,6 +1171,8 @@ export const intakePackets = mysqlTable("intakePackets", {
   answers: json("answers").$type<Record<string, Record<string, unknown>>>(),
   taskId: int("taskId"),
   bookingRequestId: int("bookingRequestId"),
+  /** staff (a link staff sent) | website (filled in from an open link on the website) */
+  source: varchar("source", { length: 10 }).default("staff").notNull(),
   filedAt: datetime("filedAt"),
   filedByUserId: int("filedByUserId").references(() => users.id),
   createdByUserId: int("createdByUserId").references(() => users.id),
@@ -1191,6 +1197,13 @@ export const intakeSignatures = mysqlTable("intakeSignatures", {
   signerName: varchar("signerName", { length: 160 }).notNull(),
   /** self | spouse | child | parent | caregiver | guardian | other */
   signerRelation: varchar("signerRelation", { length: 20 }).notNull(),
+  /** Someone else answering for the patient on an agreement: their legal authority (poa | guardian | parent_minor | other). */
+  signerAuthority: varchar("signerAuthority", { length: 20 }),
+  authorityNote: varchar("authorityNote", { length: 160 }),
+  /** signed | declined (only consents can be declined) */
+  decision: varchar("decision", { length: 10 }).default("signed").notNull(),
+  /** The consent this records, as the form was set up when signed (communications | ccm | bhi | apcm). */
+  consentKind: varchar("consentKind", { length: 20 }),
   /** typed | drawn */
   method: varchar("method", { length: 10 }).notNull(),
   signatureFileId: int("signatureFileId"),

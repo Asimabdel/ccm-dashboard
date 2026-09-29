@@ -32,7 +32,7 @@ import { isFaxEmail, matchFaxPatient, parseFaxMeta, parseFaxReading } from "../s
 import { chartLine, patientInfo, patientOf, sectionType } from "../shared/fhir";
 import { clinicForLocation, parseBookingEmail, parsePreferred } from "../shared/booking";
 import { pcpIsOurs, splitName, summarizeCoverage } from "../shared/eligibility";
-import { MEDICAL_INTAKE, agreementIn, answerText, cleanAnswers, dobFromParts, inviteText, langFromPreferred, missingInSection, stableStringify, textBlocks } from "../shared/intake";
+import { MEDICAL_INTAKE, PUBLIC_SLUG_RE, agreementIn, answerText, cleanAnswers, dobFromParts, inviteText, langFromPreferred, missingInSection, needsAuthority, stableStringify, textBlocks } from "../shared/intake";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
 
@@ -704,6 +704,25 @@ describe("patient forms (intake)", () => {
     expect(await pub.patientForms.open({ token: "not a real link token!!" })).toMatchObject({ state: "not_found", formCount: 0 });
     expect(await pub.patientForms.verify({ token: "not a real link token!!", month: "01", day: "01", year: "1950" })).toMatchObject({ ok: false, state: "not_found" });
     await expect(pub.patientForms.load({ session: "x".repeat(40) })).rejects.toThrow(/session/);
+    await expect(pub.patientForms.copy({ session: "x".repeat(40) })).rejects.toThrow(/session/);
+  });
+  it("someone answering for the patient needs legal authority on agreements, not on the health history", () => {
+    expect(needsAuthority("medical_intake", "child")).toBe(false);
+    expect(needsAuthority("doc:3", "child")).toBe(true);
+    expect(needsAuthority("doc:3", "caregiver")).toBe(true);
+    expect(needsAuthority("doc:3", "self")).toBe(false);
+  });
+  it("website links are short lowercase words; odd ones never reach the database", async () => {
+    for (const ok of ["consent", "ccm-consent", "a1"]) expect(PUBLIC_SLUG_RE.test(ok)).toBe(true);
+    for (const bad of ["Consent", "-consent", "consent-", "a b", "x".repeat(41), "../f"]) expect(PUBLIC_SLUG_RE.test(bad)).toBe(false);
+    const pub = appRouter.createCaller({ user: null, req: { headers: {} } as TrpcContext["req"], res: {} as TrpcContext["res"] });
+    expect(await pub.patientForms.publicInfo({ slug: "Not A Slug!" })).toEqual({ ok: false });
+    // Spam bots fill the hidden box: refused before anything is saved.
+    await expect(pub.patientForms.publicStart({ slug: "consent", firstName: "A", lastName: "B", month: "01", day: "01", year: "1950", phone: "2815550101", language: "en", website: "http://spam" })).rejects.toThrow(/bad/);
+  });
+  it("only staff with forms access can link forms to a patient", async () => {
+    await expect(appRouter.createCaller(ctxFor("billing")).workspace.intake.link({ id: 1, subjectKey: "p:1" })).rejects.toThrow(/access/);
+    await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.intake.forSubject({ subjectKey: "p:1" })).rejects.toThrow(/access/);
   });
 });
 

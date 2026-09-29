@@ -113,6 +113,66 @@ export const T = {
   slowDown: s("Please wait a few minutes and try again.", "Espere unos minutos e inténtelo de nuevo.", "يرجى الانتظار بضع دقائق ثم المحاولة مرة أخرى."),
   sessionEnded: s("For your privacy, please enter your date of birth again.", "Por su privacidad, escriba de nuevo su fecha de nacimiento.", "حفاظًا على خصوصيتك، يرجى إدخال تاريخ ميلادك مرة أخرى."),
   loading: s("Loading…", "Cargando…", "جارٍ التحميل…"),
+
+  // The patient's copy
+  seeCopy: s("See or save my copy", "Ver o guardar mi copia", "عرض نسختي أو حفظها"),
+  copyTitle: s("Your copy", "Su copia", "نسختك"),
+  copyIntro: s("This is what you signed. Keep it for your records.", "Esto es lo que firmó. Guárdelo para su archivo.", "هذا ما وقّعت عليه. احتفظ به في سجلاتك."),
+  savePrint: s("Save or print", "Guardar o imprimir", "حفظ أو طباعة"),
+  savePrintHow: s(
+    "On a phone: tap Save or print, then choose Save as PDF (or Share).",
+    "En el teléfono: toque Guardar o imprimir y elija Guardar como PDF (o Compartir).",
+    "على الهاتف: اضغط \"حفظ أو طباعة\" ثم اختر الحفظ كملف PDF (أو المشاركة).",
+  ),
+  copyDobTitle: s("To see your copy, enter your date of birth", "Para ver su copia, escriba su fecha de nacimiento", "لعرض نسختك، أدخل تاريخ ميلادك"),
+  copyFailed: s("We couldn't open your copy. Please call us and we'll send it to you.", "No pudimos abrir su copia. Llámenos y se la enviaremos.", "تعذّر فتح نسختك. يرجى الاتصال بنا وسنرسلها إليك."),
+  signedBy: s("Signed by {name}", "Firmado por {name}", "وقّع: {name}"),
+  answeredBy: s("Answered by {name}", "Contestado por {name}", "أجاب: {name}"),
+  forThePatient: s("for the patient", "por el paciente", "نيابةً عن المريض"),
+  signedOn: s("Date: {date}", "Fecha: {date}", "التاريخ: {date}"),
+  yourAnswerNo: s("Your answer: No, I do not agree.", "Su respuesta: No, no acepto.", "إجابتك: لا، لا أوافق."),
+  docCode: s("Document code", "Código del documento", "رمز المستند"),
+  photoAdded: s("Photo added", "Foto agregada", "تمت إضافة صورة"),
+
+  // Saying no to a consent
+  declineButton: s("No, I do not agree", "No, no acepto", "لا، لا أوافق"),
+  declineAsk: s("Don't want to agree?", "¿No desea aceptar?", "لا ترغب في الموافقة؟"),
+  declineTitle: s("You're choosing not to agree", "Está eligiendo no aceptar", "أنت تختار عدم الموافقة"),
+  declineBody: s(
+    "That's okay. Your regular care won't change. You can change your mind any time by calling us.",
+    "Está bien. Su atención médica regular no cambia. Puede cambiar de opinión cuando quiera llamándonos.",
+    "لا بأس. لن تتغيّر رعايتك المعتادة. يمكنك تغيير رأيك في أي وقت بالاتصال بنا.",
+  ),
+  declineConfirm: s("Save my answer: No", "Guardar mi respuesta: No", "احفظ إجابتي: لا"),
+  changeMind: s("Go back, I want to sign", "Regresar, quiero firmar", "رجوع، أريد التوقيع"),
+  youSaidNo: s("You said no", "Usted dijo que no", "اخترت: لا"),
+
+  // Someone answering for the patient
+  authorityQ: s("Do you have the legal right to sign for the patient?", "¿Tiene el derecho legal de firmar por el paciente?", "هل لديك الحق القانوني في التوقيع نيابةً عن المريض؟"),
+  authorityNone: s("No", "No", "لا"),
+  authorityNoneNote: s(
+    "Only the patient or someone with legal authority can sign this form. Please have the patient sign it. You can still help them read it and tap the buttons.",
+    "Solo el paciente o alguien con autoridad legal puede firmar este formulario. Pida al paciente que lo firme. Usted puede ayudarle a leerlo y a tocar los botones.",
+    "لا يمكن توقيع هذا النموذج إلا من المريض نفسه أو من شخص لديه صلاحية قانونية. يرجى أن يوقّعه المريض، ويمكنك مساعدته في القراءة والضغط على الأزرار.",
+  ),
+  authorityExplain: s("Please explain", "Explique por favor", "يرجى التوضيح"),
+  needAuthority: s("Please answer: do you have the legal right to sign?", "Conteste: ¿tiene el derecho legal de firmar?", "يرجى الإجابة: هل لديك الحق القانوني في التوقيع؟"),
+  needAuthorityNote: s("Please explain your legal authority.", "Explique su autoridad legal.", "يرجى توضيح صلاحيتك القانونية."),
+
+  // Open website link
+  publicIntro: s("Please tell us who the patient is. Then read the form and sign.", "Díganos quién es el paciente. Luego lea el formulario y firme.", "يرجى إخبارنا بمن هو المريض، ثم اقرأ النموذج ووقّع."),
+  aboutPatient: s("About the patient", "Sobre el paciente", "معلومات عن المريض"),
+  aboutPatientHelp: s("If you're helping someone, enter THEIR information.", "Si está ayudando a alguien, escriba la información de ESA persona.", "إذا كنت تساعد شخصًا آخر، أدخل معلوماته هو."),
+  firstName: s("First name", "Nombre", "الاسم الأول"),
+  lastName: s("Last name", "Apellido", "اسم العائلة"),
+  dobLabel: s("Date of birth", "Fecha de nacimiento", "تاريخ الميلاد"),
+  phoneLabel: s("Phone number", "Número de teléfono", "رقم الهاتف"),
+  emailLabel: s("Email (optional)", "Correo electrónico (opcional)", "البريد الإلكتروني (اختياري)"),
+  officeLabel: s("Which office do you go to?", "¿A qué clínica va?", "أي عيادة تزورها؟"),
+  officeNotSure: s("Not sure / new patient", "No sé / paciente nuevo", "لست متأكدًا / مريض جديد"),
+  needFirstLast: s("Please enter the first and last name.", "Escriba el nombre y el apellido.", "يرجى إدخال الاسم الأول واسم العائلة."),
+  publicDoneBody: s("We received your form.", "Recibimos su formulario.", "لقد استلمنا النموذج."),
+  startOver: s("This page timed out. Please start again.", "Esta página se venció. Empiece de nuevo.", "انتهت مهلة هذه الصفحة. يرجى البدء من جديد."),
   blocked: {
     not_found: [s("This link doesn't work", "Este enlace no funciona", "هذا الرابط لا يعمل"), s("Please check the link, or call us and we'll send you a new one.", "Revise el enlace, o llámenos y le enviaremos uno nuevo.", "يرجى التحقق من الرابط، أو اتصل بنا وسنرسل لك رابطًا جديدًا.")],
     expired: [s("This link has expired", "Este enlace ya venció", "انتهت صلاحية هذا الرابط"), s("Call us and we'll send you a new one.", "Llámenos y le enviaremos uno nuevo.", "اتصل بنا وسنرسل لك رابطًا جديدًا.")],

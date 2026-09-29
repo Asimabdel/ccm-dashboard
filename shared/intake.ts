@@ -315,6 +315,47 @@ export const ESIGN_CONSENT: L10n = l(
   "أوافق على أن كتابة اسمي أو رسمه هنا يُعدّ توقيعي الإلكتروني، تمامًا مثل التوقيع على الورق.",
 );
 
+/** Saying no to a consent is recorded too (CMS asks practices to document "accepted or declined"). */
+export const DECLINE_CONSENT: L10n = l(
+  "I choose NOT to agree to this form. Typing my name records my choice.",
+  "Elijo NO aceptar este formulario. Escribir mi nombre registra mi decisión.",
+  "أختار عدم الموافقة على هذا النموذج. كتابة اسمي تُسجّل قراري.",
+);
+export type SignDecision = "signed" | "declined";
+
+// ---- Consents: forms whose answer MyPCP records on the patient (they may agree or decline) ----
+
+export const CONSENT_KINDS = ["communications", "ccm", "bhi", "apcm"] as const;
+export type ConsentKind = (typeof CONSENT_KINDS)[number];
+export const isConsentKind = (k: unknown): k is ConsentKind => typeof k === "string" && (CONSENT_KINDS as readonly string[]).includes(k);
+export const CONSENT_LABELS: Record<ConsentKind, string> = {
+  communications: "Texts, calls & email",
+  ccm: "Chronic Care Management (CCM)",
+  bhi: "Behavioral Health Integration (BHI)",
+  apcm: "Advanced Primary Care Management (APCM)",
+};
+
+// ---- Answering for someone else: only a legal representative may agree (or decline) for the patient ----
+
+export const SIGNER_AUTHORITIES = ["poa", "guardian", "parent_minor", "other"] as const;
+export type SignerAuthority = (typeof SIGNER_AUTHORITIES)[number];
+export const AUTHORITY_LABELS: Record<SignerAuthority, L10n> = {
+  poa: l("I have their medical power of attorney", "Tengo un poder legal para las decisiones médicas del paciente", "لديّ توكيل طبي رسمي عن المريض"),
+  guardian: l("I am their court-appointed guardian", "Soy su tutor(a) legal nombrado(a) por un tribunal", "أنا الوصي القانوني على المريض بقرار من المحكمة"),
+  parent_minor: l("I am the parent of a patient under 18", "Soy el padre o la madre de un paciente menor de 18 años", "أنا أحد والدَي مريض عمره أقل من 18 سنة"),
+  other: l("Another legal reason (please explain)", "Otra razón legal (explique)", "سبب قانوني آخر (يرجى التوضيح)"),
+};
+/** Agreements need the signer's legal authority when someone other than the patient answers; the health history doesn't. */
+export const needsAuthority = (formKey: string, relation: string) => formKey !== MEDICAL_INTAKE_KEY && relation !== "self";
+
+// ---- Open website links (mypcpcare.com/sign/<slug>) ----
+
+export const PUBLIC_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
+/** A website visitor's session: long enough to read, sign and save a copy. */
+export const WEBSITE_PACKET_HOURS = 24;
+export const PACKET_SOURCES = ["staff", "website"] as const;
+export type PacketSource = (typeof PACKET_SOURCES)[number];
+
 /** Deterministic JSON (sorted keys) so the same content always hashes the same. */
 export function stableStringify(v: unknown): string {
   if (v === null || typeof v !== "object") return JSON.stringify(v ?? null);

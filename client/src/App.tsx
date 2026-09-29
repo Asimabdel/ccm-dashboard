@@ -93,6 +93,8 @@ function Router() {
       <Route path="/intake-forms" component={IntakeFormsPage} />
       {/* Public: the page patients open from their forms link (no MyPCP login). */}
       <Route path="/f/:token" component={PatientFormsPage} />
+      {/* Public: an open form link for the website (e.g. /sign/consent). */}
+      <Route path="/sign/:slug" component={PatientFormsPage} />
       <Route path="/billing" component={BillingPage} />
       <Route path="/follow-ups" component={FollowUpsPage} />
       <Route path="/reports" component={ReportsPage} />
@@ -105,7 +107,7 @@ function Router() {
 function App() {
   const [loc] = useLocation();
   // Patient forms page and printouts: no staff phone, always light.
-  const patientOrPrint = loc.startsWith("/f/") || loc.endsWith("/print");
+  const patientOrPrint = loc.startsWith("/f/") || loc.startsWith("/sign/") || loc.endsWith("/print");
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="light" switchable forceLight={patientOrPrint}>

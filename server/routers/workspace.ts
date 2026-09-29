@@ -27,7 +27,7 @@ import * as chart from "../chartDb";
 import * as bookings from "../bookingsDb";
 import * as intake from "../intakeDb";
 import * as availity from "../availityDb";
-import { INTAKE_LANGS } from "../../shared/intake";
+import { CONSENT_KINDS, INTAKE_LANGS } from "../../shared/intake";
 import { FAX_DOC_TYPE_KEYS } from "../../shared/fax";
 import { TEST_KEYS, type TestKey } from "../../shared/testing";
 import { CALL_OUTCOME_LIST } from "../../shared/phone";
@@ -530,9 +530,18 @@ export const workspaceRouter = router({
       const actor = await actorFor(ctx, "intakeForms");
       return run(() => intake.copyLink(actor, input.id, reqOrigin(ctx)));
     }),
-    list: protectedProcedure.input(z.object({ filter: z.enum(["waiting", "to_file", "filed", "all"]).default("waiting") })).query(async ({ ctx, input }) => {
+    list: protectedProcedure.input(z.object({ filter: z.enum(["waiting", "to_file", "filed", "all"]).default("waiting"), q: z.string().max(100).nullish() })).query(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "intakeForms");
-      return intake.listPackets(actor, input.filter);
+      return intake.listPackets(actor, input.filter, input.q);
+    }),
+    /** Patient 360 → Forms: everything this person was sent or signed, and where each consent stands. */
+    forSubject: protectedProcedure.input(z.object({ subjectKey: z.string().min(3).max(120) })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "intakeForms");
+      return run(() => intake.subjectForms(actor, input.subjectKey));
+    }),
+    link: protectedProcedure.input(z.object({ id: z.number().int().positive(), subjectKey: z.string().min(3).max(120) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "intakeForms");
+      return run(() => intake.linkPacket(actor, input.id, input.subjectKey));
     }),
     stats: protectedProcedure.query(async ({ ctx }) => {
       const actor = await actorFor(ctx, "intakeForms");
@@ -568,6 +577,8 @@ export const workspaceRouter = router({
         title: z.record(z.string(), z.string().max(200).nullish()),
         body: z.record(z.string(), z.string().max(60_000).nullish()),
         active: z.boolean(),
+        consentKind: z.enum(CONSENT_KINDS).nullish(),
+        publicSlug: z.string().max(40).nullish(),
       }))
       .mutation(async ({ ctx, input }) => {
         const actor = await actorFor(ctx, "intakeForms");

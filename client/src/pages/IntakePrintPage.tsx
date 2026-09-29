@@ -7,7 +7,7 @@ import { Printer } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { BrandMark } from "@/components/BrandMark";
 import { trpc } from "@/lib/trpc";
-import { ESIGN_CONSENT, LANG_LABELS, MEDICAL_INTAKE, answerText, isVisible, langDir, textBlocks, tr, type Answers, type IntakeLang } from "@shared/intake";
+import { CONSENT_LABELS, DECLINE_CONSENT, ESIGN_CONSENT, LANG_LABELS, MEDICAL_INTAKE, answerText, isVisible, langDir, textBlocks, tr, type Answers, type IntakeLang } from "@shared/intake";
 
 const at = (d: Date | string | null | undefined) =>
   d ? `${new Date(d).toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit", timeZone: "America/Chicago" })} CT` : "—";
@@ -122,21 +122,31 @@ export default function IntakePrintPage() {
                 <div className="mt-5 break-inside-avoid rounded border-2 border-slate-800 p-4 text-sm">
                   <div className="flex flex-wrap items-end justify-between gap-6">
                     <div className="min-w-[16rem] flex-1">
-                      <div className="flex h-20 items-end border-b border-slate-800 pb-1">
-                        {sig.method === "drawn" && sig.signatureFileId
-                          ? <FileImg packetId={p.id} fileId={sig.signatureFileId} alt="Signature" className="max-h-20" />
-                          : <span className="text-3xl" style={{ fontFamily: '"Segoe Script","Brush Script MT","Snell Roundhand",cursive' }} dir="auto">{sig.signerName}</span>}
-                      </div>
-                      <p className="mt-1 text-xs text-slate-600">Electronic signature ({sig.method === "drawn" ? "drawn" : "typed name"})</p>
+                      {sig.decision === "declined" ? (
+                        <p className="text-base font-bold">DECLINED: the patient chose not to agree to this form.</p>
+                      ) : (
+                        <>
+                          <div className="flex h-20 items-end border-b border-slate-800 pb-1">
+                            {sig.method === "drawn" && sig.signatureFileId
+                              ? <FileImg packetId={p.id} fileId={sig.signatureFileId} alt="Signature" className="max-h-20" />
+                              : <span className="text-3xl" style={{ fontFamily: '"Segoe Script","Brush Script MT","Snell Roundhand",cursive' }} dir="auto">{sig.signerName}</span>}
+                          </div>
+                          <p className="mt-1 text-xs text-slate-600">Electronic signature ({sig.method === "drawn" ? "drawn" : "typed name"})</p>
+                        </>
+                      )}
+                      {sig.consentKind && <p className="mt-1 text-xs text-slate-600">Records: {CONSENT_LABELS[sig.consentKind]} consent ({sig.decision === "declined" ? "declined" : "given"})</p>}
                     </div>
                     <div className="text-xs">
-                      <p><span className="text-slate-500">Signed by:</span> <b>{sig.signerName}</b>{sig.signerRelation !== "self" ? ` (${sig.relationLabel}, signing for the patient)` : " (patient)"}</p>
+                      <p><span className="text-slate-500">{sig.decision === "declined" ? "Answered by:" : "Signed by:"}</span> <b>{sig.signerName}</b>{sig.signerRelation !== "self" ? ` (${sig.relationLabel}, for the patient)` : " (patient)"}</p>
+                      {sig.authorityLabel && <p><span className="text-slate-500">Legal authority:</span> {sig.authorityLabel}{sig.authorityNote ? `: ${sig.authorityNote}` : ""}</p>}
                       <p><span className="text-slate-500">Date:</span> {at(sig.signedAt)}</p>
                       <p><span className="text-slate-500">IP address:</span> {sig.ip ?? "—"}</p>
                       <p><span className="text-slate-500">Form version:</span> {sig.formVersion}</p>
                     </div>
                   </div>
-                  <p className="mt-3 text-xs text-slate-600">Signer agreed: "{tr(ESIGN_CONSENT, sig.language)}"{sig.language !== "en" ? ` ("${ESIGN_CONSENT.en}")` : ""}</p>
+                  {sig.decision === "declined"
+                    ? <p className="mt-3 text-xs text-slate-600">Signer confirmed: "{tr(DECLINE_CONSENT, sig.language)}"{sig.language !== "en" ? ` ("${DECLINE_CONSENT.en}")` : ""}</p>
+                    : <p className="mt-3 text-xs text-slate-600">Signer agreed: "{tr(ESIGN_CONSENT, sig.language)}"{sig.language !== "en" ? ` ("${ESIGN_CONSENT.en}")` : ""}</p>}
                 </div>
               )}
             </section>
@@ -146,7 +156,10 @@ export default function IntakePrintPage() {
         <section className="page-break mt-10 text-xs">
           <h2 className="border-b border-slate-300 pb-1 text-lg font-bold">Certificate of completion</h2>
           <p className="mt-2 text-slate-600">
-            Sent by private link; the signer confirmed the patient's date of birth before opening the forms. Times are US Central.
+            {p.source === "website"
+              ? "Filled in from the open link on the practice website: the person entered the patient's name, date of birth and phone number. "
+              : "Sent by private link; the signer confirmed the patient's date of birth before opening the forms. "}
+            Times are US Central.
             Each fingerprint is a SHA-256 hash of the signed content; if any word, answer, name or time were changed, the fingerprint would no longer match.
           </p>
           <table className="mt-3 w-full border-collapse">
