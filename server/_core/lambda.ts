@@ -60,6 +60,11 @@ export const handler = async (event: any, context: any) => {
     const backfill = "skipped" in sync ? null : await runGmailBackfill({ deadline: started + 23_000 });
     return { ...sync, faxBox, faxRead, backfill };
   }
+  // Demo plan: one made-up Availity eligibility request (nothing stored), to check the reply format.
+  if (event && event.__job === "availity-demo-probe" && !event.requestContext && !event.version) {
+    const { demoCoverageProbe } = await import("../availityDb");
+    return demoCoverageProbe();
+  }
   // Evenings (EventBridge): check the next clinic day's patients' insurance with Availity.
   if (event && event.__job === "eligibility-nightly" && !event.requestContext && !event.version) {
     const { runNightly } = await import("../availityDb");

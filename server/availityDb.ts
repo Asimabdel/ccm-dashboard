@@ -9,7 +9,7 @@ import { relayFetch } from "./egress";
 import { sealSecret, openSecret } from "./secretBox";
 import { appSettings, appointments, clinics, coverageOnFile, eligibilityChecks, fhirPatients, patients, personDemographics, providers } from "../drizzle/schema";
 import {
-  COVERAGE_COMM_ERRORS, COVERAGE_DONE_CODES, COVERAGE_IN_PROGRESS, GROUP_NPI_DEFAULT, ORG_NAME_DEFAULT, pcpIsOurs, splitName, summarizeCoverage, type CoverageSummary,
+  COVERAGE_COMM_ERRORS, COVERAGE_DONE_CODES, COVERAGE_IN_PROGRESS, GROUP_NPI_DEFAULT, ORG_NAME_DEFAULT, pcpIsOurs, splitName, summarizeCoverage, unwrapCoverage, type CoverageSummary,
 } from "../shared/eligibility";
 import { localDateStr } from "../shared/workforce";
 import { nextClinicDay } from "../shared/workspace";
@@ -135,6 +135,26 @@ export async function testAvaility() {
   return { ok: true, mode: c.mode, payers: "error" in payers ? null : payers.count, payerListError: "error" in payers ? payers.error : null };
 }
 
+/**
+ * Demo plan only (IAM-only Lambda job): one made-up coverage request, nothing stored, returns
+ * Availity's sample reply and how MyPCP reads it. Used to check the parser against the real format.
+ */
+export async function demoCoverageProbe() {
+  const c = await config();
+  if (!ready(c)) return { error: "Not connected" };
+  if (c.mode !== "demo") return { error: "Only runs on the demo plan" };
+  const payers = await readSetting<{ payers: Payer[] }>(PAYERS_KEY);
+  const form = coverageForm(c, { subjectKey: "probe", payerId: payers?.payers[0]?.id ?? "AVAILITY", memberId: "DEMO000000", firstName: "TEST", lastName: "PATIENT", dob: "1950-01-01", sex: "F" });
+  const first = await call(c, "/coverages", { method: "POST", form });
+  let reply = first;
+  const id = typeof unwrapCoverage(first.body).id === "string" ? (unwrapCoverage(first.body).id as string) : null;
+  for (let i = 0; i < 6 && id && String(unwrapCoverage(reply.body).statusCode ?? "") === COVERAGE_IN_PROGRESS; i++) {
+    await new Promise((r) => setTimeout(r, 1500));
+    reply = await call(c, `/coverages/${encodeURIComponent(id)}`);
+  }
+  return { payersLoaded: payers?.payers.length ?? 0, postStatus: first.status, status: reply.status, body: reply.body, summary: summarizeCoverage(reply.body) };
+}
+
 // ---------------------------------------------------------------------------
 // Payer list (who Availity can check eligibility with)
 // ---------------------------------------------------------------------------
@@ -257,8 +277,9 @@ function coverageForm(c: AvailityConfig, input: CheckInput) {
 }
 
 /** Apply Availity's answer to a check row. Returns true once it's finished (either way). */
-async function applyAnswer(id: number, status: number, body: Record<string, unknown>) {
+async function applyAnswer(id: number, status: number, reply: Record<string, unknown>) {
   const d = await db();
+  const body = unwrapCoverage(reply);
   const code = typeof body.statusCode === "string" || typeof body.statusCode === "number" ? String(body.statusCode) : null;
   const availityId = typeof body.id === "string" ? body.id : null;
   const raw = gzipSync(Buffer.from(JSON.stringify(body))).toString("base64");

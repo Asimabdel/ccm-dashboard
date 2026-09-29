@@ -84,9 +84,20 @@ function leaves(benefit: Json): Leaf[] {
 
 const outOfNetwork = (p: string) => /outofnetwork|out_of_network|outnetwork/.test(p);
 
+/** Availity answers either one coverage or a list ({ coverages: [...] }, e.g. the POST reply). */
+export function unwrapCoverage(raw: unknown): Record<string, unknown> {
+  const o = obj(raw) ?? {};
+  const first = obj(arr(o.coverages)[0]);
+  return first ?? o;
+}
+
+// Plan status (X12 EB01): 1-5 are kinds of active (3 = services capitated, typical HMO), 6-8 inactive.
+const ACTIVE_CODES = ["1", "2", "3", "4", "5"];
+const INACTIVE_CODES = ["6", "7", "8"];
+
 /** Availity's coverage answer → the few things the front desk needs. Tolerant of missing pieces. */
 export function summarizeCoverage(raw: unknown): CoverageSummary {
-  const c = obj(raw) ?? {};
+  const c = unwrapCoverage(raw);
   const plansRaw = arr(c.plans).map(obj).filter((p): p is Json => !!p);
   const plans: PlanSummary[] = plansRaw.map((p) => ({
     name: str(p.groupName) ?? str(p.planName) ?? str(p.description) ?? str(p.insuranceType),
@@ -96,8 +107,8 @@ export function summarizeCoverage(raw: unknown): CoverageSummary {
     end: str(p.eligibilityEndDate) ?? str(p.coverageEndDate) ?? str(p.planEndDate),
     status: str(p.status),
   }));
-  const isActive = (p: Json) => str(p.statusCode) === "1" || /^active/i.test(str(p.status) ?? "");
-  const isInactive = (p: Json) => str(p.statusCode) === "6" || /inactive|not active|terminated/i.test(str(p.status) ?? "");
+  const isActive = (p: Json) => ACTIVE_CODES.includes(str(p.statusCode) ?? "") || /^active/i.test(str(p.status) ?? "");
+  const isInactive = (p: Json) => INACTIVE_CODES.includes(str(p.statusCode) ?? "") || /inactive|not active|terminated/i.test(str(p.status) ?? "");
   const active = plansRaw.some(isActive) ? true : plansRaw.length && plansRaw.every(isInactive) ? false : null;
 
   const benefits = plansRaw.flatMap((p) => arr(p.benefits).map(obj).filter((b): b is Json => !!b));
@@ -129,7 +140,7 @@ export function summarizeCoverage(raw: unknown): CoverageSummary {
   const pcp = plansRaw.map((p) => personName(p.primaryCareProvider)).find(Boolean) ?? null;
   return {
     active,
-    statusText: active === true ? "Active coverage" : active === false ? "Not active" : str(c.status) ?? "Couldn't tell from the payer's answer",
+    statusText: active === true ? (plansRaw.map((p) => str(p.status)).find((x) => x && /^active/i.test(x) && !/^active coverage$/i.test(x)) ?? "Active coverage") : active === false ? "Not active" : "Couldn't tell from the payer's answer",
     payerName: str(payer?.responseName) ?? str(payer?.name) ?? null,
     plans,
     pcp,

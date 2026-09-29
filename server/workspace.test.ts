@@ -765,6 +765,14 @@ describe("insurance eligibility (Availity)", () => {
     expect(summarizeCoverage({ plans: [] }).active).toBeNull();
     expect(summarizeCoverage({ statusCode: "19", validationMessages: [{ field: "memberId", errorMessage: "Invalid member ID" }] }).messages).toEqual(["Invalid member ID"]);
   });
+  it("reads Availity's real reply shape (a coverages list; capitated HMO = active)", () => {
+    const demo = { totalCount: 1, count: 1, coverages: [{ id: "123", status: "Complete", statusCode: "4", validationMessages: [], payer: { name: "BCBSF", payerId: "00060" }, plans: [{ status: "Active - Services Capitated", statusCode: "3" }] }] };
+    const s = summarizeCoverage(demo);
+    expect(s.active).toBe(true);
+    expect(s.statusText).toBe("Active - Services Capitated");
+    expect(s.payerName).toBe("BCBSF");
+    expect(summarizeCoverage({ coverages: [{ plans: [{ status: "Inactive - Pending Eligibility Update", statusCode: "7" }] }] }).active).toBe(false);
+  });
   it("splits names the way payers want them", () => {
     expect(splitName("DOE, JANE M")).toEqual({ first: "JANE", last: "DOE" });
     expect(splitName("Jane Marie Doe")).toEqual({ first: "Jane", last: "Doe" });
