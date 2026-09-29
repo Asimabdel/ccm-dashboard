@@ -19,7 +19,15 @@ import { downloadStatus, readChunk, removeFile, startDownload } from "./exportSt
 import { WorkspaceError, audit, buildNameDobIndex, type WorkspaceActor } from "./workspaceDb";
 
 const STATE_KEY = "pf_fhir_sync";
-const SCOPE = "system/*.read";
+// PF approves read scopes one resource type at a time (the 24 ticked on MyPCP's app registration).
+// Ask for exactly those; fall back to the standard bulk-export wildcard if PF rejects the list.
+const RESOURCE_SCOPES = [
+  "AllergyIntolerance", "CarePlan", "CareTeam", "Condition", "Coverage", "Device", "DiagnosticReport", "DocumentReference",
+  "Encounter", "Goal", "Group", "Immunization", "Location", "MedicationDispense", "MedicationRequest", "Observation",
+  "Organization", "Patient", "Practitioner", "Procedure", "Provenance", "RelatedPerson", "ServiceRequest", "Specimen",
+].map((t) => `system/${t}.read`).join(" ");
+const SCOPES = [RESOURCE_SCOPES, "system/*.read"];
+let workingScope: string | null = null;
 const CHUNK = 2 * 1024 * 1024;
 const MAX_LINE_CHUNK = 64 * 1024 * 1024;
 const MAX_RAW = 12_000_000; // mediumtext holds 16 MB
@@ -85,16 +93,23 @@ async function accessToken(): Promise<{ base: string; token: string }> {
   if (!c.baseUrl || !c.clientId) throw new WorkspaceError("Save the Practice Fusion FHIR base URL and Client ID first.");
   if (tokenCache && tokenCache.base === c.baseUrl && tokenCache.expiresAt > Date.now() + 60_000) return { base: c.baseUrl, token: tokenCache.token };
   const tokenUrl = await tokenEndpoint(c.baseUrl);
-  const res = await relayFetch(tokenUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
-    body: new URLSearchParams({
-      grant_type: "client_credentials", scope: SCOPE,
-      client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-      client_assertion: await clientAssertion(c.clientId, tokenUrl),
-    }).toString(),
-  });
-  const j = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; error?: string; error_description?: string };
+  type TokenReply = { access_token?: string; expires_in?: number; error?: string; error_description?: string };
+  let res!: Response;
+  let j: TokenReply = {};
+  for (const scope of workingScope ? [workingScope] : SCOPES) {
+    res = await relayFetch(tokenUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body: new URLSearchParams({
+        grant_type: "client_credentials", scope,
+        client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+        client_assertion: await clientAssertion(c.clientId, tokenUrl),
+      }).toString(),
+    });
+    j = (await res.json().catch(() => ({}))) as TokenReply;
+    if (res.ok && j.access_token) { workingScope = scope; break; }
+    if (j.error !== "invalid_scope") break;
+  }
   if (!res.ok || !j.access_token) {
     throw new WorkspaceError(`Practice Fusion sign-in failed: ${j.error_description ?? j.error ?? res.status}. Check the Client ID, and that an admin clicked Authorize App in Practice Fusion.`);
   }
@@ -112,6 +127,7 @@ export async function pfFetch(url: string, accept = "application/fhir+json") {
 /** Admin "Test connection": sign in and read the server's capability statement. */
 export async function testConnection(actor: WorkspaceActor) {
   tokenCache = null;
+  workingScope = null;
   const { base, token } = await accessToken();
   const res = await relayFetch(`${base}/metadata`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/fhir+json" } });
   const j = (await res.json().catch(() => ({}))) as { fhirVersion?: string; software?: { name?: string } };
