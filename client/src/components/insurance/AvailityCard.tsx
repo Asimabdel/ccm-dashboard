@@ -12,8 +12,8 @@ export function AvailityCard() {
   const q = trpc.workspace.eligibility.status.useQuery();
   const utils = trpc.useUtils();
   const s = q.data && "clientIdHint" in q.data ? q.data : null;
-  const [form, setForm] = useState<{ clientId: string; clientSecret: string; mode: "demo" | "production"; npi: string; orgName: string; nightly: boolean } | null>(null);
-  useEffect(() => { if (s && !form) setForm({ clientId: "", clientSecret: "", mode: s.mode, npi: s.npi, orgName: s.orgName, nightly: s.nightly }); }, [s, form]);
+  const [form, setForm] = useState<{ clientId: string; clientSecret: string; mode: "demo" | "production"; npi: string; orgName: string; scope: string; nightly: boolean } | null>(null);
+  useEffect(() => { if (s && !form) setForm({ clientId: "", clientSecret: "", mode: s.mode, npi: s.npi, orgName: s.orgName, scope: s.scopeIsDefault ? "" : s.scope, nightly: s.nightly }); }, [s, form]);
   const onError = (e: { message: string }) => toast.error(e.message);
   const save = trpc.workspace.eligibility.saveConfig.useMutation({
     onSuccess: () => { void utils.workspace.eligibility.invalidate(); setForm((f) => (f ? { ...f, clientId: "", clientSecret: "" } : f)); toast.success("Saved"); },
@@ -55,13 +55,16 @@ export function AvailityCard() {
                   <option value="production">Standard: real eligibility (after Availity's contract)</option>
                 </select>
               </label>
+              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">Scope <span className="font-normal text-slate-400">(blank = the plan's usual one)</span>
+                <input className={cn(inputCls, "mt-1 font-mono text-xs")} value={form.scope} placeholder={form.mode === "demo" ? "healthcare-hipaa-transactions-demo" : "hipaa"} onChange={(e) => setForm({ ...form, scope: e.target.value })} maxLength={120} />
+              </label>
               <label className="flex items-center gap-2 self-end pb-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
                 <input type="checkbox" className="size-4 accent-teal-700" checked={form.nightly} onChange={(e) => setForm({ ...form, nightly: e.target.checked })} />
                 Check the next clinic day's patients every evening
               </label>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Btn variant="secondary" disabled={save.isPending} onClick={() => save.mutate({ ...form, clientId: form.clientId || null, clientSecret: form.clientSecret || null })}>{save.isPending && <Loader2 size={14} className="animate-spin" />} Save</Btn>
+              <Btn variant="secondary" disabled={save.isPending} onClick={() => save.mutate({ ...form, clientId: form.clientId || null, clientSecret: form.clientSecret || null, scope: form.scope || null })}>{save.isPending && <Loader2 size={14} className="animate-spin" />} Save</Btn>
               <Btn disabled={!s.configured || test.isPending} onClick={() => test.mutate()}>{test.isPending ? <Loader2 size={14} className="animate-spin" /> : <PlugZap size={14} />} Test connection</Btn>
             </div>
             <p className="text-xs text-slate-500">
@@ -72,8 +75,8 @@ export function AvailityCard() {
           <ol className="list-decimal space-y-2 pl-5 text-xs text-slate-600 dark:text-slate-300 lg:col-span-2">
             <li>Sign up at <a className="font-semibold underline" href="https://developer.availity.com/" target="_blank" rel="noreferrer">developer.availity.com</a> (you'll set up an authenticator app).</li>
             <li>Create your organization, then <b>My Apps → Create a New App</b>.</li>
-            <li>Subscribe the app to <b>Healthcare HIPAA Transactions Demo</b> and <b>Availity Payer List</b> (both approve right away).</li>
-            <li>Paste the app's <b>Client ID</b> and <b>Client secret</b> here, Save, then Test connection.</li>
+            <li>Subscribe the app to <b>Healthcare HIPAA Transactions Demo</b> (it includes the Payer List).</li>
+            <li>Paste the app's <b>Client ID</b> and <b>Client secret</b> here (My Apps → your app → approved access), Save, then Test connection. If Availity lists a different scope there, put it in Scope.</li>
             <li>For real patients, request the <b>Standard</b> plan in the portal; Availity's team reviews the contract. When it's approved, switch Plan to Standard.</li>
           </ol>
         </div>

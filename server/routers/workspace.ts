@@ -425,7 +425,7 @@ export const workspaceRouter = router({
       return ctx.user.role === "admin" ? s : { configured: s.configured, mode: s.mode, nightly: s.nightly };
     }),
     saveConfig: protectedProcedure
-      .input(z.object({ clientId: z.string().max(200).nullish(), clientSecret: z.string().max(500).nullish(), mode: z.enum(["demo", "production"]), npi: z.string().max(20), orgName: z.string().max(60), nightly: z.boolean() }))
+      .input(z.object({ clientId: z.string().max(200).nullish(), clientSecret: z.string().max(500).nullish(), mode: z.enum(["demo", "production"]), npi: z.string().max(20), orgName: z.string().max(60), scope: z.string().max(120).nullish(), nightly: z.boolean() }))
       .mutation(async ({ ctx, input }) => {
         const actor = await actorFor(ctx, "eligibility");
         if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can change the Availity connection." });

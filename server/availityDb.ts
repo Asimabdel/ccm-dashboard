@@ -36,7 +36,10 @@ interface AvailityConfig {
   scope: string;
   nightly: boolean;
 }
-const EMPTY: AvailityConfig = { clientId: "", clientSecretEnc: "", mode: "demo", npi: GROUP_NPI_DEFAULT, orgName: ORG_NAME_DEFAULT, scope: "hipaa", nightly: false };
+const EMPTY: AvailityConfig = { clientId: "", clientSecretEnc: "", mode: "demo", npi: GROUP_NPI_DEFAULT, orgName: ORG_NAME_DEFAULT, scope: "", nightly: false };
+/** The OAuth scope is the subscribed product (the Demo product is "healthcare-hipaa-transactions-demo"); the app's Approved Access page lists it. */
+export const defaultScope = (mode: "demo" | "production") => (mode === "demo" ? "healthcare-hipaa-transactions-demo" : "hipaa");
+const scopeOf = (c: AvailityConfig) => c.scope || defaultScope(c.mode);
 
 async function readSetting<T>(key: string): Promise<T | null> {
   const [row] = await (await db()).select({ value: appSettings.value }).from(appSettings).where(eq(appSettings.key, key)).limit(1);
@@ -63,6 +66,8 @@ export async function availityStatus() {
     mode: c.mode,
     npi: c.npi,
     orgName: c.orgName,
+    scope: scopeOf(c),
+    scopeIsDefault: !c.scope,
     nightly: c.nightly,
     payerCount: payers?.payers.length ?? 0,
     payersAt: payers?.at ?? null,
@@ -70,7 +75,7 @@ export async function availityStatus() {
   };
 }
 
-export async function saveAvailityConfig(actor: WorkspaceActor, input: { clientId?: string | null; clientSecret?: string | null; mode: "demo" | "production"; npi: string; orgName: string; nightly: boolean }) {
+export async function saveAvailityConfig(actor: WorkspaceActor, input: { clientId?: string | null; clientSecret?: string | null; mode: "demo" | "production"; npi: string; orgName: string; scope?: string | null; nightly: boolean }) {
   const prev = await config();
   const npi = input.npi.replace(/\D/g, "");
   if (!/^\d{10}$/.test(npi)) throw new WorkspaceError("An NPI has 10 digits.");
@@ -81,10 +86,12 @@ export async function saveAvailityConfig(actor: WorkspaceActor, input: { clientI
     mode: input.mode,
     npi,
     orgName: input.orgName.trim().toUpperCase().slice(0, 60) || ORG_NAME_DEFAULT,
+    // Blank (or the plan's usual one) = follow the plan.
+    scope: input.scope?.trim() && input.scope.trim() !== defaultScope(input.mode) ? input.scope.trim().slice(0, 120) : "",
     nightly: input.nightly,
   };
   if (next.nightly && !ready(next)) throw new WorkspaceError("Save the Availity Client ID and Secret first.");
-  if (next.clientId !== prev.clientId || input.clientSecret || next.mode !== prev.mode) tokenCache = null;
+  if (next.clientId !== prev.clientId || input.clientSecret || next.mode !== prev.mode || next.scope !== prev.scope) tokenCache = null;
   await writeSetting(CONFIG_KEY, next, actor.id);
   await audit(actor, "manage_access", { entityType: "integration", description: `Availity settings saved (${next.mode}${next.nightly ? ", nightly checks on" : ""})` });
   return { ok: true };
@@ -93,12 +100,12 @@ export async function saveAvailityConfig(actor: WorkspaceActor, input: { clientI
 let tokenCache: { key: string; token: string; expiresAt: number } | null = null;
 
 async function token(c: AvailityConfig): Promise<string> {
-  const key = `${c.clientId}|${c.mode}`;
+  const key = `${c.clientId}|${c.mode}|${scopeOf(c)}`;
   if (tokenCache?.key === key && tokenCache.expiresAt > Date.now() + 30_000) return tokenCache.token;
   const res = await relayFetch(`${API}/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
-    body: new URLSearchParams({ grant_type: "client_credentials", client_id: c.clientId, client_secret: openSecret(c.clientSecretEnc), scope: c.scope || "hipaa" }).toString(),
+    body: new URLSearchParams({ grant_type: "client_credentials", client_id: c.clientId, client_secret: openSecret(c.clientSecretEnc), scope: scopeOf(c) }).toString(),
   });
   const body = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; error?: string; error_description?: string };
   if (!res.ok || !body.access_token) throw new WorkspaceError(`Availity sign-in failed (${res.status}): ${body.error_description ?? body.error ?? "check the Client ID and Secret"}.`);
