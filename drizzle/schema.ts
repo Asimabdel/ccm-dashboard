@@ -108,6 +108,8 @@ export const patients = mysqlTable("patients", {
   insurance: text("insurance"),
   ccmEnrollmentStatus: mysqlEnum("ccmEnrollmentStatus", ["active", "inactive", "declined", "transferred"]).default("active"),
   consentStatus: mysqlEnum("consentStatus", ["consented", "pending", "declined"]).default("pending"),
+  /** When CCM consent was given (e.g. on a signed consent form). */
+  ccmConsentDate: datetime("ccmConsentDate"),
   // Behavioral Health Integration (BHI, CPT 99484) — enrollment is independent of
   // CCM: a patient can be in CCM, BHI, or both. Defaults to not_enrolled since BHI
   // is opt-in and requires a behavioral-health condition + its own consent.
@@ -153,6 +155,8 @@ export const patients = mysqlTable("patients", {
   rpmEnrolled: boolean("rpmEnrolled").default(false),
   rpmStatus: mysqlEnum("rpmStatus", ["not_enrolled", "eligible", "enrolled", "active", "declined", "inactive"]).default("not_enrolled"),
   rpmDeviceType: varchar("rpmDeviceType", { length: 100 }),
+  rpmConsentStatus: mysqlEnum("rpmConsentStatus", ["consented", "pending", "declined"]).default("pending"),
+  rpmConsentDate: datetime("rpmConsentDate"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, (t) => ({
@@ -1135,6 +1139,8 @@ export const intakeDocuments = mysqlTable("intakeDocuments", {
   consentKind: varchar("consentKind", { length: 20 }),
   /** Open link for the website (mypcpcare.com/sign/<slug>): anyone can fill it in without a sent link. */
   publicSlug: varchar("publicSlug", { length: 40 }).unique(),
+  /** Yes/No consent questions inside this form (ConsentChoice[]), e.g. texting, CCM, APCM, BHI, RPM. */
+  choices: json("choices").$type<{ kind: string; title: Record<string, string>; body: Record<string, string> }[]>(),
   updatedByUserId: int("updatedByUserId").references(() => users.id),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -1202,8 +1208,10 @@ export const intakeSignatures = mysqlTable("intakeSignatures", {
   authorityNote: varchar("authorityNote", { length: 160 }),
   /** signed | declined (only consents can be declined) */
   decision: varchar("decision", { length: 10 }).default("signed").notNull(),
-  /** The consent this records, as the form was set up when signed (communications | ccm | bhi | apcm). */
+  /** The consent this records, as the form was set up when signed (communications | ccm | apcm | bhi | rpm). */
   consentKind: varchar("consentKind", { length: 20 }),
+  /** Answers to the form's Yes/No consent questions, by kind ({ ccm: "yes", rpm: "no", … }). */
+  choices: json("choices").$type<Record<string, "yes" | "no">>(),
   /** typed | drawn */
   method: varchar("method", { length: 10 }).notNull(),
   signatureFileId: int("signatureFileId"),
@@ -1229,6 +1237,34 @@ export const intakeFiles = mysqlTable("intakeFiles", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (t) => ({
   packetIdx: index("intakeFiles_packet_idx").on(t.packetId),
+}));
+
+/**
+ * A patient said Yes to a program (CCM / APCM / BHI / RPM) on a consent form. Enrolled automatically as
+ * soon as they're on the roster and their diagnoses on file qualify; until then it waits (re-checked
+ * on a schedule). A later No cancels it.
+ */
+export const consentEnrollments = mysqlTable("consentEnrollments", {
+  id: int("id").autoincrement().primaryKey(),
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  patientId: int("patientId").references(() => patients.id),
+  /** From the form, to find them on the roster later. */
+  name: varchar("name", { length: 255 }).notNull(),
+  dob: varchar("dob", { length: 10 }),
+  program: varchar("program", { length: 10 }).notNull(),
+  /** waiting | enrolled | cancelled */
+  status: varchar("status", { length: 12 }).default("waiting").notNull(),
+  packetId: int("packetId").references(() => intakePackets.id),
+  consentedAt: datetime("consentedAt").notNull(),
+  enrolledAt: datetime("enrolledAt"),
+  lastCheckedAt: datetime("lastCheckedAt"),
+  /** Why it's still waiting ("Needs 2 or more chronic conditions on file"), or what happened. */
+  note: varchar("note", { length: 255 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  statusIdx: index("consentEnrollments_status_idx").on(t.status),
+  subjectIdx: index("consentEnrollments_subject_idx").on(t.subjectKey),
 }));
 
 /** Audit trail for a packet (sent, opened, date-of-birth checks, signed, filed…). */

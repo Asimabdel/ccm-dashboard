@@ -1,4 +1,4 @@
-import { eq, and, gte, lte, desc, sql, like } from "drizzle-orm";
+import { eq, and, or, gte, lte, desc, sql, like } from "drizzle-orm";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import {
@@ -1045,6 +1045,10 @@ export async function getAllProviders() {
     .leftJoin(clinics, eq(providers.clinicId, clinics.id));
 }
 
+/** In APCM without CCM: enrolled in APCM and consented to it (APCM is otherwise the CCM set). */
+const apcmOnly = (p: { apcmEnrollmentStatus?: string | null; apcmConsentStatus?: string | null }) =>
+  p.apcmEnrollmentStatus === "active" && p.apcmConsentStatus === "consented";
+
 /** Generate monthly worklist tasks for all active patients lacking a task this month */
 export async function generateMonthlyWorklist(month: string) {
   const db = await getDb();
@@ -1058,9 +1062,11 @@ export async function generateMonthlyWorklist(month: string) {
 
   const ccmPats = await db.select().from(patients).where(eq(patients.ccmEnrollmentStatus, "active"));
   const bhiPats = await db.select().from(patients).where(eq(patients.bhiEnrollmentStatus, "active"));
-  // APCM covers the SAME active patients as CCM (mirror). A completed CCM later
-  // suppresses that month's APCM task (handled in recomputeBilling).
-  const apcmPats = ccmPats;
+  // APCM covers the SAME active patients as CCM (mirror), plus anyone enrolled in APCM on their own
+  // who consented to it (e.g. said Yes on their consent form). A completed CCM later suppresses that
+  // month's APCM task (handled in recomputeBilling).
+  const apcmOnly = await db.select().from(patients).where(and(eq(patients.apcmEnrollmentStatus, "active"), eq(patients.apcmConsentStatus, "consented")));
+  const apcmPats = [...ccmPats, ...apcmOnly.filter((p) => p.ccmEnrollmentStatus !== "active")];
 
   const rows: (typeof ccmTasks.$inferInsert)[] = [];
   for (const p of ccmPats) {
@@ -1117,8 +1123,10 @@ export async function ensureMonthlyTask(patientId: number, month: string, progra
   const patient = await getPatientById(patientId);
   if (!patient) return;
 
-  // APCM mirrors CCM enrollment (same active patient set), so both gate on CCM.
-  const enrolled = program === "bhi" ? patient.bhiEnrollmentStatus === "active" : patient.ccmEnrollmentStatus === "active";
+  // APCM mirrors CCM enrollment (same active patient set), plus consented APCM-only patients.
+  const enrolled = program === "bhi" ? patient.bhiEnrollmentStatus === "active"
+    : program === "apcm" ? patient.ccmEnrollmentStatus === "active" || apcmOnly(patient)
+    : patient.ccmEnrollmentStatus === "active";
 
   const existing = await getCCMTaskByPatientAndMonth(patientId, month, program);
   if (existing) {
@@ -1219,7 +1227,10 @@ export async function recomputeBilling(taskId: number, month: string) {
   // BHI (99484) and APCM (G0556-8) carry patient-level prerequisites beyond a
   // completed note. Load the patient to check them. Key difference: APCM is NOT
   // time-based (no 20-min rule) — it's a bundled service billed by complexity.
-  const patient = (isBhi || isApcm) ? await getPatientById(task.patientId) : undefined;
+  const patient = await getPatientById(task.patientId);
+  // CCM: a patient who declined CCM consent (e.g. said No on their consent form) must not be billed.
+  // Only a recorded "declined" blocks it; "pending" is how most of the roster was imported.
+  const ccmConsentOk = isBhi || isApcm || patient?.consentStatus !== "declined";
   const lastVisit = patient?.lastOfficeVisit ? new Date(patient.lastOfficeVisit) : null;
   const twelveMonthsAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
   const threeYearsAgo = new Date(Date.now() - 3 * 365 * 24 * 60 * 60 * 1000);
@@ -1251,10 +1262,11 @@ export async function recomputeBilling(taskId: number, month: string) {
   const ready =
     isBhi ? (docComplete && providerReviewDone && timeMet && consentObtained && initiatingVisitOnFile && carePlanDocumented)
     : isApcm ? (!apcmSuppressed && consentObtained && initiatingVisitOnFile && carePlanDocumented)
-    : (docComplete && providerReviewDone);
+    : (docComplete && providerReviewDone && ccmConsentOk);
   if (task.status === "billed") billingStatus = "billed";
   else if (isApcm && apcmSuppressed) billingStatus = "not_started"; // CCM billed this month → no APCM
   else if (ready) billingStatus = "ready_for_billing";
+  else if (!ccmConsentOk && docComplete && providerReviewDone) billingStatus = "documentation_incomplete"; // CCM consent declined
   else if (isApcm) billingStatus = "documentation_incomplete"; // needs consent / initiating visit / care plan
   else if (isBhi && docComplete && providerReviewDone) billingStatus = "documentation_incomplete";
   else if (task.status === "documentation_incomplete") billingStatus = "documentation_incomplete";
@@ -1901,7 +1913,8 @@ export async function updatePatientAPCM(
   // task exists so its billing readiness tracks — but DON'T reactivate one that a
   // completed CCM suppressed (only the CCM reconciliation restores it).
   let apcmTask = await getCCMTaskByPatientAndMonth(patientId, month, "apcm");
-  if (!apcmTask && current.ccmEnrollmentStatus === "active") {
+  const after = { ...current, apcmEnrollmentStatus: data.apcmEnrollmentStatus ?? current.apcmEnrollmentStatus, apcmConsentStatus: data.apcmConsentStatus ?? current.apcmConsentStatus };
+  if (!apcmTask && (current.ccmEnrollmentStatus === "active" || apcmOnly(after))) {
     await db.insert(ccmTasks).values({
       patientId, month, program: "apcm",
       assignedStaffId: current.assignedStaffId ?? null,
@@ -1972,7 +1985,8 @@ export async function getApcmOverview(
   const apcmT = alias(ccmTasks, "apcmOT");
   const ccmT = alias(ccmTasks, "apcmCT");
   const bill = alias(billingRecords, "apcmOB");
-  const conds: any[] = [eq(patients.ccmEnrollmentStatus, "active")];
+  // The CCM set (APCM mirrors it) plus APCM-only patients who consented to APCM.
+  const conds: any[] = [or(eq(patients.ccmEnrollmentStatus, "active"), and(eq(patients.apcmEnrollmentStatus, "active"), eq(patients.apcmConsentStatus, "consented")))];
   if (filters.assignedStaffId) conds.push(eq(patients.assignedStaffId, filters.assignedStaffId));
 
   const all = await db

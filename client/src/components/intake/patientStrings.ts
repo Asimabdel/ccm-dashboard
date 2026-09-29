@@ -147,6 +147,20 @@ export const T = {
   changeMind: s("Go back, I want to sign", "Regresar, quiero firmar", "رجوع، أريد التوقيع"),
   youSaidNo: s("You said no", "Usted dijo que no", "اخترت: لا"),
 
+  // Yes/No program questions inside a form
+  yourChoices: s("Your choices", "Sus decisiones", "اختياراتك"),
+  yourChoicesHelp: s(
+    "Please answer Yes or No for each one. Saying No does not change your regular care.",
+    "Conteste Sí o No para cada uno. Decir que No no cambia su atención médica regular.",
+    "يرجى الإجابة بنعم أو لا لكل واحد. الإجابة بلا لا تغيّر رعايتك المعتادة.",
+  ),
+  choiceYes: s("Yes, I agree", "Sí, acepto", "نعم، أوافق"),
+  choiceNo: s("No, thank you", "No, gracias", "لا، شكرًا"),
+  needChoices: s("Please answer Yes or No for each question above.", "Conteste Sí o No en cada pregunta de arriba.", "يرجى الإجابة بنعم أو لا على كل سؤال أعلاه."),
+  answerYes: s("Yes", "Sí", "نعم"),
+  answerNo: s("No", "No", "لا"),
+  moreInfo: s("What this means", "Qué significa", "ماذا يعني هذا"),
+
   // Someone answering for the patient
   authorityQ: s("Do you have the legal right to sign for the patient?", "¿Tiene el derecho legal de firmar por el paciente?", "هل لديك الحق القانوني في التوقيع نيابةً عن المريض؟"),
   authorityNone: s("No", "No", "لا"),

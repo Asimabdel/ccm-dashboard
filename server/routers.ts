@@ -201,6 +201,16 @@ function parseReachOutCsv(csv: string) {
 const reachCallStatusEnum = z.enum(["not_called", "no_answer", "voicemail", "wrong_number", "callback", "reached", "do_not_call"]);
 const reachOutcomeEnum = z.enum(["pending", "wants_appointment", "appointment_scheduled", "already_scheduled", "not_interested", "declined"]);
 
+/** Consent forms: check this patient's waiting Yes answers now (never blocks the save). */
+async function enrollAfterRosterChange(patientId: number) {
+  try {
+    const { checkEnrollmentsFor } = await import("./enrollDb");
+    await checkEnrollmentsFor(patientId);
+  } catch (e) {
+    console.error("[auto-enroll] check failed:", (e as Error).message);
+  }
+}
+
 export const appRouter = router({
   system: systemRouter,
   ccmNotesAI: ccmNotesRouter,
@@ -544,6 +554,8 @@ export const appRouter = router({
         // (assigned to the chosen staff member, if any).
         if (newId) await ensureMonthlyTask(Number(newId), currentMonth());
         void logAudit(ctx, "create_patient", { entityType: "patient", entityId: newId, description: `Created patient "${input.name}"` });
+        // They may have said Yes to programs on a consent form before they were on the roster.
+        if (newId) await enrollAfterRosterChange(Number(newId));
         return { success: true, id: newId };
       }),
 
@@ -809,6 +821,8 @@ export const appRouter = router({
         // is enrolled in (creates missing ones, updates the assigned employee).
         await ensureMonthlyTasksForPatient(id, currentMonth());
         void logAudit(ctx, "update_patient", { entityType: "patient", entityId: id, description: `Updated patient #${id}` });
+        // New diagnoses may make a waiting Yes (from a consent form) eligible now.
+        if (updateData.chronicConditions) await enrollAfterRosterChange(id);
         return getPatientById(id);
       }),
 

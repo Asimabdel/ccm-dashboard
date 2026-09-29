@@ -534,6 +534,12 @@ export const workspaceRouter = router({
       const actor = await actorFor(ctx, "intakeForms");
       return intake.listPackets(actor, input.filter, input.q);
     }),
+    /** Everyone who said Yes to a program on a consent form: enrolled automatically, or waiting (and why). */
+    enrollments: protectedProcedure.input(z.object({ status: z.enum(["waiting", "enrolled", "all"]).default("waiting") })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "intakeForms");
+      const { listEnrollments } = await import("../enrollDb");
+      return listEnrollments(actor, input.status);
+    }),
     /** Patient 360 → Forms: everything this person was sent or signed, and where each consent stands. */
     forSubject: protectedProcedure.input(z.object({ subjectKey: z.string().min(3).max(120) })).query(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "intakeForms");
@@ -579,6 +585,11 @@ export const workspaceRouter = router({
         active: z.boolean(),
         consentKind: z.enum(CONSENT_KINDS).nullish(),
         publicSlug: z.string().max(40).nullish(),
+        choices: z.array(z.object({
+          kind: z.enum(CONSENT_KINDS),
+          title: z.record(z.string(), z.string().max(200).nullish()),
+          body: z.record(z.string(), z.string().max(8000).nullish()),
+        })).max(10).nullish(),
       }))
       .mutation(async ({ ctx, input }) => {
         const actor = await actorFor(ctx, "intakeForms");

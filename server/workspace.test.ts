@@ -14,6 +14,8 @@ import {
   mapScheduleStatus,
   nameKey,
   sameProviderName,
+  enrollmentEligibility,
+  behavioralConditions,
   officeCanManageLogin,
   nextClinicDay,
   parseDateValue,
@@ -32,7 +34,7 @@ import { isFaxEmail, matchFaxPatient, parseFaxMeta, parseFaxReading } from "../s
 import { chartLine, patientInfo, patientOf, sectionType } from "../shared/fhir";
 import { clinicForLocation, parseBookingEmail, parsePreferred } from "../shared/booking";
 import { pcpIsOurs, splitName, summarizeCoverage } from "../shared/eligibility";
-import { MEDICAL_INTAKE, PUBLIC_SLUG_RE, agreementIn, answerText, cleanAnswers, dobFromParts, inviteText, langFromPreferred, missingInSection, needsAuthority, stableStringify, textBlocks } from "../shared/intake";
+import { MEDICAL_INTAKE, PUBLIC_SLUG_RE, agreementIn, answerText, choiceIn, cleanAnswers, cleanChoices, dobFromParts, inviteText, langFromPreferred, missingInSection, needsAuthority, stableStringify, textBlocks } from "../shared/intake";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
 
@@ -719,6 +721,32 @@ describe("patient forms (intake)", () => {
     expect(await pub.patientForms.publicInfo({ slug: "Not A Slug!" })).toEqual({ ok: false });
     // Spam bots fill the hidden box: refused before anything is saved.
     await expect(pub.patientForms.publicStart({ slug: "consent", firstName: "A", lastName: "B", month: "01", day: "01", year: "1950", phone: "2815550101", language: "en", website: "http://spam" })).rejects.toThrow(/bad/);
+  });
+  it("enrolls by the practice's rules, going only by diagnoses on file", () => {
+    const p = (chronicConditions: string[], bhiConditions: string[] = [], rpmStatus: string | null = null) => ({ chronicConditions, bhiConditions, rpmStatus });
+    expect(enrollmentEligibility("ccm", p(["Type 2 Diabetes", "Hypertension"])).eligible).toBe(true);
+    expect(enrollmentEligibility("ccm", p(["Hypertension"]))).toMatchObject({ eligible: false, reason: expect.stringMatching(/2 or more/) });
+    expect(enrollmentEligibility("apcm", p([])).eligible).toBe(true); // everyone who says Yes
+    expect(enrollmentEligibility("bhi", p(["Major depressive disorder"])).eligible).toBe(true);
+    expect(enrollmentEligibility("bhi", p([], ["PTSD"])).eligible).toBe(true);
+    expect(enrollmentEligibility("bhi", p(["COPD"])).eligible).toBe(false);
+    expect(enrollmentEligibility("rpm", p(["Congestive heart failure"])).eligible).toBe(true);
+    expect(enrollmentEligibility("rpm", p(["Osteoarthritis"])).eligible).toBe(false);
+    expect(enrollmentEligibility("rpm", p(["Osteoarthritis"], [], "eligible")).eligible).toBe(true);
+    expect(behavioralConditions(["Anxiety", "COPD"])).toEqual(["Anxiety"]);
+  });
+  it("keeps only real Yes/No consent questions, once each, and shows them in the patient's language", () => {
+    const c = cleanChoices([
+      { kind: "ccm", title: { en: "CCM", es: "CCM (es)" }, body: { en: "About CCM", es: "Sobre CCM" } },
+      { kind: "ccm", title: { en: "dup" }, body: { en: "dup" } },
+      { kind: "made_up", title: { en: "x" }, body: { en: "y" } },
+      { kind: "rpm", title: { es: "solo español" }, body: { es: "x" } },
+      { kind: "apcm", title: { en: "APCM", fr: "no" }, body: { en: "About APCM" } },
+    ]);
+    expect(c.map((x) => x.kind)).toEqual(["ccm", "apcm"]);
+    expect(c[1]!.title).toEqual({ en: "APCM" });
+    expect(choiceIn(c[0]!, "es")).toMatchObject({ title: "CCM (es)", body: "Sobre CCM", lang: "es" });
+    expect(choiceIn(c[1]!, "ar")).toMatchObject({ title: "APCM", lang: "en" });
   });
   it("only staff with forms access can link forms to a patient", async () => {
     await expect(appRouter.createCaller(ctxFor("billing")).workspace.intake.link({ id: 1, subjectKey: "p:1" })).rejects.toThrow(/access/);

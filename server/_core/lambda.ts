@@ -81,6 +81,11 @@ export const handler = async (event: any, context: any) => {
     return opportunityScopeReport();
   }
   // Load the practice's form wording into the Patient forms library (IAM-only; matched by English title).
+  // Consent forms: re-check everyone who said Yes to a program and isn't enrolled yet (EventBridge, every 30 min).
+  if (event && event.__job === "auto-enroll" && !event.requestContext && !event.version) {
+    const { sweepEnrollments } = await import("../enrollDb");
+    return sweepEnrollments();
+  }
   if (event && event.__job === "intake-docs" && !event.requestContext && !event.version) {
     const { importDocuments } = await import("../intakeDb");
     return importDocuments(Array.isArray(event.docs) ? event.docs : []);

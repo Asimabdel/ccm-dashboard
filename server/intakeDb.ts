@@ -5,8 +5,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
 import { and, asc, desc, eq, inArray, like, not, or, sql, type SQL } from "drizzle-orm";
-import { getCCMTaskByPatientAndMonth, getDb, recomputeBilling, updatePatientAPCM, updatePatientBHI } from "./db";
-import { currentMonth } from "./seed";
+import { getDb } from "./db";
 import { ENV } from "./_core/env";
 import { sealSecret, openSecret } from "./secretBox";
 import {
@@ -14,11 +13,12 @@ import {
   patients, users, workTaskActivities, workTasks,
 } from "../drizzle/schema";
 import {
-  AUTHORITY_LABELS, CONSENT_LABELS, MEDICAL_INTAKE, MEDICAL_INTAKE_KEY, OPEN_PACKET, PACKET_EXPIRY_DAYS, PHOTO_KINDS, PUBLIC_SLUG_RE, RELATION_LABELS,
-  SIGNER_AUTHORITIES, SIGNER_RELATIONS, WEBSITE_PACKET_HOURS, agreementIn, cleanAnswers, docIdOf, docKey, formatUsPhone, inviteText, isConsentKind,
+  AUTHORITY_LABELS, CHOICES_CONSENT, CONSENT_LABELS, MEDICAL_INTAKE, MEDICAL_INTAKE_KEY, OPEN_PACKET, PACKET_EXPIRY_DAYS, PHOTO_KINDS, PUBLIC_SLUG_RE, RELATION_LABELS,
+  SIGNER_AUTHORITIES, SIGNER_RELATIONS, WEBSITE_PACKET_HOURS, agreementIn, choiceIn, cleanAnswers, cleanChoices, docIdOf, docKey, formatUsPhone, inviteText, isConsentKind,
   isIntakeLang, langFromPreferred, missingRequired, needsAuthority, stableStringify, tr, type Answers, type ConsentKind, type IntakeLang, type PacketSource,
-  type PacketStatus, type PhotoKind, type SignDecision, type SignerAuthority, type SignerRelation,
+  type ChoiceAnswer, type ConsentChoice, type PacketStatus, type PhotoKind, type SignDecision, type SignerAuthority, type SignerRelation,
 } from "../shared/intake";
+import { enrollmentsForSubject, recordConsent, type ConsentEvent } from "./enrollDb";
 import { matchFaxPatient } from "../shared/fax";
 import { normalizePhone } from "../shared/phone";
 import { localDateStr } from "../shared/workforce";
@@ -63,7 +63,7 @@ export async function listDocuments(includeInactive = false) {
   const rows = await d.select().from(intakeDocuments).where(includeInactive ? undefined : eq(intakeDocuments.active, true)).orderBy(asc(intakeDocuments.sortOrder), asc(intakeDocuments.id));
   return rows.map((r) => ({
     id: r.id, key: docKey(r.id), title: r.title, body: r.body, version: r.version, active: r.active, updatedAt: r.updatedAt,
-    consentKind: isConsentKind(r.consentKind) ? r.consentKind : null, publicSlug: r.publicSlug ?? null,
+    consentKind: isConsentKind(r.consentKind) ? r.consentKind : null, publicSlug: r.publicSlug ?? null, choices: cleanChoices(r.choices),
   }));
 }
 
@@ -78,6 +78,8 @@ export interface SaveDocumentInput {
   /** undefined = leave as is */
   consentKind?: ConsentKind | null;
   publicSlug?: string | null;
+  /** Yes/No consent questions in this form; undefined = leave as is. */
+  choices?: unknown[] | null;
 }
 
 export async function saveDocument(actor: WorkspaceActor, input: SaveDocumentInput) {
@@ -85,7 +87,9 @@ export async function saveDocument(actor: WorkspaceActor, input: SaveDocumentInp
   const body = cleanL10n(input.body, 60_000);
   if (!title.en || !body.en) throw new WorkspaceError("Every form needs at least an English title and wording.");
   const d = await db();
-  const settings: { consentKind?: ConsentKind | null; publicSlug?: string | null } = {};
+  const settings: { consentKind?: ConsentKind | null; publicSlug?: string | null; choices?: ConsentChoice[] | null } = {};
+  if (input.choices !== undefined) settings.choices = input.choices ? cleanChoices(input.choices) : null;
+  if (settings.choices && !settings.choices.length) settings.choices = null;
   if (input.consentKind !== undefined) settings.consentKind = input.consentKind && isConsentKind(input.consentKind) ? input.consentKind : null;
   if (input.publicSlug !== undefined) {
     const slug = input.publicSlug?.trim().toLowerCase() || null;
@@ -99,7 +103,9 @@ export async function saveDocument(actor: WorkspaceActor, input: SaveDocumentInp
   if (input.id) {
     const [cur] = await d.select().from(intakeDocuments).where(eq(intakeDocuments.id, input.id)).limit(1);
     if (!cur) throw new WorkspaceError("Form not found.", "NOT_FOUND");
-    const changed = stableStringify(cur.title) !== stableStringify(title) || stableStringify(cur.body) !== stableStringify(body);
+    // The Yes/No questions are part of the wording patients sign: changing them makes a new version too.
+    const changed = stableStringify(cur.title) !== stableStringify(title) || stableStringify(cur.body) !== stableStringify(body)
+      || (settings.choices !== undefined && stableStringify(cleanChoices(cur.choices)) !== stableStringify(settings.choices ?? []));
     await d.update(intakeDocuments).set({ title, body, active: input.active, version: changed ? cur.version + 1 : cur.version, updatedByUserId: actor.id, ...settings }).where(eq(intakeDocuments.id, cur.id));
     const what = [
       changed ? `updated (v${cur.version + 1})` : null,
@@ -117,7 +123,7 @@ export async function saveDocument(actor: WorkspaceActor, input: SaveDocumentInp
 }
 
 /** Load forms by English title (adds new ones, updates changed ones). Used by an IAM-only Lambda job. */
-export async function importDocuments(docs: { title: Record<string, string>; body: Record<string, string>; active?: boolean; consentKind?: string | null; publicSlug?: string | null }[]) {
+export async function importDocuments(docs: { title: Record<string, string>; body: Record<string, string>; active?: boolean; consentKind?: string | null; publicSlug?: string | null; choices?: unknown[] | null }[]) {
   const actor = { ...(await filingActor(null)), name: "Form library import" };
   const existing = await listDocuments(true);
   const out: { title: string; id: number; action: "added" | "updated" }[] = [];
@@ -127,6 +133,7 @@ export async function importDocuments(docs: { title: Record<string, string>; bod
       id: cur?.id ?? null, title: doc.title ?? {}, body: doc.body ?? {}, active: doc.active ?? cur?.active ?? true,
       consentKind: doc.consentKind === undefined ? undefined : isConsentKind(doc.consentKind) ? doc.consentKind : null,
       publicSlug: doc.publicSlug,
+      choices: doc.choices,
     });
     out.push({ title: doc.title?.en ?? "", id: r.id, action: cur ? "updated" : "added" });
   }
@@ -209,6 +216,9 @@ export async function createPacket(actor: WorkspaceActor, input: CreatePacketInp
   await audit(actor, "update_patient", { entityType: "intakePacket", entityId: id, description: `Patient forms created (${forms.length})` });
   return { id, link: linkFor(origin, token) };
 }
+
+/** The wording that was signed, as kept with the signature (plus any Yes/No questions and the answers given). */
+interface SignedText { title: string; body: string; language?: string; choices?: { kind: ConsentKind; title: string; body: string; answer: ChoiceAnswer }[] }
 
 /** Office managers only reach their office's packets. */
 const inScope = (actor: WorkspaceActor, clinicId: number | null) => !actor.clinicIds || (clinicId != null && actor.clinicIds.includes(clinicId));
@@ -353,19 +363,26 @@ export async function subjectForms(actor: WorkspaceActor, subjectKey: string) {
   const who = pid ? or(eq(intakePackets.subjectKey, subjectKey), eq(intakePackets.patientId, Number(pid))) : eq(intakePackets.subjectKey, subjectKey);
   const packets = await packetRows(and(who, packetScope(actor)), 100);
   const ids = packets.map((p) => p.id);
-  const sigs = ids.length ? await d.select({ packetId: intakeSignatures.packetId, kind: intakeSignatures.consentKind, decision: intakeSignatures.decision, at: intakeSignatures.signedAt, title: intakeSignatures.formTitle })
-    .from(intakeSignatures).where(and(inArray(intakeSignatures.packetId, ids), sql`${intakeSignatures.consentKind} IS NOT NULL`)).orderBy(desc(intakeSignatures.signedAt)) : [];
-  const [pt] = pid ? await d.select({ ccm: patients.consentStatus, bhi: patients.bhiConsentStatus, bhiAt: patients.bhiConsentDate, apcm: patients.apcmConsentStatus, apcmAt: patients.apcmConsentDate })
-    .from(patients).where(eq(patients.id, Number(pid))).limit(1) : [];
-  const consents = (["communications", "ccm", "bhi", "apcm"] as ConsentKind[]).map((kind) => {
-    const last = sigs.find((s) => s.kind === kind);
-    const status = kind === "ccm" ? pt?.ccm : kind === "bhi" ? pt?.bhi : kind === "apcm" ? pt?.apcm : null;
-    const since = kind === "bhi" ? pt?.bhiAt : kind === "apcm" ? pt?.apcmAt : null;
+  const sigRows = ids.length ? await d.select({ packetId: intakeSignatures.packetId, kind: intakeSignatures.consentKind, decision: intakeSignatures.decision, choices: intakeSignatures.choices, at: intakeSignatures.signedAt, title: intakeSignatures.formTitle })
+    .from(intakeSignatures).where(and(inArray(intakeSignatures.packetId, ids), sql`(${intakeSignatures.consentKind} IS NOT NULL OR ${intakeSignatures.choices} IS NOT NULL)`)).orderBy(desc(intakeSignatures.signedAt)) : [];
+  // Every program answer on a form, newest first (a form's own yes/no, and each Yes/No question in it).
+  const answers = sigRows.flatMap((s) => answersOf({ consentKind: s.kind, decision: s.decision, choices: s.choices }).map((a) => ({ ...a, packetId: s.packetId, at: s.at, title: s.title })));
+  const [pt] = pid ? await d.select({
+    ccm: patients.consentStatus, ccmAt: patients.ccmConsentDate, bhi: patients.bhiConsentStatus, bhiAt: patients.bhiConsentDate,
+    apcm: patients.apcmConsentStatus, apcmAt: patients.apcmConsentDate, rpm: patients.rpmConsentStatus, rpmAt: patients.rpmConsentDate,
+  }).from(patients).where(eq(patients.id, Number(pid))).limit(1) : [];
+  const enrollments = await enrollmentsForSubject(subjectKey);
+  const consents = (["communications", "ccm", "apcm", "bhi", "rpm"] as ConsentKind[]).map((kind) => {
+    const last = answers.find((a) => a.kind === kind);
+    const status = kind === "communications" ? null : pt?.[kind];
+    const since = kind === "communications" ? null : pt?.[`${kind}At` as "ccmAt"];
     return {
       kind, label: CONSENT_LABELS[kind],
-      /** What the patient record says (CCM / BHI / APCM); null for communications or people not on the roster. */
+      /** What the patient record says (CCM / APCM / BHI / RPM); null for communications or people not on the roster. */
       status: status ?? null, since: since ?? null,
-      lastForm: last ? { packetId: last.packetId, decision: last.decision as SignDecision, at: last.at, title: last.title } : null,
+      lastForm: last ? { packetId: last.packetId, decision: (last.answer === "no" ? "declined" : "signed") as SignDecision, at: last.at, title: last.title } : null,
+      /** After a Yes: enrolled automatically, or waiting (and why). */
+      enrollment: (enrollments as Record<string, { status: "waiting" | "enrolled"; note: string | null; enrolledAt: Date | null }>)[kind] ?? null,
     };
   });
   return { packets, consents };
@@ -416,7 +433,7 @@ export async function packetDetail(actor: WorkspaceActor, id: number) {
       decision: s.decision as SignDecision, consentKind: isConsentKind(s.consentKind) ? s.consentKind : null,
       authority: s.signerAuthority as SignerAuthority | null, authorityLabel: s.signerAuthority ? AUTHORITY_LABELS[s.signerAuthority as SignerAuthority]?.en ?? s.signerAuthority : null, authorityNote: s.authorityNote,
       signedAt: s.signedAt, ip: s.ip, userAgent: s.userAgent, textHash: s.textHash, docHash: s.docHash,
-      text: s.formKey === MEDICAL_INTAKE_KEY ? null : (JSON.parse(s.snapshot) as { title: string; body: string }),
+      text: s.formKey === MEDICAL_INTAKE_KEY ? null : (JSON.parse(s.snapshot) as SignedText),
     })),
     files,
     events: events.map(({ e, userName }) => ({ at: e.at, type: e.type, detail: e.detail, ip: e.ip, userAgent: e.userAgent, userName })),
@@ -481,44 +498,43 @@ export async function linkPacket(actor: WorkspaceActor, id: number, subjectKey: 
   return { ok: true, applied };
 }
 
-/** Everything the patient agreed to or declined in this packet → their consent status (CCM / BHI / APCM). */
-async function applyPacketConsents(packetId: number, actor: WorkspaceActor | null) {
-  const d = await db();
-  const [p] = await d.select({ patientId: intakePackets.patientId }).from(intakePackets).where(eq(intakePackets.id, packetId)).limit(1);
-  if (!p?.patientId) return [];
-  const sigs = await d.select({ kind: intakeSignatures.consentKind, decision: intakeSignatures.decision, at: intakeSignatures.signedAt })
-    .from(intakeSignatures).where(and(eq(intakeSignatures.packetId, packetId), sql`${intakeSignatures.consentKind} IS NOT NULL`)).orderBy(asc(intakeSignatures.signedAt));
-  const applied: string[] = [];
-  for (const s of sigs) {
-    if (!isConsentKind(s.kind)) continue;
-    if (await applyConsent(p.patientId, s.kind, s.decision as SignDecision, s.at, packetId, actor)) applied.push(s.kind);
-  }
-  return applied;
+/**
+ * The program answers in one signature: a consent form's own yes/no (signed = yes, declined = no) and every
+ * Yes/No question inside it.
+ */
+function answersOf(sig: { consentKind: string | null; decision: string; choices: unknown }): { kind: ConsentKind; answer: ChoiceAnswer }[] {
+  const out: { kind: ConsentKind; answer: ChoiceAnswer }[] = [];
+  if (isConsentKind(sig.consentKind)) out.push({ kind: sig.consentKind, answer: sig.decision === "declined" ? "no" : "yes" });
+  const c = (sig.choices && typeof sig.choices === "object" ? sig.choices : {}) as Record<string, unknown>;
+  for (const [k, v] of Object.entries(c)) if (isConsentKind(k) && (v === "yes" || v === "no")) out.push({ kind: k, answer: v });
+  return out;
 }
 
 /**
- * One signed (or declined) consent → the patient's record. CCM, BHI and APCM have consent fields that
- * billing checks; texting consent lives only on the signed form (shown on Patient 360 → Forms).
+ * Everything the patient agreed to or declined in this packet → their consent status, and (for Yes) enrollment
+ * when they qualify. Only for packets that belong to someone: an unverified website form waits for staff to link it.
  */
-async function applyConsent(patientId: number, kind: ConsentKind, decision: SignDecision, at: Date, packetId: number, actor: WorkspaceActor | null): Promise<boolean> {
-  if (kind === "communications") return false;
-  const status = decision === "declined" ? "declined" as const : "consented" as const;
-  const month = currentMonth();
-  if (kind === "ccm") {
-    await (await db()).update(patients).set({ consentStatus: status }).where(eq(patients.id, patientId));
-  } else if (kind === "bhi") {
-    await updatePatientBHI(patientId, { bhiConsentStatus: status, ...(status === "consented" ? { bhiConsentDate: at } : {}) }, month);
-    const task = await getCCMTaskByPatientAndMonth(patientId, month, "bhi");
-    if (task) await recomputeBilling(task.id, month);
-  } else {
-    await updatePatientAPCM(patientId, { apcmConsentStatus: status, ...(status === "consented" ? { apcmConsentDate: at } : {}) }, month);
+async function applyPacketConsents(packetId: number, actor: WorkspaceActor | null, onlyFormKey?: string) {
+  const d = await db();
+  const [p] = await d.select().from(intakePackets).where(eq(intakePackets.id, packetId)).limit(1);
+  if (!p?.subjectKey) return [];
+  const sigs = await d.select().from(intakeSignatures)
+    .where(onlyFormKey ? and(eq(intakeSignatures.packetId, packetId), eq(intakeSignatures.formKey, onlyFormKey)) : eq(intakeSignatures.packetId, packetId))
+    .orderBy(asc(intakeSignatures.signedAt));
+  const notes: string[] = [];
+  for (const s of sigs) {
+    for (const a of answersOf(s)) {
+      const e: ConsentEvent = { ...a, at: s.signedAt, packetId, subjectKey: p.subjectKey, patientId: p.patientId, name: p.name, dob: p.dob };
+      try {
+        const note = await recordConsent(e, actor);
+        if (note) notes.push(note);
+      } catch (err) {
+        console.error("[patient-forms] consent update failed:", (err as Error).message);
+      }
+    }
   }
-  const who = actor ?? { ...(await filingActor(null)), name: "Patient forms" };
-  await audit(who, "update_patient", {
-    entityType: "patient", entityId: patientId,
-    description: `${CONSENT_LABELS[kind]} consent ${status === "consented" ? "given" : "declined"} on a signed patient form (packet #${packetId})`,
-  });
-  return true;
+  if (notes.length) await logEvent(packetId, "consents", { detail: notes.join("; ") });
+  return notes;
 }
 
 // ---------------------------------------------------------------------------
@@ -618,7 +634,10 @@ async function payload(p: typeof intakePackets.$inferSelect) {
     if (k === MEDICAL_INTAKE_KEY) return { key: k, kind: "questionnaire" as const, version: MEDICAL_INTAKE.version, ...done, canDecline: false, doc: null };
     const doc = docs.get(k);
     // Consents are a choice: the patient may say no. Other agreements must be signed.
-    return { key: k, kind: "agreement" as const, version: doc?.version ?? 0, ...done, canDecline: !!doc?.consentKind, doc: doc ? { title: doc.title, body: doc.body } : null };
+    return {
+      key: k, kind: "agreement" as const, version: doc?.version ?? 0, ...done, canDecline: !!doc?.consentKind && !doc.choices.length,
+      doc: doc ? { title: doc.title, body: doc.body, choices: doc.choices } : null,
+    };
   }).filter((f) => f.kind === "questionnaire" || f.doc);
   // "LAST, FIRST" (Practice Fusion style) or "First Last" → the first name, for "Hello, …".
   const given = (p.name.includes(",") ? p.name.split(",")[1] : p.name) ?? "";
@@ -702,6 +721,8 @@ export interface SignInput {
   /** Someone else answering an agreement for the patient: their legal authority. */
   authority?: SignerAuthority | null;
   authorityNote?: string | null;
+  /** Answers to the form's Yes/No consent questions ({ ccm: "yes", rpm: "no", … }). Every question must be answered. */
+  choices?: Record<string, string> | null;
 }
 
 /** Sign (or decline) one form. The questionnaire must be complete; an agreement must be the version the patient read. */
@@ -728,6 +749,7 @@ export async function patientSign(session: string, input: SignInput, meta: Clien
   if (already) return patientAfterSign(p.id);
 
   let formTitle: string, formVersion: number, snapshot: string, consentKind: ConsentKind | null = null;
+  let answers: Record<string, ChoiceAnswer> | null = null;
   if (input.formKey === MEDICAL_INTAKE_KEY) {
     if (decision === "declined") throw new PatientFormError("bad");
     const answers = ((p.answers ?? {}) as Record<string, Answers>)[MEDICAL_INTAKE_KEY] ?? {};
@@ -747,7 +769,22 @@ export async function patientSign(session: string, input: SignInput, meta: Clien
     const text = agreementIn({ title: doc.title, body: doc.body }, lang);
     formTitle = text.title;
     formVersion = doc.version;
-    snapshot = JSON.stringify({ title: text.title, body: text.body, language: text.lang });
+    const choices = cleanChoices(doc.choices);
+    if (choices.length) {
+      // A form with Yes/No questions is signed (never declined as a whole); every question needs an answer.
+      if (decision === "declined") throw new PatientFormError("bad");
+      answers = {};
+      for (const c of choices) {
+        const a = input.choices?.[c.kind];
+        if (a !== "yes" && a !== "no") throw new PatientFormError("choices");
+        answers[c.kind] = a;
+      }
+      // What they read and what they answered, in the language they read it.
+      const shown = choices.map((c) => { const t = choiceIn(c, lang); return { kind: c.kind, title: t.title, body: t.body, answer: answers![c.kind] }; });
+      snapshot = JSON.stringify({ title: text.title, body: text.body, language: text.lang, choices: shown });
+    } else {
+      snapshot = JSON.stringify({ title: text.title, body: text.body, language: text.lang });
+    }
   }
 
   let signatureFileId: number | null = null, signatureHash: string | null = null;
@@ -768,18 +805,17 @@ export async function patientSign(session: string, input: SignInput, meta: Clien
   const docHash = sha256(stableStringify({
     packetId: p.id, formKey: input.formKey, formVersion, language: lang, textHash, signerName, relation: input.relation, method: input.method, signatureHash, signedAt: signedAt.toISOString(), ip,
     ...(decision === "declined" ? { decision } : {}), ...(authority ? { authority, authorityNote } : {}), ...(consentKind ? { consentKind } : {}),
+    ...(answers ? { choices: answers } : {}),
   }));
   await d.insert(intakeSignatures).values({
     packetId: p.id, formKey: input.formKey, formTitle: formTitle.slice(0, 255), language: lang, formVersion, snapshot, textHash, signerName, signerRelation: input.relation,
-    signerAuthority: authority, authorityNote, decision, consentKind, method: input.method, signatureFileId, signedAt, ip, userAgent, docHash,
+    signerAuthority: authority, authorityNote, decision, consentKind, choices: answers, method: input.method, signatureFileId, signedAt, ip, userAgent, docHash,
   });
   const by = input.relation === "self" ? "" : ` · by ${input.relation}${authority ? ` (${authority})` : ""}`;
   await logEvent(p.id, decision === "declined" ? "declined" : "signed", { meta, detail: `${formTitle.slice(0, 120)} · ${decision === "declined" ? "said no" : input.method}${by}` });
   if (p.status === "waiting" || p.status === "opened") await d.update(intakePackets).set({ status: "in_progress" }).where(eq(intakePackets.id, p.id));
   // A consent takes effect when it's signed, not when the rest of the forms are done.
-  if (consentKind && p.patientId) {
-    try { await applyConsent(p.patientId, consentKind, decision, signedAt, p.id, null); } catch (e) { console.error("[patient-forms] consent update failed:", (e as Error).message); }
-  }
+  if (consentKind || answers) await applyPacketConsents(p.id, null, input.formKey);
   return patientAfterSign(p.id);
 }
 
@@ -838,7 +874,7 @@ export async function patientCopy(session: string, meta: ClientMeta) {
         key: s.formKey, kind: s.formKey === MEDICAL_INTAKE_KEY ? "questionnaire" as const : "agreement" as const, title: s.formTitle, language: s.language,
         decision: s.decision as SignDecision, signerName: s.signerName, relation: s.signerRelation as SignerRelation, authority: s.signerAuthority as SignerAuthority | null,
         authorityNote: s.authorityNote, method: s.method, signedAt: s.signedAt, signature: file ? `data:${file.mime};base64,${file.data}` : null, docHash: s.docHash,
-        text: s.formKey === MEDICAL_INTAKE_KEY ? null : (JSON.parse(s.snapshot) as { title: string; body: string; language: string }),
+        text: s.formKey === MEDICAL_INTAKE_KEY ? null : (JSON.parse(s.snapshot) as SignedText),
       };
     }),
   };

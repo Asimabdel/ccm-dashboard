@@ -114,6 +114,22 @@ export default function IntakePrintPage() {
                       {textBlocks(sig.text.body).map((b, j) => b.kind === "heading" ? <h3 key={j} className="pt-1 font-bold">{b.text}</h3>
                         : b.kind === "bullets" ? <ul key={j} className="list-disc ps-6">{b.items!.map((x, k) => <li key={k}>{x}</li>)}</ul>
                         : <p key={j} className="whitespace-pre-line">{b.text}</p>)}
+                      {(sig.text.choices ?? []).map((c) => (
+                        <div key={c.kind} className="break-inside-avoid rounded border border-slate-300 p-3">
+                          <div className="flex items-start justify-between gap-4">
+                            <h3 className="font-bold">{c.title}</h3>
+                            <span className={c.answer === "yes" ? "shrink-0 rounded border-2 border-emerald-700 px-2 font-bold text-emerald-800" : "shrink-0 rounded border-2 border-slate-700 px-2 font-bold"}>
+                              {c.answer === "yes" ? "YES" : "NO"}
+                            </span>
+                          </div>
+                          <div className="mt-1 space-y-1 text-xs">
+                            {textBlocks(c.body).map((b, j) => b.kind === "heading" ? <p key={j} className="font-bold">{b.text}</p>
+                              : b.kind === "bullets" ? <ul key={j} className="list-disc ps-5">{b.items!.map((x, k) => <li key={k}>{x}</li>)}</ul>
+                              : <p key={j} className="whitespace-pre-line">{b.text}</p>)}
+                          </div>
+                          <p className="mt-1 text-xs text-slate-600">Records: {CONSENT_LABELS[c.kind]} consent ({c.answer === "yes" ? "given" : "declined"})</p>
+                        </div>
+                      ))}
                     </div>
                   ) : <p className="mt-3 text-sm text-slate-500">Not signed.</p>}
                 </>

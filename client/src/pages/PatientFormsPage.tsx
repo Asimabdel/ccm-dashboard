@@ -11,9 +11,9 @@ import { BrandMark } from "@/components/BrandMark";
 import { cn } from "@/lib/utils";
 import { T, t } from "@/components/intake/patientStrings";
 import {
-  AUTHORITY_LABELS, DECLINE_CONSENT, ESIGN_CONSENT, INTAKE_LANGS, LANG_LABELS, MEDICAL_INTAKE, MEDICAL_INTAKE_KEY, RELATION_LABELS, SIGNER_AUTHORITIES, SIGNER_RELATIONS,
-  agreementIn, answerText, formatUsPhone, isVisible, langDir, missingInSection, needsAuthority, textBlocks, tr, type Answers, type IntakeField, type IntakeLang,
-  type ListRow, type PhotoKind, type SignerAuthority, type SignerRelation,
+  AUTHORITY_LABELS, CHOICES_CONSENT, DECLINE_CONSENT, ESIGN_CONSENT, INTAKE_LANGS, LANG_LABELS, MEDICAL_INTAKE, MEDICAL_INTAKE_KEY, RELATION_LABELS, SIGNER_AUTHORITIES, SIGNER_RELATIONS,
+  agreementIn, answerText, choiceIn, formatUsPhone, isVisible, langDir, missingInSection, needsAuthority, textBlocks, tr, type Answers, type IntakeField, type IntakeLang,
+  type ChoiceAnswer, type ConsentChoice, type ListRow, type PhotoKind, type SignerAuthority, type SignerRelation,
 } from "@shared/intake";
 
 type Payload = RouterOutputs["patientForms"]["load"];
@@ -927,6 +927,10 @@ function Agreement({ lang, session, form, notice, onExit, onSigned, onServerErro
   const text = agreementIn(form.doc!, lang);
   const blocks = useMemo(() => textBlocks(text.body), [text.body]);
   const [declining, setDeclining] = useState(false);
+  // Yes/No program questions in this form (e.g. texting, CCM, APCM, BHI, RPM): one answer each, one signature.
+  const choices = form.doc?.choices ?? [];
+  const [answers, setAnswers] = useState<Record<string, ChoiceAnswer>>({});
+  const missing = choices.filter((c) => !answers[c.kind]).map((c) => c.kind);
   const onError = (e: unknown) => { if (onServerError(e)) return true; if (errCode(e) === "changed") { onChanged(); return true; } return false; };
   return (
     <div className="space-y-5">
@@ -956,10 +960,31 @@ function Agreement({ lang, session, form, notice, onExit, onSigned, onServerErro
         </section>
       ) : (
         <>
+          {choices.length > 0 && (
+            <section className="space-y-4">
+              <div className="px-1">
+                <h2 className="text-2xl font-bold">{t(T.yourChoices, lang)}</h2>
+                <p className="mt-1 text-lg text-slate-600">{t(T.yourChoicesHelp, lang)}</p>
+              </div>
+              {choices.map((c, i) => (
+                <ChoiceCard key={c.kind} lang={lang} n={i + 1} of={choices.length} choice={c} answer={answers[c.kind] ?? null}
+                  onAnswer={(a) => setAnswers((x) => ({ ...x, [c.kind]: a }))} />
+              ))}
+            </section>
+          )}
           <section className="rounded-3xl border-2 border-teal-600 bg-white p-5 shadow-sm">
             <h2 className="text-2xl font-bold">{t(T.signTitle, lang)}</h2>
             <SignBlock lang={lang} session={session} formKey={form.key} version={form.version} language={text.lang}
-              consentLabel={`${t(T.agreeRead, text.lang)} ${tr(ESIGN_CONSENT, text.lang)}`} onSigned={(c) => onSigned(c, false)} onError={onError} />
+              consentLabel={`${choices.length ? tr(CHOICES_CONSENT, text.lang) : t(T.agreeRead, text.lang)} ${tr(ESIGN_CONSENT, text.lang)}`}
+              choices={choices.length ? answers : undefined}
+              beforeSign={choices.length ? async () => {
+                if (!missing.length) return true;
+                document.getElementById(`choice-${missing[0]}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+                return false;
+              } : undefined}
+              blockedMessage={choices.length && missing.length ? t(T.needChoices, lang) : null}
+              onSigned={(c) => onSigned(c, false)}
+              onError={(e) => { if (errCode(e) === "choices") return false; return onError(e); }} />
           </section>
           {form.canDecline && (
             <section className="rounded-3xl border border-slate-200 bg-white p-5">
@@ -972,6 +997,38 @@ function Agreement({ lang, session, form, notice, onExit, onSigned, onServerErro
         </>
       )}
     </div>
+  );
+}
+
+/** One Yes/No program question: what it is (in their language when we have it) and two big buttons. */
+function ChoiceCard({ lang, n, of, choice, answer, onAnswer }: {
+  lang: IntakeLang; n: number; of: number; choice: ConsentChoice; answer: ChoiceAnswer | null; onAnswer: (a: ChoiceAnswer) => void;
+}) {
+  const c = choiceIn(choice, lang);
+  const blocks = useMemo(() => textBlocks(c.body), [c.body]);
+  const btn = (on: boolean, yes: boolean) => cn(
+    "flex min-h-14 flex-1 items-center justify-center gap-2 rounded-2xl border-2 px-4 text-xl font-bold",
+    on ? (yes ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-700 bg-slate-700 text-white") : "border-slate-300 bg-white text-slate-800",
+  );
+  return (
+    <article id={`choice-${c.kind}`} className={cn("scroll-mt-40 rounded-3xl border-2 bg-white p-5 shadow-sm", answer ? "border-emerald-200" : "border-slate-200")}>
+      <p className="text-base font-semibold text-slate-500">{n} / {of}</p>
+      <h3 dir={langDir(c.lang)} className="text-2xl font-bold leading-tight">{c.title}</h3>
+      <div className="mt-2"><ReadAloud lang={lang} speakLang={c.lang} text={`${c.title}. ${c.body.replace(/^#{1,3}\s+/gm, "")}`} /></div>
+      <div dir={langDir(c.lang)} lang={c.lang} className="mt-3 space-y-3 text-lg leading-relaxed">
+        {blocks.map((b, i) => b.kind === "heading" ? <h4 key={i} className="pt-1 text-xl font-bold">{b.text}</h4>
+          : b.kind === "bullets" ? <ul key={i} className="list-disc space-y-1 ps-7">{b.items!.map((x, j) => <li key={j}>{x}</li>)}</ul>
+          : <p key={i} className="whitespace-pre-line">{b.text}</p>)}
+      </div>
+      <div className="mt-4 flex flex-col gap-2 sm:flex-row" role="radiogroup" aria-label={c.title}>
+        <button type="button" role="radio" aria-checked={answer === "yes"} onClick={() => onAnswer("yes")} className={btn(answer === "yes", true)}>
+          {answer === "yes" && <Check className="size-6" strokeWidth={3} />} {t(T.choiceYes, lang)}
+        </button>
+        <button type="button" role="radio" aria-checked={answer === "no"} onClick={() => onAnswer("no")} className={btn(answer === "no", false)}>
+          {answer === "no" && <Check className="size-6" strokeWidth={3} />} {t(T.choiceNo, lang)}
+        </button>
+      </div>
+    </article>
   );
 }
 
@@ -1005,8 +1062,12 @@ function ReadAloud({ lang, speakLang, text }: { lang: IntakeLang; speakLang: Int
 // Signing: typed name (easiest) or drawn; the patient or someone signing for them
 // ---------------------------------------------------------------------------
 
-function SignBlock({ lang, session, formKey, version, language, consentLabel, decision = "signed", beforeSign, onSigned, onError }: {
+function SignBlock({ lang, session, formKey, version, language, consentLabel, decision = "signed", choices, blockedMessage, beforeSign, onSigned, onError }: {
   lang: IntakeLang; session: string; formKey: string; version: number; language: string; consentLabel: string; decision?: "signed" | "declined";
+  /** Answers to the form's Yes/No questions, sent with the signature. */
+  choices?: Record<string, ChoiceAnswer>;
+  /** Something above still needs doing (e.g. a Yes/No left blank): shown instead of signing. */
+  blockedMessage?: string | null;
   beforeSign?: () => Promise<boolean>; onSigned: (completed: boolean) => void; onError: (e: unknown) => boolean;
 }) {
   const sign = trpc.patientForms.sign.useMutation();
@@ -1028,6 +1089,7 @@ function SignBlock({ lang, session, formKey, version, language, consentLabel, de
 
   const submit = async () => {
     setErr(null);
+    if (blockedMessage) { setErr(blockedMessage); await beforeSign?.(); return; }
     if (who === "helper" && !relation) return setErr(t(T.needRelation, lang));
     if (askAuthority && !authority) return setErr(t(T.needAuthority, lang));
     if (noAuthority) return setErr(t(T.authorityNoneNote, lang));
@@ -1041,12 +1103,14 @@ function SignBlock({ lang, session, formKey, version, language, consentLabel, de
         session, formKey, version, language, signerName: name.trim(), relation: who === "self" ? "self" : (relation as SignerRelation), method: declining ? "typed" : method,
         drawn: !declining && method === "drawn" ? drawn : null, esignConsent: true, decision,
         authority: askAuthority && authority && authority !== "none" ? authority : null, authorityNote: askAuthority && authority === "other" ? authorityNote.trim() : null,
+        choices: choices ?? null,
       });
       onSigned(!!r.completed);
     } catch (e) {
       const c = errCode(e);
       if (c === "authority") return setErr(t(T.needAuthority, lang));
       if (c === "authority_note") return setErr(t(T.needAuthorityNote, lang));
+      if (c === "choices") return setErr(t(T.needChoices, lang));
       if (!onError(e)) setErr(t(T.tryAgain, lang));
     }
   };
@@ -1181,6 +1245,19 @@ function PatientCopy({ lang, session, phone, onBack, onServerError }: { lang: In
                 {textBlocks(f.text.body).map((b, i) => b.kind === "heading" ? <h3 key={i} className="pt-1 text-xl font-bold">{b.text}</h3>
                   : b.kind === "bullets" ? <ul key={i} className="list-disc space-y-1 ps-7">{b.items!.map((x, j) => <li key={j}>{x}</li>)}</ul>
                   : <p key={i} className="whitespace-pre-line">{b.text}</p>)}
+                {(f.text.choices ?? []).map((c) => (
+                  <div key={c.kind} className="break-inside-avoid rounded-2xl border-2 border-slate-200 p-4">
+                    <h3 className="text-xl font-bold">{c.title}</h3>
+                    <div className="mt-2 space-y-2 text-base">
+                      {textBlocks(c.body).map((b, i) => b.kind === "heading" ? <h4 key={i} className="font-bold">{b.text}</h4>
+                        : b.kind === "bullets" ? <ul key={i} className="list-disc ps-6">{b.items!.map((x, j) => <li key={j}>{x}</li>)}</ul>
+                        : <p key={i} className="whitespace-pre-line">{b.text}</p>)}
+                    </div>
+                    <p className={cn("mt-3 text-xl font-bold", c.answer === "yes" ? "text-emerald-700" : "text-slate-700")}>
+                      {t(T.yourChoices, lang)}: {t(c.answer === "yes" ? T.answerYes : T.answerNo, lang)}
+                    </p>
+                  </div>
+                ))}
               </div>
             ) : (
               <div dir={langDir(fl)} className="mt-3 space-y-4">

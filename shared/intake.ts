@@ -325,15 +325,53 @@ export type SignDecision = "signed" | "declined";
 
 // ---- Consents: forms whose answer MyPCP records on the patient (they may agree or decline) ----
 
-export const CONSENT_KINDS = ["communications", "ccm", "bhi", "apcm"] as const;
+export const CONSENT_KINDS = ["communications", "ccm", "apcm", "bhi", "rpm"] as const;
 export type ConsentKind = (typeof CONSENT_KINDS)[number];
 export const isConsentKind = (k: unknown): k is ConsentKind => typeof k === "string" && (CONSENT_KINDS as readonly string[]).includes(k);
 export const CONSENT_LABELS: Record<ConsentKind, string> = {
   communications: "Texts, calls & email",
   ccm: "Chronic Care Management (CCM)",
-  bhi: "Behavioral Health Integration (BHI)",
   apcm: "Advanced Primary Care Management (APCM)",
+  bhi: "Behavioral Health Integration (BHI)",
+  rpm: "Remote Patient Monitoring (RPM)",
 };
+
+/**
+ * A Yes/No question inside one form (e.g. the new-patient consent asks about texting, CCM, APCM, BHI
+ * and RPM). One signature covers the whole form and every answer; each answer is recorded as that consent.
+ */
+export interface ConsentChoice { kind: ConsentKind; title: Partial<L10n>; body: Partial<L10n> }
+export type ChoiceAnswer = "yes" | "no";
+
+/** Clean choices from the editor / import: known kinds only, once each, English title + wording required. */
+export function cleanChoices(raw: unknown): ConsentChoice[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const l10n = (v: unknown, max: number) => Object.fromEntries(Object.entries((v && typeof v === "object" ? v : {}) as Record<string, unknown>)
+    .filter(([k, x]) => isIntakeLang(k) && typeof x === "string" && x.trim()).map(([k, x]) => [k, (x as string).trim().slice(0, max)]));
+  const out: ConsentChoice[] = [];
+  for (const c of raw.slice(0, 10)) {
+    const kind = (c as { kind?: unknown })?.kind;
+    if (!isConsentKind(kind) || seen.has(kind)) continue;
+    const title = l10n((c as { title?: unknown }).title, 200), body = l10n((c as { body?: unknown }).body, 8000);
+    if (!title.en || !body.en) continue;
+    seen.add(kind);
+    out.push({ kind, title, body });
+  }
+  return out;
+}
+
+/** A choice in the patient's language when it has one, else English (same rule as the form itself). */
+export function choiceIn(c: ConsentChoice, lang: string): { kind: ConsentKind; title: string; body: string; lang: IntakeLang } {
+  const l = isIntakeLang(lang) && c.body[lang]?.trim() ? lang : "en";
+  return { kind: c.kind, title: c.title[l] || c.title.en || "", body: c.body[l] || c.body.en || "", lang: l };
+}
+
+export const CHOICES_CONSENT: L10n = l(
+  "I have read this form. The Yes and No answers above are my choices.",
+  "He leído este formulario. Las respuestas de Sí y No de arriba son mis decisiones.",
+  "لقد قرأت هذا النموذج. إجابات نعم ولا أعلاه هي اختياراتي.",
+);
 
 // ---- Answering for someone else: only a legal representative may agree (or decline) for the patient ----
 

@@ -325,6 +325,25 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     INDEX \`intakeEvents_packet_idx\` (\`packetId\`, \`at\`),
     CONSTRAINT \`intakeEvents_packetId_fk\` FOREIGN KEY (\`packetId\`) REFERENCES \`intakePackets\`(\`id\`),
     CONSTRAINT \`intakeEvents_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`))` },
+  { label: "consentEnrollments", sql: `CREATE TABLE IF NOT EXISTS \`consentEnrollments\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`subjectKey\` varchar(120),
+    \`patientId\` int,
+    \`name\` varchar(255) NOT NULL,
+    \`dob\` varchar(10),
+    \`program\` varchar(10) NOT NULL,
+    \`status\` varchar(12) NOT NULL DEFAULT 'waiting',
+    \`packetId\` int,
+    \`consentedAt\` datetime NOT NULL,
+    \`enrolledAt\` datetime,
+    \`lastCheckedAt\` datetime,
+    \`note\` varchar(255),
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+    INDEX \`consentEnrollments_status_idx\` (\`status\`),
+    INDEX \`consentEnrollments_subject_idx\` (\`subjectKey\`),
+    CONSTRAINT \`consentEnrollments_patientId_fk\` FOREIGN KEY (\`patientId\`) REFERENCES \`patients\`(\`id\`),
+    CONSTRAINT \`consentEnrollments_packetId_fk\` FOREIGN KEY (\`packetId\`) REFERENCES \`intakePackets\`(\`id\`))` },
   { label: "coverageOnFile", sql: `CREATE TABLE IF NOT EXISTS \`coverageOnFile\` (
     \`subjectKey\` varchar(120) NOT NULL PRIMARY KEY,
     \`patientId\` int,
@@ -596,6 +615,12 @@ const INTAKE_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: "intakeSignatures", column: "authorityNote", ddl: "`authorityNote` varchar(160) NULL AFTER `signerAuthority`" },
   { table: "intakeSignatures", column: "decision", ddl: "`decision` varchar(10) NOT NULL DEFAULT 'signed' AFTER `authorityNote`" },
   { table: "intakeSignatures", column: "consentKind", ddl: "`consentKind` varchar(20) NULL AFTER `decision`" },
+  // Added 2026-09-30: Yes/No program consents in one form, and automatic enrollment.
+  { table: "intakeDocuments", column: "choices", ddl: "`choices` json NULL AFTER `publicSlug`" },
+  { table: "intakeSignatures", column: "choices", ddl: "`choices` json NULL AFTER `consentKind`" },
+  { table: "patients", column: "ccmConsentDate", ddl: "`ccmConsentDate` datetime NULL AFTER `consentStatus`" },
+  { table: "patients", column: "rpmConsentStatus", ddl: "`rpmConsentStatus` ENUM('consented','pending','declined') DEFAULT 'pending' AFTER `rpmDeviceType`" },
+  { table: "patients", column: "rpmConsentDate", ddl: "`rpmConsentDate` datetime NULL AFTER `rpmConsentStatus`" },
 ];
 async function upgradeIntake(db: Db): Promise<string[]> {
   const applied: string[] = [];

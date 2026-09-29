@@ -25,13 +25,13 @@ export function PatientFormsPanel({ subjectKey }: { subjectKey: string }) {
     <div className="space-y-5">
       <Panel
         title="Consents"
-        subtitle="From the patient record (CCM / BHI / APCM, used for billing) and the most recent signed form for each."
+        subtitle="From the patient record (CCM / APCM / BHI / RPM, used for enrollment and billing) and the most recent signed form for each."
         action={<Btn size="sm" onClick={() => setSending(true)}><Send size={13} /> Send forms</Btn>}
       >
         {q.isLoading && <Loading />}
         {q.error && <ErrorNote message={q.error.message} />}
         {data && (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             {data.consents.map((c) => {
               const st = c.status ? STATUS_TEXT[c.status] : null;
               return (
@@ -50,6 +50,13 @@ export function PatientFormsPanel({ subjectKey }: { subjectKey: string }) {
                       </>
                     ) : "No signed form on file"}
                   </p>
+                  {c.enrollment && (
+                    <p className={cn("mt-1 text-xs font-semibold", c.enrollment.status === "enrolled" ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300")}>
+                      {c.enrollment.status === "enrolled"
+                        ? c.enrollment.note === "Already enrolled" ? "Already enrolled" : `Enrolled automatically${c.enrollment.enrolledAt ? ` ${day(c.enrollment.enrolledAt)}` : ""}`
+                        : `Waiting to enroll: ${c.enrollment.note ?? "checking"}`}
+                    </p>
+                  )}
                 </div>
               );
             })}

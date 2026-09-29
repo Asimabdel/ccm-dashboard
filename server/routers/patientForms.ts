@@ -81,6 +81,7 @@ export const patientFormsRouter = router({
       decision: z.enum(["signed", "declined"]).default("signed"),
       authority: z.enum(SIGNER_AUTHORITIES).nullish(),
       authorityNote: z.string().max(160).nullish(),
+      choices: z.record(z.string().max(20), z.enum(["yes", "no"])).nullish(),
     }))
     .mutation(({ ctx, input }) => {
       brake(ctx, 120);

@@ -680,6 +680,44 @@ export function evaluateOpportunities(p: OpportunityPatient, now: Date = new Dat
   return out;
 }
 
+// ---- Automatic enrollment after a patient says Yes on their consent form ----
+
+export const ENROLL_PROGRAMS = ["ccm", "apcm", "bhi", "rpm"] as const;
+export type EnrollProgram = (typeof ENROLL_PROGRAMS)[number];
+export const ENROLL_PROGRAM_LABELS: Record<EnrollProgram, string> = { ccm: "CCM", apcm: "APCM", bhi: "BHI", rpm: "RPM" };
+
+export interface EnrollPatient {
+  chronicConditions: string[];
+  bhiConditions: string[];
+  rpmStatus: string | null;
+}
+
+/**
+ * Does a roster patient who consented qualify, going only by the diagnoses on file? The practice's rules:
+ * CCM 2+ chronic conditions · APCM everyone who consents · BHI a behavioral-health diagnosis ·
+ * RPM high blood pressure, diabetes or heart failure (or already marked RPM-eligible).
+ */
+export function enrollmentEligibility(program: EnrollProgram, p: EnrollPatient): { eligible: boolean; reason: string } {
+  const chronic = p.chronicConditions.filter(Boolean);
+  if (program === "ccm") {
+    return chronic.length >= 2
+      ? { eligible: true, reason: `${chronic.length} chronic conditions on file` }
+      : { eligible: false, reason: `Needs 2 or more chronic conditions on file (has ${chronic.length})` };
+  }
+  if (program === "apcm") return { eligible: true, reason: "Consented to APCM" };
+  if (program === "bhi") {
+    const dx = [...p.bhiConditions.filter(Boolean), ...chronic.filter((c) => BEHAVIORAL.test(c))];
+    return dx.length ? { eligible: true, reason: `Behavioral-health diagnosis on file (${dx[0]})` } : { eligible: false, reason: "Needs a behavioral-health diagnosis on file" };
+  }
+  const dx = chronic.find((c) => HYPERTENSION.test(c) || DIABETES.test(c) || HEART_FAILURE.test(c));
+  if (dx) return { eligible: true, reason: `${dx} on file` };
+  if (p.rpmStatus === "eligible") return { eligible: true, reason: "Marked RPM-eligible" };
+  return { eligible: false, reason: "Needs high blood pressure, diabetes or heart failure on file" };
+}
+
+/** Behavioral-health diagnoses among the chronic conditions (to fill BHI conditions at enrollment). */
+export const behavioralConditions = (chronic: string[]) => chronic.filter((c) => BEHAVIORAL.test(c));
+
 /** One appointment in a patient's imported schedule history. */
 export interface ScheduleVisit {
   startsAt: Date;

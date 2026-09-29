@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import { toast } from "sonner";
 import {
   AlertTriangle, BookOpen, CalendarClock, Check, CheckCircle2, ClipboardSignature, Clock, Copy, FileCheck2, FilePlus2, Globe, Image as ImageIcon, Link2, Loader2, Mail,
-  MessageSquareText, Plus, Printer, Search, Send, XCircle,
+  MessageSquareText, Plus, Printer, Search, Send, Trash2, UserCheck, XCircle,
 } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
@@ -20,12 +20,13 @@ import {
   type ConsentKind, type IntakeLang, type PacketStatus,
 } from "@shared/intake";
 
-type Tab = "waiting" | "to_file" | "filed" | "all" | "library";
+type Tab = "waiting" | "to_file" | "filed" | "all" | "signups" | "library";
 const TABS: { k: Tab; label: string; icon: React.ElementType }[] = [
   { k: "waiting", label: "Waiting on patient", icon: Clock },
   { k: "to_file", label: "Ready to file", icon: FileCheck2 },
   { k: "filed", label: "Filed", icon: CheckCircle2 },
   { k: "all", label: "All", icon: ClipboardSignature },
+  { k: "signups", label: "Program sign-ups", icon: UserCheck },
   { k: "library", label: "Form library", icon: BookOpen },
 ];
 const STATUS_CLS: Record<PacketStatus, string> = {
@@ -44,6 +45,7 @@ const EVENT_LABELS: Record<string, string> = {
   photo_added: "Photo added", signed: "Signed", completed: "All forms finished", viewed: "Viewed by staff", photo_viewed: "Photo viewed by staff",
   filed: "Marked filed in Practice Fusion", cancelled: "Cancelled", extended: "Link extended",
   declined: "Said no", linked: "Linked to patient", copy_viewed: "Patient opened their copy", dob_ok_copy: "Date of birth confirmed (to see their copy)",
+  consents: "Program answers recorded",
 };
 
 async function copyText(s: string) {
@@ -62,7 +64,7 @@ export default function IntakeFormsPage() {
   const [q, setQ] = useState("");
   useEffect(() => { const h = window.setTimeout(() => setQ(search.trim()), 300); return () => window.clearTimeout(h); }, [search]);
   const enabled = !!user && !!ws.caps?.intakeForms;
-  const list = trpc.workspace.intake.list.useQuery({ filter: tab === "library" ? "all" : tab, q: q.length >= 2 ? q : null }, { enabled: enabled && tab !== "library", refetchInterval: 30_000 });
+  const list = trpc.workspace.intake.list.useQuery({ filter: tab === "library" || tab === "signups" ? "all" : tab, q: q.length >= 2 ? q : null }, { enabled: enabled && tab !== "library" && tab !== "signups", refetchInterval: 30_000 });
   const stats = trpc.workspace.intake.stats.useQuery(undefined, { enabled, refetchInterval: 60_000 });
   const mail = trpc.workspace.intake.status.useQuery(undefined, { enabled, staleTime: 60_000 });
   const rows = list.data ?? [];
@@ -104,6 +106,8 @@ export default function IntakeFormsPage() {
 
       {tab === "library" ? (
         enabled && <Library isAdmin={user?.role === "admin"} />
+      ) : tab === "signups" ? (
+        enabled && <Signups />
       ) : (
         <>
           <div className="mb-3 flex max-w-md items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 dark:border-slate-700 dark:bg-slate-800">
@@ -281,6 +285,15 @@ function PacketSheet({ id, onClose }: { id: number | null; onClose: () => void }
                               {sig.consentKind ? ` · records ${CONSENT_LABELS[sig.consentKind]} consent` : ""}
                             </p>
                           )}
+                          {sig?.text?.choices?.length ? (
+                            <p className="mt-1 flex flex-wrap gap-1.5 text-[11px]">
+                              {sig.text.choices.map((c) => (
+                                <span key={c.kind} className={cn("rounded-full px-2 py-0.5 font-semibold", c.answer === "yes" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200" : "bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200")}>
+                                  {CONSENT_LABELS[c.kind]}: {c.answer === "yes" ? "Yes" : "No"}
+                                </span>
+                              ))}
+                            </p>
+                          ) : null}
                         </div>
                       </li>
                     );
@@ -435,9 +448,10 @@ function Library({ isAdmin }: { isAdmin: boolean }) {
                 <div>
                   <p className="font-semibold">{d.title.en} {!d.active && <span className="ms-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500 dark:bg-slate-800">Off</span>}</p>
                   <p className="text-xs text-slate-500">Version {d.version} · {INTAKE_LANGS.filter((l) => d.body[l]).map((l) => LANG_LABELS[l]).join(", ")} · updated {when(d.updatedAt)}</p>
-                  {(d.consentKind || d.publicSlug) && (
+                  {(d.consentKind || d.publicSlug || d.choices.length > 0) && (
                     <p className="mt-0.5 flex flex-wrap gap-1.5 text-[11px]">
                       {d.consentKind && <span className="rounded-full bg-teal-50 px-2 py-0.5 font-semibold text-teal-800 dark:bg-teal-900/40 dark:text-teal-200">Consent: {CONSENT_LABELS[d.consentKind]} · patients can say yes or no</span>}
+                      {d.choices.length > 0 && <span className="rounded-full bg-teal-50 px-2 py-0.5 font-semibold text-teal-800 dark:bg-teal-900/40 dark:text-teal-200">Yes/No: {d.choices.map((c) => c.kind === "communications" ? "Texting" : c.kind.toUpperCase()).join(", ")}</span>}
                       {d.publicSlug && <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 font-semibold text-violet-800 dark:bg-violet-900/40 dark:text-violet-200"><Globe size={11} /> mypcpcare.com/sign/{d.publicSlug}</span>}
                     </p>
                   )}
@@ -461,6 +475,8 @@ function DocEditor({ doc, onClose }: { doc: Doc | null; onClose: () => void }) {
   const [active, setActive] = useState(doc?.active ?? true);
   const [consentKind, setConsentKind] = useState<ConsentKind | "">(doc?.consentKind ?? "");
   const [slug, setSlug] = useState(doc?.publicSlug ?? "");
+  const [choices, setChoices] = useState<{ kind: ConsentKind; title: Record<string, string>; body: Record<string, string> }[]>(() => (doc?.choices ?? []).map((c) => ({ kind: c.kind, title: { ...c.title } as Record<string, string>, body: { ...c.body } as Record<string, string> })));
+  const choicesOk = choices.every((c) => c.title.en?.trim() && c.body.en?.trim());
   const slugOk = !slug.trim() || PUBLIC_SLUG_RE.test(slug.trim());
   const [preview, setPreview] = useState(false);
   const save = trpc.workspace.intake.saveDocument.useMutation({
@@ -496,6 +512,7 @@ function DocEditor({ doc, onClose }: { doc: Doc | null; onClose: () => void }) {
         ) : (
           <textarea className={cn(inputCls, "h-80 font-mono text-xs leading-relaxed")} dir={lang === "ar" ? "rtl" : "ltr"} value={body[lang] ?? ""} onChange={(e) => setBody({ ...body, [lang]: e.target.value })} maxLength={60_000} />
         )}
+        <ChoicesEditor lang={lang} choices={choices} onChange={setChoices} />
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="block">
             <span className="mb-1 block font-medium">This form is a consent for…</span>
@@ -527,12 +544,119 @@ function DocEditor({ doc, onClose }: { doc: Doc | null; onClose: () => void }) {
         {doc && <p className="text-xs text-slate-500">Changing the wording makes a new version. Forms patients already signed keep the exact wording they signed.</p>}
         <div className="flex justify-end gap-2">
           <Btn variant="ghost" onClick={onClose}>Close</Btn>
-          <Btn disabled={save.isPending || !title.en?.trim() || !body.en?.trim() || !slugOk}
-            onClick={() => save.mutate({ id: doc?.id ?? null, title, body, active, consentKind: consentKind || null, publicSlug: slug.trim() || null })}>
+          <Btn disabled={save.isPending || !title.en?.trim() || !body.en?.trim() || !slugOk || !choicesOk}
+            onClick={() => save.mutate({ id: doc?.id ?? null, title, body, active, consentKind: consentKind || null, publicSlug: slug.trim() || null, choices: choices.length ? choices : null })}>
             {save.isPending && <Loader2 size={14} className="animate-spin" />} Save
           </Btn>
         </div>
       </div>
     </Panel>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Yes/No program questions inside a form (e.g. the new-patient consent)
+// ---------------------------------------------------------------------------
+
+type EditChoice = { kind: ConsentKind; title: Record<string, string>; body: Record<string, string> };
+
+function ChoicesEditor({ lang, choices, onChange }: { lang: IntakeLang; choices: EditChoice[]; onChange: (c: EditChoice[]) => void }) {
+  const unused = CONSENT_KINDS.filter((k) => !choices.some((c) => c.kind === k));
+  const set = (i: number, patch: Partial<EditChoice>) => onChange(choices.map((c, j) => (j === i ? { ...c, ...patch } : c)));
+  return (
+    <div className="space-y-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="font-medium">Yes/No questions ({LANG_LABELS[lang]})</p>
+          <p className="text-xs text-slate-500">
+            Each becomes a card with big Yes / No buttons; one signature covers the form and every answer. A Yes to CCM, APCM, BHI or RPM enrolls the patient automatically once their diagnoses on file qualify.
+          </p>
+        </div>
+        {unused.length > 0 && (
+          <select className={cn(inputCls, "w-auto text-xs")} value="" onChange={(e) => e.target.value && onChange([...choices, { kind: e.target.value as ConsentKind, title: {}, body: {} }])}>
+            <option value="">+ Add a question…</option>
+            {unused.map((k) => <option key={k} value={k}>{CONSENT_LABELS[k]}</option>)}
+          </select>
+        )}
+      </div>
+      {choices.map((c, i) => (
+        <div key={c.kind} className="space-y-2 rounded-md bg-slate-50 p-3 dark:bg-slate-800/60">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{i + 1}. Records: {CONSENT_LABELS[c.kind]}</span>
+            <div className="flex gap-1">
+              <Btn size="sm" variant="ghost" disabled={i === 0} onClick={() => { const n = [...choices]; [n[i - 1], n[i]] = [n[i]!, n[i - 1]!]; onChange(n); }}>↑</Btn>
+              <Btn size="sm" variant="ghost" disabled={i === choices.length - 1} onClick={() => { const n = [...choices]; [n[i + 1], n[i]] = [n[i]!, n[i + 1]!]; onChange(n); }}>↓</Btn>
+              <Btn size="sm" variant="ghost" onClick={() => onChange(choices.filter((_, j) => j !== i))} title="Remove"><Trash2 size={13} /></Btn>
+            </div>
+          </div>
+          <input className={inputCls} dir={lang === "ar" ? "rtl" : "ltr"} placeholder={lang === "en" ? "Question title, e.g. Chronic Care Management (CCM)" : "Title"} value={c.title[lang] ?? ""}
+            onChange={(e) => set(i, { title: { ...c.title, [lang]: e.target.value } })} maxLength={200} />
+          <textarea className={cn(inputCls, "h-40 font-mono text-xs leading-relaxed")} dir={lang === "ar" ? "rtl" : "ltr"} value={c.body[lang] ?? ""}
+            placeholder="What it is, the cost, one practice per month, and that they can stop any time. - starts a bullet."
+            onChange={(e) => set(i, { body: { ...c.body, [lang]: e.target.value } })} maxLength={8000} />
+          {!(c.title.en?.trim() && c.body.en?.trim()) && <p className="text-xs text-red-600">Needs an English title and wording.</p>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Program sign-ups: who said Yes to CCM / APCM / BHI / RPM on a form
+// ---------------------------------------------------------------------------
+
+const PROGRAM_NAMES: Record<string, string> = { ccm: "CCM", apcm: "APCM", bhi: "BHI", rpm: "RPM" };
+
+function Signups() {
+  const [status, setStatus] = useState<"waiting" | "enrolled" | "all">("waiting");
+  const q = trpc.workspace.intake.enrollments.useQuery({ status }, { refetchInterval: 60_000 });
+  const rows = q.data ?? [];
+  return (
+    <div className="space-y-4">
+      <Panel>
+        <div className="flex flex-wrap items-start justify-between gap-3 text-sm">
+          <p className="max-w-2xl text-slate-600 dark:text-slate-300">
+            Patients who said <b>Yes</b> to a program on a consent form. They're enrolled automatically once they're on the roster and their diagnoses on file qualify
+            (CCM: 2+ chronic conditions · APCM: everyone who says Yes · BHI: a behavioral-health diagnosis · RPM: high blood pressure, diabetes or heart failure). Waiting ones are re-checked every 30 minutes and whenever their record changes.
+          </p>
+          <div className="flex gap-1">
+            {(["waiting", "enrolled", "all"] as const).map((s) => (
+              <button key={s} type="button" onClick={() => setStatus(s)} className={cn("rounded-full border px-3 py-1 text-xs font-semibold", status === s ? "border-brand bg-brand/5" : "border-slate-200 dark:border-slate-700")}>
+                {s === "waiting" ? "Waiting" : s === "enrolled" ? "Enrolled" : "All"}
+              </button>
+            ))}
+          </div>
+        </div>
+      </Panel>
+      {q.isLoading && <Loading />}
+      {q.error && <ErrorNote message={q.error.message} />}
+      {q.data && rows.length === 0 && <Panel><EmptyState icon={UserCheck} title={status === "waiting" ? "No one is waiting" : "Nothing here yet"} body="Program answers from signed consent forms show up here." /></Panel>}
+      {rows.length > 0 && (
+        <Panel bodyClassName="p-0">
+          <ul className="divide-y divide-slate-100 dark:divide-slate-700">
+            {rows.map((r) => (
+              <li key={r.id} className="flex flex-wrap items-start justify-between gap-3 px-4 py-3 text-sm">
+                <div className="min-w-0 flex-1">
+                  <p className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold">{r.name}</span>
+                    <span className="rounded-full bg-teal-50 px-2 py-0.5 text-[11px] font-semibold text-teal-800 dark:bg-teal-900/40 dark:text-teal-200">{PROGRAM_NAMES[r.program] ?? r.program}</span>
+                    <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", r.status === "enrolled" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200" : "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200")}>
+                      {r.status === "enrolled" ? "Enrolled" : "Waiting"}
+                    </span>
+                  </p>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Said Yes {when(r.consentedAt)}{r.enrolledAt ? ` · enrolled ${when(r.enrolledAt)}` : ""}{r.note ? ` · ${r.note}` : ""}
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-1.5">
+                  {r.patientId && <Link href={`/patients/${r.patientId}`}><Btn size="sm" variant="secondary">Patient</Btn></Link>}
+                  {r.packetId && <Link href={`/intake-forms?p=${r.packetId}`}><Btn size="sm" variant="ghost">Form</Btn></Link>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      )}
+    </div>
   );
 }
