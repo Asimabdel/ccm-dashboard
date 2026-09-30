@@ -184,7 +184,7 @@ export default function PatientFormsPage() {
   const dir = langDir(lang);
   const activeForm = payload?.forms.find((f) => f.key === active) ?? null;
   return (
-    <div dir={dir} lang={lang} className="min-h-screen bg-slate-50 text-slate-900 print:bg-white" style={{ colorScheme: "light" }}>
+    <div dir={dir} lang={lang} className="patient-forms min-h-screen bg-slate-50 text-slate-900 print:bg-white" style={{ colorScheme: "light" }}>
       <Header lang={lang} onLang={changeLang} size={size} onSize={setSize} phone={clinic.phone} showLang={phase !== "form" && phase !== "copy"} />
       <main className="mx-auto max-w-2xl px-4 pb-32 pt-5 print:max-w-none print:p-0">
         {phase === "loading" && <Centered><Loader2 className="size-10 animate-spin text-teal-700" /><p className="mt-3 text-lg">{t(T.loading, lang)}</p></Centered>}
