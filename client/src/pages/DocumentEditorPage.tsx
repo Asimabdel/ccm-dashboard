@@ -142,7 +142,17 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
 
   // --- signing a box ---
   const mySig = trpc.workspace.documents.mySignature.useQuery();
+  // Providers who picked this person to apply their stored signature (only for your own boxes while preparing).
+  const providerSigs = trpc.workspace.documents.signaturesICanApply.useQuery(undefined, { enabled: mode === "edit" });
   const signField = trpc.workspace.documents.signField.useMutation();
+  const doProviderSign = async (f: DocField, o: { providerUserId: number; approval: "in_person" | "phone" | "text" | "other"; note: string | null }) => {
+    await flush();
+    const r = await signField.mutateAsync({ id: doc.id, fieldId: f.id, onBehalfOf: o });
+    setSigs((s) => ({ ...s, [r.value]: { png: r.png, name: r.name } }));
+    setFields((fs) => fs.map((x) => (x.id === f.id ? { ...x, value: r.value } : x)));
+    setSigning(null);
+    toast.success(`${r.name}'s ${f.type === "initials" ? "initials" : "signature"} applied. They've been notified.`);
+  };
   const doSign = async (f: DocField, png: string, saveAsMine: boolean) => {
     if (mode === "edit") await flush();
     const r = await signField.mutateAsync({ id: doc.id, fieldId: f.id, png, saveAsMine });
@@ -319,7 +329,11 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
       <SignatureDialog open={!!signing} kind={signing?.type === "initials" ? "initials" : "signature"}
         saved={(signing?.type === "initials" ? mySig.data?.initialsPng : mySig.data?.signaturePng) ?? null}
         defaultName={user?.name ?? ""} onClose={() => setSigning(null)}
-        onDone={async (png, saveAsMine) => { if (signing) await doSign(signing, png, saveAsMine); }} />
+        onDone={async (png, saveAsMine) => { if (signing) await doSign(signing, png, saveAsMine); }}
+        providers={mode === "edit" && signing?.assignee === "preparer"
+          ? (providerSigs.data ?? []).map((p) => ({ providerUserId: p.providerUserId, name: p.name, png: signing.type === "initials" ? p.initialsPng : p.signaturePng }))
+          : []}
+        onProviderApply={async (o) => { if (signing) await doProviderSign(signing, o); }} />
     </div>
   );
 }

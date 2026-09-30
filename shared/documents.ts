@@ -95,6 +95,14 @@ export const isFilled = (f: DocField) => (f.type === "checkbox" ? f.value === "x
 /** Required boxes this person still has to fill. */
 export const missingFor = (fields: DocField[], assignee: Assignee) => fields.filter((f) => f.assignee === assignee && f.required && !isFilled(f));
 
+/** How the provider approved staff applying their signature. */
+export const APPROVAL_METHODS = ["in_person", "phone", "text", "other"] as const;
+export type ApprovalMethod = (typeof APPROVAL_METHODS)[number];
+export const APPROVAL_LABELS: Record<ApprovalMethod, string> = { in_person: "In person", phone: "By phone", text: "By text message", other: "Other" };
+/** Shown wherever staff apply a provider's signature. */
+export const PROVIDER_SIGNATURE_RULE =
+  "For administrative documents only (forms, letters, records requests, work or school notes). Medicare orders, prescriptions and medical-record entries must be signed by the provider personally: add them under \"Who else signs\" instead.";
+
 /** YYYY-MM-DD → MM/DD/YYYY (how dates print on the PDF). */
 export function usDate(v: string | null | undefined) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v ?? "");

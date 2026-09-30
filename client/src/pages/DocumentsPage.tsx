@@ -1,24 +1,28 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
-import { CheckCircle2, Clock, FilePlus2, FileSignature, FileStack, Loader2, PenLine, Search, Upload, UserRound } from "lucide-react";
+import { CheckCircle2, Clock, FilePlus2, FileSignature, FileStack, Loader2, PenLine, Search, Stethoscope, Upload, UserRound, XCircle } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { useWorkspace } from "@/components/workspace/useWorkspace";
 import { Btn, EmptyState, ErrorNote, Loading, PageHeader, Panel, inputCls } from "@/components/workspace/ui";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { SignatureDialog } from "@/components/documents/SignatureDialog";
+import { SignatureDialog, imageToSignaturePng } from "@/components/documents/SignatureDialog";
 import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
-import { DOC_STATUS_LABELS, type DocStatus } from "@shared/documents";
+import { APPROVAL_LABELS, DOC_STATUS_LABELS, PROVIDER_SIGNATURE_RULE, type DocStatus } from "@shared/documents";
 
-type View = "to_sign" | "in_progress" | "completed" | "templates";
-const TABS: { k: View; label: string; icon: React.ElementType }[] = [
+type ListView = "to_sign" | "in_progress" | "completed" | "templates";
+type View = ListView | "provider_sigs" | "signed_for_me";
+const TABS: { k: View; label: string; icon: React.ElementType; roles?: string[] }[] = [
   { k: "to_sign", label: "To sign", icon: PenLine },
   { k: "in_progress", label: "In progress", icon: Clock },
   { k: "completed", label: "Completed", icon: CheckCircle2 },
   { k: "templates", label: "Templates", icon: FileStack },
+  { k: "provider_sigs", label: "Provider signatures", icon: Stethoscope, roles: ["admin", "provider"] },
+  { k: "signed_for_me", label: "Signed for me", icon: FileSignature, roles: ["provider"] },
 ];
+const isList = (v: View): v is ListView => v === "to_sign" || v === "in_progress" || v === "completed" || v === "templates";
 const STATUS_CLS: Record<DocStatus, string> = {
   draft: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
   signing: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200",
@@ -50,7 +54,7 @@ export default function DocumentsPage() {
   const [search, setSearch] = useState("");
   const [q, setQ] = useState("");
   useEffect(() => { const h = window.setTimeout(() => setQ(search.trim()), 300); return () => window.clearTimeout(h); }, [search]);
-  const list = trpc.workspace.documents.list.useQuery({ view, q: q.length >= 2 ? q : null }, { enabled, refetchInterval: 30_000 });
+  const list = trpc.workspace.documents.list.useQuery({ view: isList(view) ? view : "in_progress", q: q.length >= 2 ? q : null }, { enabled: enabled && isList(view), refetchInterval: 30_000 });
   const [uploading, setUploading] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const create = trpc.workspace.documents.create.useMutation();
@@ -101,7 +105,7 @@ export default function DocumentsPage() {
       {ws.caps && !ws.caps.documents && <ErrorNote message="You don't have access to Documents." />}
 
       <div className="mb-4 flex gap-1 overflow-x-auto border-b border-slate-200 dark:border-slate-700" role="tablist">
-        {TABS.map((t) => (
+        {TABS.filter((t) => !t.roles || t.roles.includes(user?.role ?? "")).map((t) => (
           <button key={t.k} role="tab" aria-selected={view === t.k} onClick={() => { setView(t.k); setTouched(true); }}
             className={cn("-mb-px flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium", view === t.k ? "border-brand text-slate-900 dark:text-slate-50" : "border-transparent text-slate-500 hover:text-slate-800")}>
             <t.icon size={15} /> {t.label}
@@ -109,6 +113,10 @@ export default function DocumentsPage() {
           </button>
         ))}
       </div>
+      {view === "provider_sigs" && enabled && <ProviderSignaturesPanel />}
+      {view === "signed_for_me" && enabled && <SignedForMePanel />}
+      {isList(view) && (
+      <>
       <div className="mb-3 flex max-w-md items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 dark:border-slate-700 dark:bg-slate-800">
         <Search size={15} className="shrink-0 text-slate-400" />
         <input className="h-9 w-full bg-transparent text-sm outline-none" placeholder="Search by title" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -164,6 +172,8 @@ export default function DocumentsPage() {
             ))}
           </ul>
         </Panel>
+      )}
+      </>
       )}
       <UseTemplateDialog template={useTemplate} onClose={() => setUseTemplate(null)} onCreated={(id) => navigate(`/documents/${id}`)} />
       <MySignatureDialog kind={sigSetup} onClose={() => setSigSetup(null)} />
@@ -244,5 +254,128 @@ function UseTemplateDialog({ template, onClose, onCreated }: { template: { id: n
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Provider signatures: stored once, applied by the staff each provider picks, with their approval
+// ---------------------------------------------------------------------------
+
+type ProviderRow = RouterOutputs["workspace"]["documents"]["providerSignatures"]["providers"][number];
+
+function ProviderSignaturesPanel() {
+  const q = trpc.workspace.documents.providerSignatures.useQuery();
+  const rows = q.data?.providers ?? [];
+  return (
+    <div className="space-y-4">
+      <Panel>
+        <div className="space-y-1 text-sm text-slate-600 dark:text-slate-300">
+          <p>Store each provider's signature once. The staff a provider picks can then apply it to a document <b>after the provider approves</b>: they confirm the approval and how it was given. Every use is on the PDF's certificate page, in the audit log, and sent to the provider as a notification.</p>
+          <p className="text-xs text-amber-800 dark:text-amber-300">{PROVIDER_SIGNATURE_RULE}</p>
+        </div>
+      </Panel>
+      {q.isLoading && <Loading />}
+      {q.error && <ErrorNote message={q.error.message} />}
+      {q.data && !rows.length && <Panel><EmptyState icon={Stethoscope} title="No providers" body="Providers with a MyPCP login show up here." /></Panel>}
+      <div className="grid gap-4 lg:grid-cols-2">
+        {rows.map((p) => <ProviderCard key={p.providerUserId} p={p} />)}
+      </div>
+    </div>
+  );
+}
+
+function ProviderCard({ p }: { p: ProviderRow }) {
+  const utils = trpc.useUtils();
+  const refresh = () => void utils.workspace.documents.providerSignatures.invalidate();
+  const save = trpc.workspace.documents.saveProviderSignature.useMutation({ onSuccess: () => { refresh(); toast.success("Saved"); }, onError: (e) => toast.error(e.message) });
+  const setDelegates = trpc.workspace.documents.setProviderDelegates.useMutation({ onSuccess: refresh, onError: (e) => toast.error(e.message) });
+  const people = trpc.workspace.documents.signers.useQuery();
+  const [drawing, setDrawing] = useState<"signature" | "initials" | null>(null);
+  const upload = useRef<HTMLInputElement>(null);
+  const [uploadKind, setUploadKind] = useState<"signature" | "initials">("signature");
+  const delegateIds = p.delegates.map((d) => d.userId);
+  const choices = (people.data ?? []).filter((u) => u.id !== p.providerUserId && !delegateIds.includes(u.id));
+  const put = (k: "signature" | "initials", png: string | null) => save.mutate({ providerUserId: p.providerUserId, ...(k === "initials" ? { initialsPng: png } : { signaturePng: png }) });
+  const onFile = async (file: File | undefined) => {
+    if (!file) return;
+    try { put(uploadKind, await imageToSignaturePng(file)); } catch (e) { toast.error((e as Error).message); } finally { if (upload.current) upload.current.value = ""; }
+  };
+  const box = (k: "signature" | "initials") => {
+    const png = k === "initials" ? p.initialsPng : p.signaturePng;
+    return (
+      <div>
+        <p className="mb-1 text-xs font-semibold text-slate-500">{k === "initials" ? "Initials" : "Signature"}</p>
+        <div className={cn("grid place-items-center rounded-lg border border-slate-200 dark:border-slate-700", k === "initials" ? "h-16" : "h-20")} style={{ background: "#fff" }}>
+          {png ? <img src={png} alt="" className="max-h-full max-w-full p-1" /> : <span className="text-xs text-slate-400">None yet</span>}
+        </div>
+        <div className="mt-1 flex flex-wrap gap-2 text-xs">
+          <button type="button" className="font-semibold text-brand hover:underline" onClick={() => setDrawing(k)}>Draw</button>
+          <button type="button" className="font-semibold text-brand hover:underline" onClick={() => { setUploadKind(k); upload.current?.click(); }}>Upload a photo</button>
+          {png && <button type="button" className="text-slate-500 hover:text-red-600" onClick={() => { if (window.confirm("Remove it?")) put(k, null); }}>Remove</button>}
+        </div>
+      </div>
+    );
+  };
+  return (
+    <Panel title={<span className="flex items-center gap-2"><Stethoscope size={15} /> {p.name}{p.isMe ? " (you)" : ""}</span>}
+      subtitle={`${p.uses} use${p.uses === 1 ? "" : "s"} so far`}
+      action={(
+        <label className="flex items-center gap-2 text-xs font-semibold">
+          <input type="checkbox" className="size-4 accent-teal-700" checked={p.enabled} disabled={save.isPending} onChange={(e) => save.mutate({ providerUserId: p.providerUserId, enabled: e.target.checked })} />
+          Staff may use it
+        </label>
+      )}>
+      <input ref={upload} type="file" accept="image/*" className="hidden" onChange={(e) => void onFile(e.target.files?.[0])} />
+      <div className="grid grid-cols-[2fr_1fr] gap-3">{box("signature")}{box("initials")}</div>
+      <div className="mt-4">
+        <p className="mb-1 text-xs font-semibold text-slate-500">Who may apply it (after {p.name} approves)</p>
+        <div className="flex flex-wrap gap-1.5">
+          {p.delegates.map((d) => (
+            <span key={d.userId} className="inline-flex items-center gap-1 rounded-full bg-teal-50 px-2 py-0.5 text-xs font-semibold text-teal-800 dark:bg-teal-900/40 dark:text-teal-200">
+              {d.name}
+              <button type="button" title="Remove" onClick={() => setDelegates.mutate({ providerUserId: p.providerUserId, userIds: delegateIds.filter((x) => x !== d.userId) })}><XCircle size={12} /></button>
+            </span>
+          ))}
+          {!p.delegates.length && <span className="text-xs text-slate-400">Nobody yet.</span>}
+        </div>
+        <select className={cn(inputCls, "mt-2 h-8 text-xs")} value="" disabled={setDelegates.isPending}
+          onChange={(e) => e.target.value && setDelegates.mutate({ providerUserId: p.providerUserId, userIds: [...delegateIds, Number(e.target.value)] })}>
+          <option value="">+ Allow someone…</option>
+          {choices.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+        </select>
+      </div>
+      <SignatureDialog open={!!drawing} kind={drawing ?? "signature"} setupOnly saved={null} defaultName={p.name} onClose={() => setDrawing(null)}
+        onDone={async (png) => { if (drawing) { await save.mutateAsync({ providerUserId: p.providerUserId, ...(drawing === "initials" ? { initialsPng: png } : { signaturePng: png }) }); setDrawing(null); } }} />
+    </Panel>
+  );
+}
+
+/** A provider's list of every document their stored signature was applied to. */
+function SignedForMePanel() {
+  const q = trpc.workspace.documents.signedForMe.useQuery();
+  const rows = q.data ?? [];
+  return (
+    <>
+      {q.isLoading && <Loading />}
+      {q.error && <ErrorNote message={q.error.message} />}
+      {q.data && !rows.length && <Panel><EmptyState icon={FileSignature} title="Nothing signed for you yet" body="When staff apply your stored signature (after you approve), it's listed here." /></Panel>}
+      {rows.length > 0 && (
+        <Panel bodyClassName="p-0">
+          <ul className="divide-y divide-slate-100 dark:divide-slate-700">
+            {rows.map((r, i) => (
+              <li key={i} className="flex flex-wrap items-start justify-between gap-3 px-4 py-3 text-sm">
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold">{r.title}</p>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Your {r.kind} applied by {r.appliedBy ?? "a teammate"} · {when(r.at)} · you approved {r.approval ? APPROVAL_LABELS[r.approval].toLowerCase() : ""}{r.note ? ` (${r.note})` : ""}
+                  </p>
+                </div>
+                <Link href={`/documents/${r.documentId}`}><Btn size="sm" variant="ghost">Open</Btn></Link>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      )}
+    </>
   );
 }

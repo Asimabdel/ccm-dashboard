@@ -424,6 +424,27 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     \`initialsPng\` mediumtext,
     \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT \`userSignatures_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`))` },
+  // Provider signatures staff may apply with the provider's approval, added 2026-09-30.
+  { label: "providerSignatures", sql: `CREATE TABLE IF NOT EXISTS \`providerSignatures\` (
+    \`providerUserId\` int NOT NULL PRIMARY KEY,
+    \`signaturePng\` mediumtext,
+    \`initialsPng\` mediumtext,
+    \`enabled\` boolean NOT NULL DEFAULT true,
+    \`updatedByUserId\` int,
+    \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT \`providerSignatures_providerUserId_fk\` FOREIGN KEY (\`providerUserId\`) REFERENCES \`users\`(\`id\`),
+    CONSTRAINT \`providerSignatures_updatedByUserId_fk\` FOREIGN KEY (\`updatedByUserId\`) REFERENCES \`users\`(\`id\`))` },
+  { label: "providerSignatureDelegates", sql: `CREATE TABLE IF NOT EXISTS \`providerSignatureDelegates\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`providerUserId\` int NOT NULL,
+    \`delegateUserId\` int NOT NULL,
+    \`createdByUserId\` int,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    UNIQUE KEY \`providerSignatureDelegates_pair_unique\` (\`providerUserId\`, \`delegateUserId\`),
+    INDEX \`providerSignatureDelegates_delegate_idx\` (\`delegateUserId\`),
+    CONSTRAINT \`providerSignatureDelegates_providerUserId_fk\` FOREIGN KEY (\`providerUserId\`) REFERENCES \`users\`(\`id\`),
+    CONSTRAINT \`providerSignatureDelegates_delegateUserId_fk\` FOREIGN KEY (\`delegateUserId\`) REFERENCES \`users\`(\`id\`),
+    CONSTRAINT \`providerSignatureDelegates_createdByUserId_fk\` FOREIGN KEY (\`createdByUserId\`) REFERENCES \`users\`(\`id\`))` },
   { label: "coverageOnFile", sql: `CREATE TABLE IF NOT EXISTS \`coverageOnFile\` (
     \`subjectKey\` varchar(120) NOT NULL PRIMARY KEY,
     \`patientId\` int,
@@ -701,6 +722,10 @@ const INTAKE_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: "patients", column: "ccmConsentDate", ddl: "`ccmConsentDate` datetime NULL AFTER `consentStatus`" },
   { table: "patients", column: "rpmConsentStatus", ddl: "`rpmConsentStatus` ENUM('consented','pending','declined') DEFAULT 'pending' AFTER `rpmDeviceType`" },
   { table: "patients", column: "rpmConsentDate", ddl: "`rpmConsentDate` datetime NULL AFTER `rpmConsentStatus`" },
+  // Added 2026-09-30: a provider's signature applied by staff with the provider's approval.
+  { table: "documentSignatures", column: "onBehalfOfUserId", ddl: "`onBehalfOfUserId` int NULL AFTER `sha256`" },
+  { table: "documentSignatures", column: "approvalMethod", ddl: "`approvalMethod` varchar(20) NULL AFTER `onBehalfOfUserId`" },
+  { table: "documentSignatures", column: "approvalNote", ddl: "`approvalNote` varchar(255) NULL AFTER `approvalMethod`" },
 ];
 async function upgradeIntake(db: Db): Promise<string[]> {
   const applied: string[] = [];

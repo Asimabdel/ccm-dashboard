@@ -9,9 +9,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { PDFCheckBox, PDFDocument, PDFDropdown, PDFRef, PDFSignature, PDFTextField, StandardFonts, degrees, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import { getDb } from "./db";
-import { clinics, documentEvents, documentSignatures, documentSigners, documents, patients, userSignatures, users, workTaskActivities, workTasks } from "../drizzle/schema";
 import {
-  cleanFields, missingFor, signerOf, usDate, type Assignee, type DocField, type DocPage, type DocStatus, type PrefillKey,
+  clinics, documentEvents, documentSignatures, documentSigners, documents, patients, providerSignatureDelegates, providerSignatures, userSignatures, users, workTaskActivities, workTasks,
+} from "../drizzle/schema";
+import {
+  APPROVAL_LABELS, APPROVAL_METHODS, cleanFields, missingFor, signerOf, usDate, type ApprovalMethod, type Assignee, type DocField, type DocPage, type DocStatus, type PrefillKey,
 } from "../shared/documents";
 import { localDateStr } from "../shared/workforce";
 import { MAX_PDF_BYTES, getBytes, onS3, putBytes, readTarget, uploadTarget } from "./docStore";
@@ -50,7 +52,11 @@ async function signersOf(documentId: number) {
 async function canView(a: WorkspaceActor, doc: DocRow) {
   if (doc.isTemplate || isAdmin(a) || doc.createdByUserId === a.id) return true;
   if (a.role === "office_manager" && a.clinicIds && doc.clinicId && a.clinicIds.includes(doc.clinicId)) return true;
-  return (await signersOf(doc.id)).some((s) => s.s.userId === a.id);
+  if ((await signersOf(doc.id)).some((s) => s.s.userId === a.id)) return true;
+  // A provider whose signature was applied on their behalf can always see that document.
+  const [mine] = await (await db()).select({ id: documentSignatures.id }).from(documentSignatures)
+    .where(and(eq(documentSignatures.documentId, doc.id), eq(documentSignatures.onBehalfOfUserId, a.id))).limit(1);
+  return !!mine;
 }
 /** Change the boxes / title / signers: the creator (or an admin) while it's a draft. Templates: whoever made it, or an admin. */
 const canEdit = (a: WorkspaceActor, doc: DocRow) => doc.status === "draft" && (doc.createdByUserId === a.id || isAdmin(a));
@@ -276,8 +282,9 @@ export async function getDocument(a: WorkspaceActor, id: number, meta: ClientMet
   const d = await db();
   const doc = await docOr404(a, id);
   const signers = await signersOf(id);
-  const sigs = await d.select({ id: documentSignatures.id, png: documentSignatures.png, userId: documentSignatures.userId, signedAt: documentSignatures.signedAt, name: users.name })
+  const sigs = await d.select({ id: documentSignatures.id, png: documentSignatures.png, userId: documentSignatures.userId, signedAt: documentSignatures.signedAt, name: users.name, onBehalfOf: documentSignatures.onBehalfOfUserId })
     .from(documentSignatures).leftJoin(users, eq(users.id, documentSignatures.userId)).where(eq(documentSignatures.documentId, id));
+  const onBehalfNames = await namesOf(sigs.map((s) => s.onBehalfOf).filter((x): x is number => !!x));
   const events = await d.select({ e: documentEvents, name: users.name }).from(documentEvents).leftJoin(users, eq(users.id, documentEvents.userId))
     .where(eq(documentEvents.documentId, id)).orderBy(asc(documentEvents.at), asc(documentEvents.id));
   const [creator] = await d.select({ name: users.name }).from(users).where(eq(users.id, doc.createdByUserId)).limit(1);
@@ -292,7 +299,10 @@ export async function getDocument(a: WorkspaceActor, id: number, meta: ClientMet
     subjectKey: doc.subjectKey, patientName, creator: creator?.name ?? null, createdByMe: doc.createdByUserId === a.id,
     sentAt: doc.sentAt, completedAt: doc.completedAt, hasFile: !!doc.fileKey && pagesOf(doc).length > 0, hasFinal: !!doc.finalKey,
     signers: signers.map((s) => ({ userId: s.s.userId, name: s.name, status: s.s.status as "pending" | "signed", signedAt: s.s.signedAt })),
-    signatures: Object.fromEntries(sigs.map((s) => [`sig:${s.id}`, { png: `data:image/png;base64,${s.png}`, name: s.name, signedAt: s.signedAt }])),
+    signatures: Object.fromEntries(sigs.map((s) => [`sig:${s.id}`, {
+      png: `data:image/png;base64,${s.png}`, name: s.onBehalfOf ? onBehalfNames.get(s.onBehalfOf) ?? "Provider" : s.name, signedAt: s.signedAt,
+      appliedBy: s.onBehalfOf ? s.name : null,
+    }])),
     events: events.map(({ e, name }) => ({ at: e.at, type: e.type, detail: e.detail, name })),
   };
 }
@@ -365,27 +375,55 @@ const PNG_RE = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/;
  * Sign one signature / initials box: the preparer on a draft, or a signer on their own box while it's out
  * for signature. The image is kept with who / when / where, and the box points at it.
  */
-export async function signField(a: WorkspaceActor, id: number, input: { fieldId: string; png: string; saveAsMine?: boolean }, meta: ClientMeta) {
+export interface OnBehalfOf { providerUserId: number; approval: ApprovalMethod; note?: string | null }
+
+export async function signField(a: WorkspaceActor, id: number, input: { fieldId: string; png?: string | null; saveAsMine?: boolean; onBehalfOf?: OnBehalfOf | null }, meta: ClientMeta) {
   const doc = await docOr404(a, id);
   const fields = fieldsOf(doc);
   const f = fields.find((x) => x.id === input.fieldId);
   if (!f || (f.type !== "signature" && f.type !== "initials")) throw new WorkspaceError("That box isn't a signature box.");
   const mine = f.assignee === "preparer" ? canEdit(a, doc) : signerOf(f.assignee) === a.id && doc.status === "signing" && (await pendingSigner(id, a.id));
   if (!mine) throw new WorkspaceError("That box is for someone else to sign.", "FORBIDDEN");
-  const m = PNG_RE.exec(input.png);
-  const bytes = m ? Buffer.from(m[1]!, "base64") : null;
-  if (!m || !bytes || bytes.length < 100 || bytes.length > 600_000) throw new WorkspaceError("Please sign again.");
   const d = await db();
+  let b64: string, onBehalf: OnBehalfOf | null = null, providerName: string | null = null;
+  if (input.onBehalfOf) {
+    // A provider's stored signature, applied by someone they picked, with their approval (confirmed by the staff member).
+    const o = input.onBehalfOf;
+    if (f.assignee !== "preparer") throw new WorkspaceError("A provider's signature can only go in your own boxes.");
+    if (!APPROVAL_METHODS.includes(o.approval)) throw new WorkspaceError("Say how the provider approved it.");
+    const note = o.note?.replace(/[\r\n<>]/g, " ").trim().slice(0, 255) || null;
+    if (o.approval === "other" && !note) throw new WorkspaceError("Add a short note on how the provider approved it.");
+    const usable = (await signaturesICanApply(a)).find((p) => p.providerUserId === o.providerUserId);
+    const stored = f.type === "initials" ? usable?.initialsPng : usable?.signaturePng;
+    if (!usable || !stored) throw new WorkspaceError(usable ? `${usable.name} has no saved ${f.type === "initials" ? "initials" : "signature"}.` : "You're not set up to use that provider's signature.", "FORBIDDEN");
+    b64 = PNG_RE.exec(stored)![1]!;
+    onBehalf = { ...o, note };
+    providerName = usable.name;
+  } else {
+    const m = PNG_RE.exec(input.png ?? "");
+    if (!m) throw new WorkspaceError("Please sign again.");
+    b64 = m[1]!;
+  }
+  const bytes = Buffer.from(b64, "base64");
+  if (bytes.length < 100 || bytes.length > 600_000) throw new WorkspaceError("Please sign again.");
   const res = await d.insert(documentSignatures).values({
-    documentId: id, fieldId: f.id, userId: a.id, kind: f.type, png: m[1]!, sha256: sha256(bytes), signedAt: new Date(Math.floor(Date.now() / 1000) * 1000),
+    documentId: id, fieldId: f.id, userId: a.id, kind: f.type, png: b64, sha256: sha256(bytes), signedAt: new Date(Math.floor(Date.now() / 1000) * 1000),
+    onBehalfOfUserId: onBehalf?.providerUserId ?? null, approvalMethod: onBehalf?.approval ?? null, approvalNote: onBehalf?.note ?? null,
     ip: meta.ip?.slice(0, 64) ?? null, userAgent: meta.userAgent?.slice(0, 255) ?? null,
   });
   const sigId = (res as unknown as [{ insertId: number }])[0].insertId;
   const value = `sig:${sigId}`;
   await d.update(documents).set({ fields: fields.map((x) => (x.id === f.id ? { ...x, value } : x)), updatedByUserId: a.id }).where(eq(documents.id, id));
-  if (input.saveAsMine) await saveMySignature(a, f.type === "initials" ? { initialsPng: input.png } : { signaturePng: input.png });
-  await logEvent(id, f.type === "initials" ? "initialed" : "signed_box", { userId: a.id, meta, detail: f.label ?? null });
-  return { value, png: input.png };
+  if (input.saveAsMine && !onBehalf && input.png) await saveMySignature(a, f.type === "initials" ? { initialsPng: input.png } : { signaturePng: input.png });
+  if (onBehalf) {
+    const how = `${APPROVAL_LABELS[onBehalf.approval].toLowerCase()}${onBehalf.note ? `: ${onBehalf.note}` : ""}`;
+    await logEvent(id, "provider_signature", { userId: a.id, meta, detail: `${providerName}'s ${f.type} applied with their approval (${how})` });
+    await audit(a, "manage_document", { entityType: "document", entityId: id, description: `Applied ${providerName}'s ${f.type} to "${doc.title}" (approved ${how})` });
+    await notifyTask(onBehalf.providerUserId, `Your ${f.type} was used`, `${doc.title}: applied by ${a.name ?? "a teammate"} (you approved ${how}).`, doc.patientId);
+  } else {
+    await logEvent(id, f.type === "initials" ? "initialed" : "signed_box", { userId: a.id, meta, detail: f.label ?? null });
+  }
+  return { value, png: `data:image/png;base64,${b64}`, name: providerName };
 }
 
 async function pendingSigner(documentId: number, userId: number) {
@@ -484,6 +522,110 @@ export async function cancelDocument(a: WorkspaceActor, id: number) {
   await logEvent(id, "cancelled", { userId: a.id });
   await audit(a, "manage_document", { entityType: "document", entityId: id, description: `Cancelled "${doc.title}"` });
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Provider signatures: stored by admins (or the provider), applied by staff each provider picked,
+// with the provider's approval. Every use is logged, on the certificate, and sent to the provider.
+// ---------------------------------------------------------------------------
+
+async function namesOf(ids: number[]) {
+  const uniq = Array.from(new Set(ids));
+  if (!uniq.length) return new Map<number, string>();
+  return new Map((await (await db()).select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, uniq))).map((u) => [u.id, u.name ?? `User #${u.id}`]));
+}
+
+async function providerUsers() {
+  return (await db()).select({ id: users.id, name: users.name }).from(users)
+    .where(and(eq(users.role, "provider"), sql`${users.openId} NOT LIKE 'roster:%'`)).orderBy(asc(users.name));
+}
+
+/** Manage a provider's stored signature / who may use it: an admin, or the provider themself. */
+async function canManageProvider(a: WorkspaceActor, providerUserId: number) {
+  if (!(await providerUsers()).some((p) => p.id === providerUserId)) throw new WorkspaceError("That person isn't a provider.", "NOT_FOUND");
+  if (!(isAdmin(a) || a.id === providerUserId)) throw new WorkspaceError("Only an admin or the provider can change this.", "FORBIDDEN");
+}
+
+/** The Provider signatures tab: admins see every provider; a provider sees their own. */
+export async function providerSignatureOverview(a: WorkspaceActor) {
+  const d = await db();
+  const providers = (await providerUsers()).filter((p) => isAdmin(a) || p.id === a.id);
+  if (!providers.length) return { providers: [], canManage: false };
+  const ids = providers.map((p) => p.id);
+  const sigs = await d.select().from(providerSignatures).where(inArray(providerSignatures.providerUserId, ids));
+  const dels = await d.select({ providerUserId: providerSignatureDelegates.providerUserId, userId: providerSignatureDelegates.delegateUserId, name: users.name })
+    .from(providerSignatureDelegates).leftJoin(users, eq(users.id, providerSignatureDelegates.delegateUserId)).where(inArray(providerSignatureDelegates.providerUserId, ids));
+  const uses = await d.select({ p: documentSignatures.onBehalfOfUserId, n: sql<number>`COUNT(*)` }).from(documentSignatures)
+    .where(inArray(documentSignatures.onBehalfOfUserId, ids)).groupBy(documentSignatures.onBehalfOfUserId);
+  return {
+    canManage: true,
+    providers: providers.map((p) => {
+      const s = sigs.find((x) => x.providerUserId === p.id);
+      return {
+        providerUserId: p.id, name: p.name ?? "Provider", isMe: p.id === a.id,
+        signaturePng: s?.signaturePng ?? null, initialsPng: s?.initialsPng ?? null, enabled: s?.enabled ?? true, updatedAt: s?.updatedAt ?? null,
+        delegates: dels.filter((x) => x.providerUserId === p.id).map((x) => ({ userId: x.userId, name: x.name })),
+        uses: Number(uses.find((u) => u.p === p.id)?.n ?? 0),
+      };
+    }),
+  };
+}
+
+export async function saveProviderSignature(a: WorkspaceActor, providerUserId: number, input: { signaturePng?: string | null; initialsPng?: string | null; enabled?: boolean }) {
+  await canManageProvider(a, providerUserId);
+  const patch: { signaturePng?: string | null; initialsPng?: string | null; enabled?: boolean; updatedByUserId: number } = { updatedByUserId: a.id };
+  for (const k of ["signaturePng", "initialsPng"] as const) {
+    const v = input[k];
+    if (v === undefined) continue;
+    if (v !== null && (!PNG_RE.test(v) || v.length > 800_000)) throw new WorkspaceError("That image didn't work. Try a clearer photo or draw it.");
+    patch[k] = v;
+  }
+  if (input.enabled !== undefined) patch.enabled = input.enabled;
+  await (await db()).insert(providerSignatures).values({ providerUserId, ...patch }).onDuplicateKeyUpdate({ set: patch });
+  const [p] = await (await db()).select({ name: users.name }).from(users).where(eq(users.id, providerUserId)).limit(1);
+  const what = [input.signaturePng !== undefined ? (input.signaturePng ? "signature saved" : "signature removed") : null,
+    input.initialsPng !== undefined ? (input.initialsPng ? "initials saved" : "initials removed") : null,
+    input.enabled !== undefined ? (input.enabled ? "staff use turned on" : "staff use turned off") : null].filter(Boolean).join(", ");
+  await audit(a, "manage_document", { entityType: "providerSignature", entityId: providerUserId, description: `Provider signature for ${p?.name ?? providerUserId}: ${what}` });
+  if (a.id !== providerUserId) await notifyTask(providerUserId, "Your stored signature was updated", `${a.name ?? "An admin"}: ${what}.`, null);
+  return { ok: true };
+}
+
+/** Who may apply this provider's signature (the provider, or an admin, picks). */
+export async function setProviderDelegates(a: WorkspaceActor, providerUserId: number, userIds: number[]) {
+  await canManageProvider(a, providerUserId);
+  const valid = new Set((await signerChoices()).map((u) => u.id));
+  const ids = Array.from(new Set(userIds)).filter((u) => u !== providerUserId).slice(0, 50);
+  if (ids.some((u) => !valid.has(u))) throw new WorkspaceError("Pick people from your team.");
+  const d = await db();
+  await d.delete(providerSignatureDelegates).where(eq(providerSignatureDelegates.providerUserId, providerUserId));
+  if (ids.length) await d.insert(providerSignatureDelegates).values(ids.map((delegateUserId) => ({ providerUserId, delegateUserId, createdByUserId: a.id })));
+  const names = await namesOf([providerUserId, ...ids]);
+  await audit(a, "manage_document", { entityType: "providerSignature", entityId: providerUserId, description: `Who may use ${names.get(providerUserId)}'s signature: ${ids.map((i) => names.get(i)).join(", ") || "nobody"}` });
+  return { ok: true };
+}
+
+/** Providers whose stored signature this person may apply right now (picked by the provider, switched on, saved). */
+export async function signaturesICanApply(a: WorkspaceActor) {
+  const d = await db();
+  const rows = await d.select({ providerUserId: providerSignatureDelegates.providerUserId, name: users.name, s: providerSignatures })
+    .from(providerSignatureDelegates)
+    .innerJoin(providerSignatures, eq(providerSignatures.providerUserId, providerSignatureDelegates.providerUserId))
+    .leftJoin(users, eq(users.id, providerSignatureDelegates.providerUserId))
+    .where(and(eq(providerSignatureDelegates.delegateUserId, a.id), eq(providerSignatures.enabled, true)));
+  return rows.filter((r) => r.s.signaturePng || r.s.initialsPng)
+    .map((r) => ({ providerUserId: r.providerUserId, name: r.name ?? "Provider", signaturePng: r.s.signaturePng, initialsPng: r.s.initialsPng }));
+}
+
+/** A provider's list of everything their signature was applied to. */
+export async function signedForMe(a: WorkspaceActor) {
+  const rows = await (await db()).select({ s: documentSignatures, title: documents.title, status: documents.status, appliedBy: users.name })
+    .from(documentSignatures).innerJoin(documents, eq(documents.id, documentSignatures.documentId)).leftJoin(users, eq(users.id, documentSignatures.userId))
+    .where(eq(documentSignatures.onBehalfOfUserId, a.id)).orderBy(desc(documentSignatures.signedAt)).limit(300);
+  return rows.map((r) => ({
+    documentId: r.s.documentId, title: r.title, status: r.status as DocStatus, kind: r.s.kind, appliedBy: r.appliedBy, at: r.s.signedAt,
+    approval: r.s.approvalMethod as ApprovalMethod | null, note: r.s.approvalNote,
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -588,7 +730,7 @@ async function finalize(id: number, a: WorkspaceActor) {
 
 async function addCertificate(pdf: PDFDocument, doc: DocRow, fields: DocField[], sigRows: (typeof documentSignatures.$inferSelect)[], font: PDFFont, bold: PDFFont) {
   const d = await db();
-  const userIds = Array.from(new Set([doc.createdByUserId, ...sigRows.map((s) => s.userId)]));
+  const userIds = Array.from(new Set([doc.createdByUserId, ...sigRows.map((s) => s.userId), ...sigRows.map((s) => s.onBehalfOfUserId).filter((x): x is number => !!x)]));
   const signerRows = await d.select().from(documentSigners).where(eq(documentSigners.documentId, doc.id));
   for (const s of signerRows) if (!userIds.includes(s.userId)) userIds.push(s.userId);
   const people = new Map((await d.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, userIds))).map((u) => [u.id, u.name ?? `User #${u.id}`]));
@@ -620,7 +762,9 @@ async function addCertificate(pdf: PDFDocument, doc: DocRow, fields: DocField[],
   line("Signatures", { size: 12, b: true });
   for (const s of sigRows.sort((x, z) => x.signedAt.getTime() - z.signedAt.getTime())) {
     const f = fields.find((x) => x.id === s.fieldId);
-    line(`${people.get(s.userId)}: ${s.kind === "initials" ? "initials" : "signature"}${f?.label ? ` ("${f.label}")` : ""}, page ${f ? f.page + 1 : "?"}`, { b: true, indent: 8 });
+    const whose = s.onBehalfOfUserId ?? s.userId;
+    line(`${people.get(whose)}: ${s.kind === "initials" ? "initials" : "signature"}${f?.label ? ` ("${f.label}")` : ""}, page ${f ? f.page + 1 : "?"}`, { b: true, indent: 8 });
+    if (s.onBehalfOfUserId) line(`Applied by ${people.get(s.userId)} with ${people.get(s.onBehalfOfUserId)}'s approval (${(APPROVAL_LABELS[s.approvalMethod as ApprovalMethod] ?? s.approvalMethod ?? "").toLowerCase()}${s.approvalNote ? `: ${s.approvalNote}` : ""}).`, { indent: 16, size: 8 });
     line(`${fmt(s.signedAt)} · IP ${s.ip ?? "unknown"} · image fingerprint ${s.sha256.slice(0, 24)}…`, { indent: 16, size: 8, color: 0.35 });
   }
   if (!sigRows.length) line("No signature boxes on this document.", { indent: 8, color: 0.4 });

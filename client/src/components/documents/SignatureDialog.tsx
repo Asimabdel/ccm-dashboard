@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, PenLine, Type } from "lucide-react";
+import { Loader2, PenLine, Stethoscope, Type } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Btn, inputCls } from "@/components/workspace/ui";
 import { cn } from "@/lib/utils";
+import { APPROVAL_LABELS, APPROVAL_METHODS, PROVIDER_SIGNATURE_RULE, type ApprovalMethod } from "@shared/documents";
 
 const SCRIPT_FONT = '"Segoe Script","Brush Script MT","Snell Roundhand","Apple Chancery",cursive';
 const INK = "#0b1b4d";
@@ -25,6 +26,37 @@ function trimmed(canvas: HTMLCanvasElement): string | null {
   return out.toDataURL("image/png");
 }
 
+/**
+ * A photo or scan of a signature → a clean PNG: the paper (light pixels) becomes transparent so only the ink
+ * lands on the PDF, cropped to the ink.
+ */
+export async function imageToSignaturePng(file: File): Promise<string> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error("That file isn't a picture.")); i.src = url; });
+    const scale = Math.min(1, 1400 / img.naturalWidth);
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(img.naturalWidth * scale)); c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = c.getContext("2d")!;
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    const data = ctx.getImageData(0, 0, c.width, c.height);
+    const px = data.data;
+    for (let i = 0; i < px.length; i += 4) {
+      const lum = 0.299 * px[i]! + 0.587 * px[i + 1]! + 0.114 * px[i + 2]!;
+      if (lum > 185) px[i + 3] = 0; // paper
+      else { px[i + 3] = Math.min(255, Math.round((185 - lum) * 2.2)); } // ink, softly anti-aliased
+    }
+    ctx.putImageData(data, 0, 0);
+    const png = trimmed(c);
+    if (!png) throw new Error("No signature found in that picture. Try a darker, closer photo.");
+    return png;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+export interface ProviderOption { providerUserId: number; name: string; png: string | null }
+
 /** A typed name drawn in a handwriting-style font, as a PNG. */
 function typedPng(text: string, initials: boolean): string | null {
   if (!text.trim()) return null;
@@ -42,7 +74,7 @@ function typedPng(text: string, initials: boolean): string | null {
  * Sign a box: draw it, type it, or use your saved signature (one tap). Optionally save what you made as
  * your signature for next time.
  */
-export function SignatureDialog({ open, kind, saved, defaultName, onClose, onDone, setupOnly = false }: {
+export function SignatureDialog({ open, kind, saved, defaultName, onClose, onDone, setupOnly = false, providers = [], onProviderApply }: {
   open: boolean;
   kind: "signature" | "initials";
   saved: string | null;
@@ -51,8 +83,16 @@ export function SignatureDialog({ open, kind, saved, defaultName, onClose, onDon
   onDone: (png: string, saveAsMine: boolean) => Promise<void> | void;
   /** Just set up "my signature" (no box to sign). */
   setupOnly?: boolean;
+  /** Providers whose stored signature this person may apply (with the provider's approval). */
+  providers?: ProviderOption[];
+  onProviderApply?: (o: { providerUserId: number; approval: ApprovalMethod; note: string | null }) => Promise<void>;
 }) {
-  const [tab, setTab] = useState<"saved" | "draw" | "type">(saved && !setupOnly ? "saved" : "draw");
+  const [tab, setTab] = useState<"saved" | "draw" | "type" | "provider">(saved && !setupOnly ? "saved" : "draw");
+  const usable = providers.filter((p) => p.png);
+  const [providerId, setProviderId] = useState<number | null>(null);
+  const [approved, setApproved] = useState(false);
+  const [approval, setApproval] = useState<ApprovalMethod | "">("");
+  const [approvalNote, setApprovalNote] = useState("");
   const [typed, setTyped] = useState("");
   const [save, setSave] = useState(!saved || setupOnly);
   const [busy, setBusy] = useState(false);
@@ -69,6 +109,9 @@ export function SignatureDialog({ open, kind, saved, defaultName, onClose, onDon
     setSave(!saved || setupOnly);
     setErr(null);
     inked.current = false;
+    setProviderId(usable.length === 1 ? usable[0]!.providerUserId : null);
+    setApproved(false); setApproval(""); setApprovalNote("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, saved, kind, defaultName, setupOnly]);
 
   // Size the drawing canvas to its box (sharp on high-DPI screens).
@@ -109,6 +152,16 @@ export function SignatureDialog({ open, kind, saved, defaultName, onClose, onDon
 
   const finish = async () => {
     setErr(null);
+    if (tab === "provider") {
+      const p = usable.find((x) => x.providerUserId === providerId);
+      if (!p) { setErr("Pick the provider."); return; }
+      if (!approved) { setErr(`Confirm ${p.name} approved this.`); return; }
+      if (!approval) { setErr("Say how they approved it."); return; }
+      if (approval === "other" && !approvalNote.trim()) { setErr("Add a short note on how they approved it."); return; }
+      setBusy(true);
+      try { await onProviderApply?.({ providerUserId: p.providerUserId, approval, note: approvalNote.trim() || null }); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+      return;
+    }
     let png: string | null = null;
     if (tab === "saved") png = saved;
     else if (tab === "type") png = typedPng(typed, kind === "initials");
@@ -136,7 +189,37 @@ export function SignatureDialog({ open, kind, saved, defaultName, onClose, onDon
             {saved && !setupOnly && tabBtn("saved", `My saved ${label}`)}
             {tabBtn("draw", "Draw", PenLine)}
             {tabBtn("type", "Type", Type)}
+            {!setupOnly && usable.length > 0 && onProviderApply && tabBtn("provider", `A provider's ${label}`, Stethoscope)}
           </div>
+          {tab === "provider" && (
+            <div className="space-y-2">
+              <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">{PROVIDER_SIGNATURE_RULE}</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {usable.map((p) => (
+                  <button key={p.providerUserId} type="button" onClick={() => { setProviderId(p.providerUserId); setApproved(false); }}
+                    className={cn("rounded-lg border-2 p-2 text-left", providerId === p.providerUserId ? "border-brand" : "border-slate-200 dark:border-slate-700")}>
+                    <span className="block text-xs font-semibold">{p.name}</span>
+                    <span className="mt-1 grid h-14 place-items-center rounded" style={{ background: "#fff" }}><img src={p.png!} alt="" className="max-h-12 max-w-full" /></span>
+                  </button>
+                ))}
+              </div>
+              {providerId && (
+                <div className="space-y-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                  <label className="flex items-start gap-2 text-sm font-semibold">
+                    <input type="checkbox" className="mt-0.5 size-4 accent-teal-700" checked={approved} onChange={(e) => setApproved(e.target.checked)} />
+                    {usable.find((p) => p.providerUserId === providerId)?.name} approved me signing this for them.
+                  </label>
+                  <select className={cn(inputCls, "h-9 text-xs")} value={approval} onChange={(e) => setApproval(e.target.value as ApprovalMethod)}>
+                    <option value="">How did they approve it?</option>
+                    {APPROVAL_METHODS.map((m) => <option key={m} value={m}>{APPROVAL_LABELS[m]}</option>)}
+                  </select>
+                  <input className={cn(inputCls, "h-9 text-xs")} value={approvalNote} maxLength={255} onChange={(e) => setApprovalNote(e.target.value)}
+                    placeholder={approval === "other" ? "How they approved it (required)" : "Note (optional), e.g. approved at 2:10 pm"} />
+                  <p className="text-[11px] text-slate-500">They'll get a notification, and it's shown on the PDF's certificate page.</p>
+                </div>
+              )}
+            </div>
+          )}
           {tab === "saved" && saved && (
             <div className="grid h-32 place-items-center rounded-lg border border-slate-200 p-2" style={{ background: "#fff" }}><img src={saved} alt="" className="max-h-28" /></div>
           )}
@@ -153,7 +236,7 @@ export function SignatureDialog({ open, kind, saved, defaultName, onClose, onDon
               {typed.trim() && <div className="rounded-lg border border-slate-200 px-4 py-3 text-4xl" style={{ fontFamily: SCRIPT_FONT, color: INK, background: "#fff" }}>{typed}</div>}
             </div>
           )}
-          {tab !== "saved" && !setupOnly && (
+          {tab !== "saved" && tab !== "provider" && !setupOnly && (
             <label className="flex items-center gap-2 text-xs">
               <input type="checkbox" className="size-4 accent-teal-700" checked={save} onChange={(e) => setSave(e.target.checked)} />
               Save as my {label} for next time
@@ -162,7 +245,7 @@ export function SignatureDialog({ open, kind, saved, defaultName, onClose, onDon
           {err && <p className="text-xs font-semibold text-red-600">{err}</p>}
           <div className="flex justify-end gap-2">
             <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-            <Btn disabled={busy} onClick={finish}>{busy && <Loader2 size={14} className="animate-spin" />} {setupOnly ? "Save" : "Sign"}</Btn>
+            <Btn disabled={busy} onClick={finish}>{busy && <Loader2 size={14} className="animate-spin" />} {setupOnly ? "Save" : tab === "provider" ? "Apply their signature" : "Sign"}</Btn>
           </div>
         </div>
       </DialogContent>

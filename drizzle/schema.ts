@@ -1346,6 +1346,11 @@ export const documentSignatures = mysqlTable("documentSignatures", {
   kind: varchar("kind", { length: 10 }).notNull(),
   png: mediumtext("png").notNull(),
   sha256: varchar("sha256", { length: 64 }).notNull(),
+  /** A provider's stored signature applied by staff (userId) with the provider's approval. */
+  onBehalfOfUserId: int("onBehalfOfUserId").references(() => users.id),
+  /** in_person | phone | text | other */
+  approvalMethod: varchar("approvalMethod", { length: 20 }),
+  approvalNote: varchar("approvalNote", { length: 255 }),
   signedAt: datetime("signedAt").notNull(),
   ip: varchar("ip", { length: 64 }),
   userAgent: varchar("userAgent", { length: 255 }),
@@ -1365,6 +1370,33 @@ export const documentEvents = mysqlTable("documentEvents", {
   detail: varchar("detail", { length: 255 }),
 }, (t) => ({
   docIdx: index("documentEvents_doc_idx").on(t.documentId, t.at),
+}));
+
+/**
+ * Providers' signatures that chosen staff may apply to administrative documents after the provider
+ * approves (never for Medicare orders, prescriptions or medical-record entries). Admins add them;
+ * each provider can replace their own.
+ */
+export const providerSignatures = mysqlTable("providerSignatures", {
+  providerUserId: int("providerUserId").primaryKey().references(() => users.id),
+  signaturePng: mediumtext("signaturePng"),
+  initialsPng: mediumtext("initialsPng"),
+  /** Staff may use it (the provider or an admin can switch it off any time). */
+  enabled: boolean("enabled").default(true).notNull(),
+  updatedByUserId: int("updatedByUserId").references(() => users.id),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+/** Who may apply a provider's signature (each provider, or an admin, picks). */
+export const providerSignatureDelegates = mysqlTable("providerSignatureDelegates", {
+  id: int("id").autoincrement().primaryKey(),
+  providerUserId: int("providerUserId").notNull().references(() => users.id),
+  delegateUserId: int("delegateUserId").notNull().references(() => users.id),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  pairUnique: uniqueIndex("providerSignatureDelegates_pair_unique").on(t.providerUserId, t.delegateUserId),
+  delegateIdx: index("providerSignatureDelegates_delegate_idx").on(t.delegateUserId),
 }));
 
 /** Each person's saved signature and initials (drawn once, reused with one tap). */

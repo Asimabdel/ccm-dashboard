@@ -790,6 +790,12 @@ describe("documents (PDF editor)", () => {
     expect(can("provider", "documents")).toBe(true);
     await expect(appRouter.createCaller(ctxFor("billing")).workspace.documents.list({ view: "in_progress" })).rejects.toThrow(/access/);
   });
+  it("keeps MAs away from providers' stored signatures, and needs how the provider approved", async () => {
+    await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.documents.signaturesICanApply()).rejects.toThrow(/access/);
+    await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.documents.providerSignatures()).rejects.toThrow(/access/);
+    // An approval method outside the list is refused before anything is looked up.
+    await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.documents.signField({ id: 1, fieldId: "x", onBehalfOf: { providerUserId: 5, approval: "telepathy" as never } })).rejects.toThrow();
+  });
 });
 
 describe("opportunity finder: who sees which patients", () => {

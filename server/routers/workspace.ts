@@ -29,6 +29,7 @@ import * as intake from "../intakeDb";
 import * as availity from "../availityDb";
 import * as docs from "../documentsDb";
 import { CONSENT_KINDS, INTAKE_LANGS } from "../../shared/intake";
+import { APPROVAL_METHODS } from "../../shared/documents";
 import { FAX_DOC_TYPE_KEYS } from "../../shared/fax";
 import { TEST_KEYS, type TestKey } from "../../shared/testing";
 import { CALL_OUTCOME_LIST } from "../../shared/phone";
@@ -551,11 +552,38 @@ export const workspaceRouter = router({
       return run(() => docs.setSigners(actor, input.id, input.userIds));
     }),
     signField: protectedProcedure
-      .input(z.object({ id: z.number().int().positive(), fieldId: z.string().max(40), png: z.string().max(820_000), saveAsMine: z.boolean().optional() }))
+      .input(z.object({
+        id: z.number().int().positive(), fieldId: z.string().max(40), png: z.string().max(820_000).nullish(), saveAsMine: z.boolean().optional(),
+        onBehalfOf: z.object({ providerUserId: z.number().int().positive(), approval: z.enum(APPROVAL_METHODS), note: z.string().max(255).nullish() }).nullish(),
+      }))
       .mutation(async ({ ctx, input }) => {
         const actor = await actorFor(ctx, "documents");
         return run(() => docs.signField(actor, input.id, input, docMeta(ctx)));
       }),
+    // Provider signatures staff may apply with the provider's approval.
+    providerSignatures: protectedProcedure.query(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "documents");
+      return docs.providerSignatureOverview(actor);
+    }),
+    saveProviderSignature: protectedProcedure
+      .input(z.object({ providerUserId: z.number().int().positive(), signaturePng: z.string().max(820_000).nullish(), initialsPng: z.string().max(820_000).nullish(), enabled: z.boolean().optional() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "documents");
+        const { providerUserId, ...rest } = input;
+        return run(() => docs.saveProviderSignature(actor, providerUserId, rest));
+      }),
+    setProviderDelegates: protectedProcedure.input(z.object({ providerUserId: z.number().int().positive(), userIds: z.array(z.number().int().positive()).max(50) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return run(() => docs.setProviderDelegates(actor, input.providerUserId, input.userIds));
+    }),
+    signaturesICanApply: protectedProcedure.query(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "documents");
+      return docs.signaturesICanApply(actor);
+    }),
+    signedForMe: protectedProcedure.query(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "documents");
+      return docs.signedForMe(actor);
+    }),
     send: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "documents");
       return run(() => docs.sendOrFinish(actor, input.id, docMeta(ctx)));
