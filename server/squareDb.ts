@@ -166,7 +166,14 @@ export async function saveSquareConfig(actor: WorkspaceActor, input: { env: Squa
   const token = input.token?.trim() || null;
   const envChanged = input.env !== prev.env;
   if (envChanged && !token) throw new WorkspaceError(`Paste the ${input.env === "production" ? "Production" : "Sandbox"} access token too (each has its own).`);
+  // Test money and real money never mix: once real payments are in MyPCP, going back to Sandbox is off.
+  if (envChanged && prev.env === "production" && prev.tokenEnc) {
+    const [n] = await (await db()).select({ n: sql<number>`count(*)` }).from(squarePayments);
+    if (Number(n?.n ?? 0) > 0) throw new WorkspaceError("MyPCP is connected to your real Square account. Switching back to Sandbox would mix test payments with real ones, so it's turned off.");
+  }
   const next: SquareConfig = { ...prev, env: input.env };
+  // Each environment has its own webhook subscription (and signature key).
+  if (envChanged) next.webhookKeyEnc = "";
   let locations: Awaited<ReturnType<typeof listLocations>> | null = null;
   if (token) {
     // Check the token before keeping it.
@@ -192,9 +199,23 @@ export async function saveSquareConfig(actor: WorkspaceActor, input: { env: Squa
     next.historyFrom = h;
   }
   if (token && (envChanged || next.locationId !== prev.locationId)) await saveSync({ since: null });
+  // Leaving Sandbox (the new token already checked out): clear the test payments so they never count as real money.
+  let cleared = 0;
+  if (envChanged && prev.env === "sandbox") cleared = await clearSquareData();
   await writeSetting(CONFIG_KEY, next, actor.id);
-  await audit(actor, "manage_access", { entityType: "integration", description: `Square settings saved (${next.env}${token ? ", new access token" : ""}${input.webhookKey ? ", webhook key" : ""})` });
+  await audit(actor, "manage_access", { entityType: "integration", description: `Square settings saved (${next.env}${token ? ", new access token" : ""}${input.webhookKey ? ", webhook key" : ""}${cleared ? `; ${cleared} Sandbox test payments cleared` : ""})` });
   return { ok: true, locations, locationId: next.locationId || null };
+}
+
+/** Everything copied from Square (only ever called when leaving Sandbox, so it's all test data). */
+async function clearSquareData() {
+  const d = await db();
+  const [n] = await d.select({ n: sql<number>`count(*)` }).from(squarePayments);
+  await d.delete(squareRefunds);
+  await d.delete(squarePayments);
+  await d.delete(squareCustomers);
+  await d.delete(squareRequests);
+  return Number(n?.n ?? 0);
 }
 
 export async function squareLocations() {

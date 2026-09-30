@@ -74,6 +74,9 @@ export function SquareCard() {
                   <option value="sandbox">Sandbox: test money (for trying it out)</option>
                   <option value="production">Production: real payments</option>
                 </select>
+                {s.env === "sandbox" && form.env === "production" && a.tokenSaved && (
+                  <span className="mt-1 block font-normal text-amber-700 dark:text-amber-300">Saving the Production token clears the Sandbox test payments from MyPCP.</span>
+                )}
               </label>
               <label className={labelCls}>Access token
                 <input type="password" className={cn(inputCls, "mt-1 font-mono text-xs")} value={form.token} autoComplete="new-password"
