@@ -47,6 +47,7 @@ import IntakeFormsPage from "./pages/IntakeFormsPage";
 import IntakePrintPage from "./pages/IntakePrintPage";
 import PatientFormsPage from "./pages/PatientFormsPage";
 import DocumentsPage from "./pages/DocumentsPage";
+import PaymentsPage from "./pages/PaymentsPage";
 import { RingCentralPhone } from "./components/phone/RingCentralPhone";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
 
@@ -101,6 +102,7 @@ function Router() {
       <Route path="/intake-forms" component={IntakeFormsPage} />
       <Route path="/documents/:id" component={DocumentEditorRoute} />
       <Route path="/documents" component={DocumentsPage} />
+      <Route path="/payments" component={PaymentsPage} />
       {/* Public: the page patients open from their forms link (no MyPCP login). */}
       <Route path="/f/:token" component={PatientFormsPage} />
       {/* Public: an open form link for the website (e.g. /sign/consent). */}

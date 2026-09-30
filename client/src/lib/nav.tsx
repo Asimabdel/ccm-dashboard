@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, ClipboardList, UserCog, AlertTriangle, Receipt,
   BarChart3, PhoneCall, CalendarClock, ShieldCheck, Building2, Stethoscope, Target,
   UserMinus, Ban, Pill, PhoneOutgoing, Activity, Sunrise, CalendarDays, BriefcaseBusiness,
-  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature, FileSignature,
+  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature, FileSignature, Wallet,
 } from "lucide-react";
 
 export interface NavItem {
@@ -31,6 +31,7 @@ const BOOKINGS: NavItem = { label: "Website bookings", path: "/bookings", icon: 
 const FORMS: NavItem = { label: "Patient forms", path: "/intake-forms", icon: ClipboardSignature };
 const DOCUMENTS: NavItem = { label: "Documents", path: "/documents", icon: FileSignature };
 const INSURANCE: NavItem = { label: "Insurance checker", path: "/insurance", icon: BadgeCheck };
+const PAYMENTS: NavItem = { label: "Payments", path: "/payments", icon: Wallet };
 
 // Every employee gets the self-service time clock + schedule pages and the team schedule.
 const ME: NavGroup = {
@@ -65,6 +66,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
     {
       label: "Revenue",
       items: [
+        PAYMENTS,
         { label: "Billing", path: "/billing", icon: Receipt },
         { label: "Reports", path: "/reports", icon: BarChart3 },
       ],
@@ -85,7 +87,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
   ],
   // Admin for one office (their home clinic): everything here is limited to that office. No CCM pages.
   office_manager: [
-    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, DOCUMENTS, FLOW, OPPORTUNITIES, INSURANCE, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, DOCUMENTS, FLOW, OPPORTUNITIES, INSURANCE, PAYMENTS, PLAYBOOKS] },
     {
       label: "My office",
       items: [
@@ -135,7 +137,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
     ME,
   ],
   front_desk: [
-    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, DOCUMENTS, EMAILS, FAXES, FLOW, OPPORTUNITIES, PATIENTS, INSURANCE, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, DOCUMENTS, EMAILS, FAXES, FLOW, OPPORTUNITIES, PATIENTS, INSURANCE, PAYMENTS, PLAYBOOKS] },
     { label: "Care Management", items: [{ label: "Follow-ups", path: "/follow-ups", icon: CalendarClock }] },
     ME,
   ],

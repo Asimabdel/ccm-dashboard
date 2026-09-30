@@ -28,6 +28,8 @@ import * as bookings from "../bookingsDb";
 import * as intake from "../intakeDb";
 import * as availity from "../availityDb";
 import * as docs from "../documentsDb";
+import * as square from "../squareDb";
+import { PAYMENT_CATEGORY_LIST, type PaymentCategory } from "../../shared/payments";
 import { CONSENT_KINDS, INTAKE_LANGS } from "../../shared/intake";
 import { APPROVAL_METHODS } from "../../shared/documents";
 import { FAX_DOC_TYPE_KEYS } from "../../shared/fax";
@@ -90,6 +92,19 @@ const flowStatus = z.enum([...FLOW_COLUMNS, "no_show", "cancelled"] as [string, 
 const mappingSchema = z.record(z.string(), z.number().int().min(-1).max(200)).optional();
 const csvText = z.string().min(1).max(5_000_000);
 const subjectKeyRe = /^(p:\d+|s:.{1,110})$/;
+/** Payments can belong to anyone MyPCP knows: roster (p:), schedule (s:) or Practice Fusion-only (f:) patients. */
+const paymentSubjectRe = /^(p:\d+|s:.{1,110}|f:.{1,120})$/;
+const newPaymentRequest = z.object({
+  amountCents: z.number().int().min(50).max(5_000_000),
+  category: z.enum(PAYMENT_CATEGORY_LIST as [PaymentCategory, ...PaymentCategory[]]),
+  purpose: z.string().trim().max(255).nullish(),
+  subjectKey: z.string().regex(paymentSubjectRe).nullish(),
+  clinicId,
+});
+
+function adminOnly(ctx: Ctx, what: string) {
+  if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: `Only an admin can ${what}.` });
+}
 
 export const workspaceRouter = router({
   /** What this person can do in the Workspace, and which clinics they can pick. */
@@ -423,6 +438,143 @@ export const workspaceRouter = router({
       const actor = await actorFor(ctx, "tasks");
       if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can start an import." });
       return run(() => pfSync.requestImport(actor, input));
+    }),
+  }),
+
+  // Square payments: see payments, link them to patients, send payment links, charge on the Terminal.
+  payments: router({
+    status: protectedProcedure.query(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "payments");
+      return square.squareStatus(actor);
+    }),
+    saveConfig: protectedProcedure
+      .input(z.object({
+        env: z.enum(["sandbox", "production"]),
+        token: z.string().trim().max(400).nullish(),
+        webhookKey: z.string().trim().max(200).nullish(),
+        webhookUrl: z.string().trim().max(300).nullish(),
+        historyFrom: z.string().max(10).nullish(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "payments");
+        adminOnly(ctx, "change the Square connection");
+        return run(() => square.saveSquareConfig(actor, input));
+      }),
+    locations: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "payments");
+      adminOnly(ctx, "see the Square locations");
+      return run(() => square.squareLocations());
+    }),
+    setLocation: protectedProcedure.input(z.object({ locationId: z.string().min(1).max(64) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "payments");
+      adminOnly(ctx, "change the Square location");
+      return run(() => square.setSquareLocation(actor, input.locationId));
+    }),
+    syncNow: protectedProcedure.mutation(async ({ ctx }) => {
+      await actorFor(ctx, "payments");
+      return run(() => square.runSquareSync({ deadline: Date.now() + 18_000, manual: true }));
+    }),
+    pairTerminal: protectedProcedure.input(z.object({ name: z.string().trim().min(1).max(60), clinicId })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "payments");
+      adminOnly(ctx, "pair a Square Terminal");
+      return run(() => square.pairTerminal(actor, { name: input.name, clinicId: input.clinicId ?? null }));
+    }),
+    checkPairing: protectedProcedure.mutation(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "payments");
+      adminOnly(ctx, "pair a Square Terminal");
+      return run(() => square.checkPairing(actor));
+    }),
+    cancelPairing: protectedProcedure.mutation(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "payments");
+      adminOnly(ctx, "pair a Square Terminal");
+      return run(() => square.cancelPairing(actor));
+    }),
+    setDevice: protectedProcedure.input(z.object({ deviceId: z.string().min(1).max(64), clinicId, name: z.string().trim().max(60).nullish() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "payments");
+      adminOnly(ctx, "change Square devices");
+      return run(() => square.setDeviceClinic(actor, { deviceId: input.deviceId, clinicId: input.clinicId ?? null, name: input.name }));
+    }),
+    removeTerminal: protectedProcedure.input(z.object({ deviceId: z.string().min(1).max(64) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "payments");
+      adminOnly(ctx, "change Square devices");
+      return run(() => square.removeTerminal(actor, input.deviceId));
+    }),
+    list: protectedProcedure
+      .input(z.object({
+        from: dateStr, to: dateStr,
+        clinicId: z.number().int().min(0).nullish(),
+        business: z.enum(["clinic", "dexafit", "all"]).nullish(),
+        category: z.enum(["copay", "weight_loss", "self_pay", "dexafit", "none"] as const satisfies readonly (PaymentCategory | "none")[]).nullish(),
+        view: z.enum(["all", "needs_patient"]).nullish(),
+        q: z.string().max(100).nullish(),
+      }))
+      .query(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "payments");
+        return run(() => square.listPayments(actor, { ...input, business: input.business ?? undefined, category: (input.category ?? null) as PaymentCategory | "none" | null, view: input.view ?? "all" }));
+      }),
+    detail: protectedProcedure.input(z.object({ id: z.string().min(1).max(64) })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "payments");
+      return run(() => square.paymentDetail(actor, input.id));
+    }),
+    link: protectedProcedure
+      .input(z.object({ id: z.string().min(1).max(64), subjectKey: z.string().regex(paymentSubjectRe).nullable(), alsoCustomer: z.boolean().default(true) }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "payments");
+        return run(() => square.linkPayment(actor, input));
+      }),
+    update: protectedProcedure
+      .input(z.object({ id: z.string().min(1).max(64), category: z.enum(PAYMENT_CATEGORY_LIST as [PaymentCategory, ...PaymentCategory[]]).nullish(), clinicId: z.number().int().positive().nullish(), memo: z.string().max(500).nullish() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "payments");
+        const patch: Parameters<typeof square.updatePayment>[1] = { id: input.id };
+        if (input.category !== undefined) patch.category = input.category;
+        if (input.clinicId !== undefined) patch.clinicId = input.clinicId;
+        if (input.memo !== undefined) patch.memo = input.memo;
+        return run(() => square.updatePayment(actor, patch));
+      }),
+    searchPatients: protectedProcedure.input(z.object({ q: z.string().trim().min(2).max(100) })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "payments");
+      return square.paymentPatientSearch(actor, input.q);
+    }),
+    contact: protectedProcedure.input(z.object({ subjectKey: z.string().regex(paymentSubjectRe) })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "payments");
+      return run(() => square.requestContact(actor, input.subjectKey));
+    }),
+    createLink: protectedProcedure.input(newPaymentRequest).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "payments");
+      return run(() => square.createPaymentLink(actor, input));
+    }),
+    linkText: protectedProcedure.input(z.object({ id: z.number().int().positive(), phone: z.string().max(30).nullish() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "payments");
+      return run(() => square.linkText(actor, input));
+    }),
+    emailLink: protectedProcedure.input(z.object({ id: z.number().int().positive(), to: z.string().trim().email().max(320) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "payments");
+      return run(() => square.emailLink(actor, input));
+    }),
+    linkCopied: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "payments");
+      return run(() => square.markLinkCopied(actor, input.id));
+    }),
+    chargeTerminal: protectedProcedure.input(newPaymentRequest.extend({ deviceId: z.string().min(1).max(64) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "payments");
+      return run(() => square.chargeTerminal(actor, input));
+    }),
+    request: protectedProcedure.input(z.object({ id: z.number().int().positive(), refresh: z.boolean().default(false) })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "payments");
+      return run(() => square.requestStatus(actor, input.id, { refresh: input.refresh }));
+    }),
+    cancelRequest: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "payments");
+      return run(() => square.cancelRequest(actor, input.id));
+    }),
+    requests: protectedProcedure.input(z.object({ status: z.enum(["open", "all"]).default("open") })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "payments");
+      return square.listRequests(actor, input);
+    }),
+    forSubject: protectedProcedure.input(z.object({ subjectKey: z.string().regex(paymentSubjectRe) })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "payments");
+      return run(() => square.subjectPayments(actor, input.subjectKey));
     }),
   }),
 

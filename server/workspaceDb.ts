@@ -148,7 +148,9 @@ type AuditAction =
   | "update_patient"
   | "manage_access"
   | "view_document"
-  | "manage_document";
+  | "manage_document"
+  | "view_payments"
+  | "manage_payment";
 
 export async function audit(actor: WorkspaceActor, action: AuditAction, opts: { entityType?: string; entityId?: number; description?: string } = {}) {
   try {

@@ -18,6 +18,19 @@ import { createContext } from "./context";
  */
 export function createApp(): Express {
   const app = express();
+  // Square's webhook (payments, refunds, Terminal). Registered before the JSON parser: the signature
+  // is checked against the exact bytes Square sent.
+  app.post("/api/square/webhook", express.raw({ type: "*/*", limit: "1mb" }), async (req, res) => {
+    try {
+      const { handleSquareWebhook } = await import("../squareDb");
+      const sig = req.headers["x-square-hmacsha256-signature"];
+      const r = await handleSquareWebhook(Buffer.isBuffer(req.body) ? req.body : Buffer.from(""), typeof sig === "string" ? sig : "");
+      res.status(r.status).json({ ok: r.status === 200 });
+    } catch (e) {
+      console.error("[square] webhook failed:", (e as Error).message);
+      res.status(500).json({ ok: false });
+    }
+  });
   // Larger body limit to support file uploads (e.g. bulk patient import).
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));

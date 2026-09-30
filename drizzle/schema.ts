@@ -453,6 +453,9 @@ export const auditLogs = mysqlTable("auditLogs", {
     // Documents (our own DocuSign), added 2026-09-30
     "view_document",
     "manage_document",
+    // Square payments, added 2026-09-30
+    "view_payments",
+    "manage_payment",
   ]).notNull(),
   entityType: varchar("entityType", { length: 50 }),
   entityId: int("entityId"),
@@ -1481,4 +1484,132 @@ export const playbookVersions = mysqlTable("playbookVersions", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (t) => ({
   playbookIdx: index("playbookVersions_playbook_idx").on(t.playbookId),
+}));
+
+// ---------------------------------------------------------------------------
+// Square payments (added 2026-09-30). Square is the source of truth for the money; MyPCP adds who
+// the patient is, what the payment was for, and which office took it. Square doesn't sign a BAA,
+// so nothing clinical is sent to Square: the reason for a payment stays here.
+// ---------------------------------------------------------------------------
+
+/** Square customers (the payer as Square knows them), and the patient MyPCP matched them to. */
+export const squareCustomers = mysqlTable("squareCustomers", {
+  id: varchar("id", { length: 64 }).primaryKey(),
+  givenName: varchar("givenName", { length: 120 }),
+  familyName: varchar("familyName", { length: 120 }),
+  phone: varchar("phone", { length: 40 }),
+  email: varchar("email", { length: 320 }),
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  patientName: varchar("patientName", { length: 255 }),
+  /** phone | email | manual */
+  matchedBy: varchar("matchedBy", { length: 12 }),
+  /** A likely patient by name only: shown for one-tap confirmation, never linked automatically. */
+  suggestKey: varchar("suggestKey", { length: 120 }),
+  suggestName: varchar("suggestName", { length: 255 }),
+  syncedAt: datetime("syncedAt").notNull(),
+}, (t) => ({
+  subjectIdx: index("squareCustomers_subject_idx").on(t.subjectKey),
+}));
+
+export const squarePayments = mysqlTable("squarePayments", {
+  id: varchar("id", { length: 64 }).primaryKey(),
+  /** When Square took the payment. */
+  createdAt: datetime("createdAt").notNull(),
+  updatedAtSq: datetime("updatedAtSq"),
+  /** COMPLETED | APPROVED | PENDING | CANCELED | FAILED */
+  status: varchar("status", { length: 20 }).notNull(),
+  /** CARD | CASH | WALLET | EXTERNAL | BANK_ACCOUNT | … */
+  sourceType: varchar("sourceType", { length: 30 }),
+  amountCents: int("amountCents").notNull().default(0),
+  tipCents: int("tipCents").notNull().default(0),
+  totalCents: int("totalCents").notNull().default(0),
+  refundedCents: int("refundedCents").notNull().default(0),
+  feeCents: int("feeCents").notNull().default(0),
+  cardBrand: varchar("cardBrand", { length: 30 }),
+  cardLast4: varchar("cardLast4", { length: 4 }),
+  customerId: varchar("customerId", { length: 64 }),
+  orderId: varchar("orderId", { length: 64 }),
+  locationId: varchar("locationId", { length: 64 }),
+  deviceId: varchar("deviceId", { length: 64 }),
+  deviceName: varchar("deviceName", { length: 120 }),
+  teamMemberId: varchar("teamMemberId", { length: 64 }),
+  /** What was rung up in Square (item names), for sorting. */
+  items: varchar("items", { length: 500 }),
+  /** Square's note on the payment. */
+  note: varchar("note", { length: 500 }),
+  receiptUrl: varchar("receiptUrl", { length: 500 }),
+  receiptNumber: varchar("receiptNumber", { length: 20 }),
+  category: varchar("category", { length: 20 }),
+  /** auto | request | manual */
+  categorySource: varchar("categorySource", { length: 10 }),
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  patientId: int("patientId").references(() => patients.id),
+  patientName: varchar("patientName", { length: 255 }),
+  /** customer | request | manual */
+  matchSource: varchar("matchSource", { length: 10 }),
+  clinicId: int("clinicId").references(() => clinics.id),
+  /** request | device | patient | manual */
+  clinicSource: varchar("clinicSource", { length: 10 }),
+  requestId: int("requestId"),
+  /** Staff's own note (MyPCP only). */
+  memo: varchar("memo", { length: 500 }),
+  linkedByUserId: int("linkedByUserId").references(() => users.id),
+  linkedAt: datetime("linkedAt"),
+  syncedAt: datetime("syncedAt").notNull(),
+}, (t) => ({
+  createdIdx: index("squarePayments_created_idx").on(t.createdAt),
+  subjectIdx: index("squarePayments_subject_idx").on(t.subjectKey, t.createdAt),
+  customerIdx: index("squarePayments_customer_idx").on(t.customerId),
+  orderIdx: index("squarePayments_order_idx").on(t.orderId),
+  clinicIdx: index("squarePayments_clinic_idx").on(t.clinicId, t.createdAt),
+  deviceIdx: index("squarePayments_device_idx").on(t.deviceId),
+}));
+
+export const squareRefunds = mysqlTable("squareRefunds", {
+  id: varchar("id", { length: 64 }).primaryKey(),
+  paymentId: varchar("paymentId", { length: 64 }).notNull(),
+  /** PENDING | COMPLETED | REJECTED | FAILED */
+  status: varchar("status", { length: 20 }).notNull(),
+  amountCents: int("amountCents").notNull().default(0),
+  reason: varchar("reason", { length: 255 }),
+  createdAt: datetime("createdAt").notNull(),
+  syncedAt: datetime("syncedAt").notNull(),
+}, (t) => ({
+  paymentIdx: index("squareRefunds_payment_idx").on(t.paymentId),
+  createdIdx: index("squareRefunds_created_idx").on(t.createdAt),
+}));
+
+/** Payment links and Square Terminal charges started from MyPCP. */
+export const squareRequests = mysqlTable("squareRequests", {
+  id: int("id").autoincrement().primaryKey(),
+  kind: mysqlEnum("kind", ["link", "terminal"]).notNull(),
+  /** Square's payment-link id or Terminal checkout id. */
+  squareId: varchar("squareId", { length: 64 }),
+  orderId: varchar("orderId", { length: 64 }),
+  url: varchar("url", { length: 500 }),
+  amountCents: int("amountCents").notNull(),
+  category: varchar("category", { length: 20 }).notNull(),
+  /** What it's for (MyPCP only, never sent to Square). */
+  purpose: varchar("purpose", { length: 255 }),
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  patientId: int("patientId").references(() => patients.id),
+  patientName: varchar("patientName", { length: 255 }),
+  clinicId: int("clinicId").references(() => clinics.id),
+  deviceId: varchar("deviceId", { length: 64 }),
+  /** open | paid | canceled | failed */
+  status: varchar("status", { length: 12 }).notNull().default("open"),
+  squareStatus: varchar("squareStatus", { length: 24 }),
+  paymentId: varchar("paymentId", { length: 64 }),
+  /** text | email | copy */
+  sentVia: varchar("sentVia", { length: 8 }),
+  sentTo: varchar("sentTo", { length: 64 }),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  paidAt: datetime("paidAt"),
+}, (t) => ({
+  subjectIdx: index("squareRequests_subject_idx").on(t.subjectKey, t.createdAt),
+  statusIdx: index("squareRequests_status_idx").on(t.status, t.createdAt),
+  orderIdx: index("squareRequests_order_idx").on(t.orderId),
+  squareIdx: index("squareRequests_square_idx").on(t.squareId),
 }));

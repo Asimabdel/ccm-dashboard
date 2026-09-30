@@ -270,6 +270,9 @@ export async function practiceMailSender(): Promise<{ canSend: boolean; mailbox:
   return { canSend: !!c.refreshTokenEnc && !!c.canSend, mailbox: c.mailbox };
 }
 
+/** A MIME body part in base64, wrapped at 76 characters per line. */
+export const base64Lines = (s: string) => Buffer.from(s, "utf8").toString("base64").replace(/.{76}/g, (line) => `${line}\r\n`);
+
 /** Send one email from the practice mailbox (text + HTML). It also lands in the mailbox's Sent folder. */
 export async function sendPracticeEmail(msg: { to: string; subject: string; text: string; html: string; fromName: string }) {
   const c = await config("practice");
@@ -278,7 +281,7 @@ export async function sendPracticeEmail(msg: { to: string; subject: string; text
   const to = msg.to.trim();
   if (!/^[^\s@<>",]+@[^\s@<>",]+\.[^\s@<>",]+$/.test(to)) throw new WorkspaceError("That email address doesn't look right.");
   const enc = (s: string) => `=?UTF-8?B?${Buffer.from(s, "utf8").toString("base64")}?=`;
-  const b64lines = (s: string) => Buffer.from(s, "utf8").toString("base64").replace(/.{76}/g, "/** Search the practice mailbox (Gmail query syntax); one page of message ids. */\r\n");
+  const b64lines = base64Lines;
   const boundary = `mypcp-${Date.now().toString(36)}`;
   const mime = [
     `From: ${enc(msg.fromName)} <${c.mailbox}>`,

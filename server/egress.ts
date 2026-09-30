@@ -3,7 +3,7 @@
 // private Lambda VPC endpoint. Locally (dev/tests) it's a plain fetch.
 //
 // The relay only allows: RingCentral's API, Google's OAuth token endpoint and the Gmail API,
-// Practice Fusion's FHIR API, and Availity's API (insurance eligibility).
+// Practice Fusion's FHIR API, Availity's API (insurance eligibility), and Square's API (payments).
 const RELAY_FUNCTION = "ccm-ringcentral-relay";
 
 let lambdaClient: import("@aws-sdk/client-lambda").LambdaClient | null = null;
@@ -12,7 +12,7 @@ export class EgressError extends Error {
   constructor(message: string, public status: number) { super(message); }
 }
 
-export async function relayFetch(url: string, init: { method?: "GET" | "POST"; headers?: Record<string, string>; body?: string } = {}): Promise<Response> {
+export async function relayFetch(url: string, init: { method?: "GET" | "POST" | "DELETE"; headers?: Record<string, string>; body?: string } = {}): Promise<Response> {
   if (!process.env.AWS_LAMBDA_FUNCTION_NAME) return fetch(url, init);
   const { LambdaClient, InvokeCommand } = await import("@aws-sdk/client-lambda");
   lambdaClient ??= new LambdaClient({ region: process.env.AWS_REGION ?? "us-east-1" });

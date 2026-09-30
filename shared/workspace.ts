@@ -47,6 +47,8 @@ export const WORKSPACE_CAPS = {
   documents: ["admin", "office_manager", "staff", "provider", "front_desk"],
   /** The limited chart: contact, insurance, visits and allergies (minimum necessary for the front desk). */
   chartBasic: ["admin", "office_manager", "staff", "provider", "front_desk"],
+  /** Square payments: see payments, link them to patients, send payment links, charge on the Terminal. */
+  payments: ["admin", "office_manager", "front_desk"],
 } as const satisfies Record<string, readonly WorkspaceRole[]>;
 
 export type WorkspaceCap = keyof typeof WORKSPACE_CAPS;

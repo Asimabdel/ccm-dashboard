@@ -19,8 +19,10 @@ import { ClipboardSignature, Database, FlaskConical, ShieldCheck } from "lucide-
 import { InsurancePanel } from "@/components/insurance/InsurancePanel";
 import { PatientFormsPanel } from "@/components/intake/PatientFormsPanel";
 import { PatientChartPanel } from "@/components/chart/PatientChartPanel";
+import { PatientPaymentsPanel } from "@/components/payments/PatientPaymentsPanel";
+import { Wallet } from "lucide-react";
 
-type Tab = "overview" | "appointments" | "tasks" | "care" | "testing" | "chart" | "insurance" | "forms";
+type Tab = "overview" | "appointments" | "tasks" | "care" | "testing" | "chart" | "insurance" | "forms" | "payments";
 
 /**
  * Patient 360. Operational view (visits, flow, tasks) for everyone with
@@ -61,6 +63,7 @@ function Patient360({ id }: { id: number }) {
   if (caps?.intakeForms) tabs.push({ key: "forms", label: "Forms", icon: ClipboardSignature });
   if (caps?.eligibility) tabs.push({ key: "insurance", label: "Insurance", icon: ShieldCheck });
   if (caps?.chartBasic) tabs.push({ key: "chart", label: "Chart", icon: Database });
+  if (caps?.payments) tabs.push({ key: "payments", label: "Payments", icon: Wallet });
 
   const d = q.data;
   const p = d?.patient;
@@ -159,6 +162,7 @@ function Patient360({ id }: { id: number }) {
           {tab === "chart" && caps?.chartBasic && <PatientChartPanel subjectKey={`p:${id}`} />}
           {tab === "insurance" && caps?.eligibility && <InsurancePanel subjectKey={`p:${id}`} />}
           {tab === "forms" && caps?.intakeForms && <PatientFormsPanel subjectKey={`p:${id}`} />}
+          {tab === "payments" && caps?.payments && <PatientPaymentsPanel subjectKey={`p:${id}`} name={p.name} clinicId={p.clinicId ?? null} />}
 
           <NewTaskDialog open={taskOpen} onOpenChange={setTaskOpen} defaults={{ patientId: p.id, patientName: p.name, clinicId: p.clinicId }} />
           <TaskDrawer taskId={Number(params.get("task")) || null} onClose={() => setParams({ task: null })} />

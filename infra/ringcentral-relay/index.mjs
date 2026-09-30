@@ -19,8 +19,10 @@ const ALLOWED = [
   { host: "gmail.googleapis.com", path: "/gmail/v1/users/me/" }, // Gmail API (read-only scope)
   { hostSuffix: ".practicefusion.com", path: "/" }, // Practice Fusion FHIR (read-only bulk export)
   { host: "api.availity.com", path: "/availity/v1/" }, // Availity: insurance eligibility (270/271) + payer list
+  { host: "connect.squareup.com", path: "/v2/" }, // Square: payments, payment links, Square Terminal
+  { host: "connect.squareupsandbox.com", path: "/v2/" }, // Square Sandbox (testing)
 ];
-const FORWARD_HEADERS = ["authorization", "content-type", "accept", "prefer", "x-api-mock-scenario-id"];
+const FORWARD_HEADERS = ["authorization", "content-type", "accept", "prefer", "x-api-mock-scenario-id", "square-version"];
 const RETURN_HEADERS = ["content-type", "retry-after", "content-location", "x-progress", "expires", "x-api-mock-response"];
 const MAX_BODY = 5_500_000; // Lambda responses are capped at 6 MB
 const PART = 16 * 1024 * 1024;
@@ -78,7 +80,8 @@ export const handler = async (event) => {
   let url;
   try { url = new URL(event?.url); } catch { return { status: 400, body: "Bad URL." }; }
   if (!allowed(url)) return { status: 403, body: "That address isn't on the relay's allowlist." };
-  const method = event.method === "POST" ? "POST" : "GET";
+  // DELETE: Square payment links are canceled by deleting them.
+  const method = event.method === "POST" || event.method === "DELETE" ? event.method : "GET";
   const headers = {};
   for (const [k, v] of Object.entries(event.headers ?? {})) if (FORWARD_HEADERS.includes(k.toLowerCase())) headers[k] = String(v);
   try {

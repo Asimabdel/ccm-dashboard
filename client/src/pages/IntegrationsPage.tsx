@@ -10,6 +10,7 @@ import { GmailCard } from "@/components/email/GmailCard";
 import { FaxCard } from "@/components/email/FaxCard";
 import { PracticeFusionCard } from "@/components/pf/PracticeFusionCard";
 import { AvailityCard } from "@/components/insurance/AvailityCard";
+import { SquareCard } from "@/components/payments/SquareCard";
 import { trpc } from "@/lib/trpc";
 
 const REDIRECT_URI = "https://apps.ringcentral.com/integration/ringcentral-embeddable/latest/redirect.html";
@@ -94,6 +95,7 @@ export default function IntegrationsPage() {
           <FaxCard />
           <PracticeFusionCard />
           <AvailityCard />
+          <SquareCard />
         </div>
       )}
     </CCMDashboardLayout>

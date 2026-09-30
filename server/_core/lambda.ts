@@ -100,6 +100,11 @@ export const handler = async (event: any, context: any) => {
     const { runPfSync } = await import("../pfSync");
     return runPfSync({ deadline: Date.now() + 18_000 });
   }
+  // Every 5 minutes (EventBridge): copy new and changed Square payments (the webhook is the fast path).
+  if (event && event.__job === "square-sync" && !event.requestContext && !event.version) {
+    const { runSquareSync } = await import("../squareDb");
+    return runSquareSync({ deadline: Date.now() + 20_000 });
+  }
   if (event && event.__job === "ringcentral-sync" && !event.requestContext && !event.version) {
     const { runRingCentralSync } = await import("../ringcentralSync");
     return runRingCentralSync({ maxRequests: 8, maxMs: 22_000, manual: false });
