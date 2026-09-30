@@ -146,7 +146,9 @@ type AuditAction =
   | "manage_playbook"
   | "view_patient"
   | "update_patient"
-  | "manage_access";
+  | "manage_access"
+  | "view_document"
+  | "manage_document";
 
 export async function audit(actor: WorkspaceActor, action: AuditAction, opts: { entityType?: string; entityId?: number; description?: string } = {}) {
   try {
@@ -166,7 +168,7 @@ export async function audit(actor: WorkspaceActor, action: AuditAction, opts: { 
   }
 }
 
-async function notifyTask(userId: number, title: string, content: string, patientId: number | null) {
+export async function notifyTask(userId: number, title: string, content: string, patientId: number | null) {
   try {
     const d = await db();
     await d.insert(notifications).values({ userId, type: "task", title, content, relatedPatientId: patientId });

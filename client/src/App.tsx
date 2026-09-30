@@ -1,3 +1,4 @@
+import { Suspense, lazy } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
@@ -45,8 +46,15 @@ import WebsiteBookingsPage from "./pages/WebsiteBookingsPage";
 import IntakeFormsPage from "./pages/IntakeFormsPage";
 import IntakePrintPage from "./pages/IntakePrintPage";
 import PatientFormsPage from "./pages/PatientFormsPage";
+import DocumentsPage from "./pages/DocumentsPage";
 import { RingCentralPhone } from "./components/phone/RingCentralPhone";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
+
+// The PDF editor pulls in pdf.js, so it loads only when opened.
+const DocumentEditorPage = lazy(() => import("./pages/DocumentEditorPage"));
+function DocumentEditorRoute() {
+  return <Suspense fallback={<div className="p-10 text-sm text-slate-500">Loading…</div>}><DocumentEditorPage /></Suspense>;
+}
 
 function Router() {
   return (
@@ -91,6 +99,8 @@ function Router() {
       <Route path="/bookings" component={WebsiteBookingsPage} />
       <Route path="/intake-forms/:id/print" component={IntakePrintPage} />
       <Route path="/intake-forms" component={IntakeFormsPage} />
+      <Route path="/documents/:id" component={DocumentEditorRoute} />
+      <Route path="/documents" component={DocumentsPage} />
       {/* Public: the page patients open from their forms link (no MyPCP login). */}
       <Route path="/f/:token" component={PatientFormsPage} />
       {/* Public: an open form link for the website (e.g. /sign/consent). */}

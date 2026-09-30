@@ -27,6 +27,7 @@ import * as chart from "../chartDb";
 import * as bookings from "../bookingsDb";
 import * as intake from "../intakeDb";
 import * as availity from "../availityDb";
+import * as docs from "../documentsDb";
 import { CONSENT_KINDS, INTAKE_LANGS } from "../../shared/intake";
 import { FAX_DOC_TYPE_KEYS } from "../../shared/fax";
 import { TEST_KEYS, type TestKey } from "../../shared/testing";
@@ -58,6 +59,13 @@ async function oppActor(ctx: Ctx, cap: WorkspaceCap): Promise<ws.WorkspaceActor>
   const actor = await actorFor(ctx, cap);
   const scope = await ws.opportunityScope({ id: ctx.user.id, name: ctx.user.name, role: ctx.user.role });
   return { ...actor, clinicIds: scope.clinicIds ?? actor.clinicIds, providerIds: scope.providerIds };
+}
+
+/** Who / where, for a document's audit trail and signature certificate. */
+function docMeta(ctx: Ctx): docs.ClientMeta {
+  const fwd = ctx.req?.headers?.["x-forwarded-for"];
+  const ua = ctx.req?.headers?.["user-agent"];
+  return { ip: (typeof fwd === "string" ? fwd.split(",")[0]!.trim() : null) || ctx.req?.ip || null, userAgent: typeof ua === "string" ? ua : null };
 }
 
 /** The page the request came from (for building patient links on the same site); checked against an allowlist later. */
@@ -481,6 +489,108 @@ export const workspaceRouter = router({
       const actor = await actorFor(ctx, "eligibility");
       return run(() => availity.scheduleCoverage(actor, input.date));
     }),
+  }),
+
+  // Documents (our own DocuSign): upload a PDF, place and fill boxes, sign, send to teammates to co-sign.
+  documents: router({
+    list: protectedProcedure.input(z.object({ view: z.enum(["to_sign", "in_progress", "completed", "templates"]), q: z.string().max(100).nullish() })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return docs.listDocuments(actor, input.view, input.q);
+    }),
+    counts: protectedProcedure.query(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "documents");
+      return { toSign: (await docs.listDocuments(actor, "to_sign")).length };
+    }),
+    signers: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "documents");
+      return docs.signerChoices();
+    }),
+    searchPatients: protectedProcedure.input(z.object({ q: z.string().trim().min(2).max(100) })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return ws.searchSubjects(input.q, 20, actor.clinicIds);
+    }),
+    create: protectedProcedure.input(z.object({ title: z.string().max(255), fileName: z.string().min(1).max(255), size: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return run(() => docs.createDocument(actor, input));
+    }),
+    uploadLocal: protectedProcedure.input(z.object({ id: z.number().int().positive(), base64: z.string().max(36_000_000) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return run(() => docs.uploadLocal(actor, input.id, input.base64));
+    }),
+    uploaded: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return run(() => docs.fileUploaded(actor, input.id));
+    }),
+    get: protectedProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return run(() => docs.getDocument(actor, input.id, docMeta(ctx)));
+    }),
+    file: protectedProcedure.input(z.object({ id: z.number().int().positive(), which: z.enum(["source", "final"]) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return run(() => docs.fileFor(actor, input.id, input.which, docMeta(ctx)));
+    }),
+    save: protectedProcedure
+      .input(z.object({
+        id: z.number().int().positive(),
+        title: z.string().max(255).optional(),
+        fields: z.array(z.record(z.string(), z.unknown())).max(600).optional(),
+        subjectKey: z.string().max(120).nullish(),
+        message: z.string().max(1000).nullish(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "documents");
+        const { id, ...rest } = input;
+        return run(() => docs.saveDocument(actor, id, rest));
+      }),
+    prefill: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return run(() => docs.applyPrefill(actor, input.id));
+    }),
+    setSigners: protectedProcedure.input(z.object({ id: z.number().int().positive(), userIds: z.array(z.number().int().positive()).max(10) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return run(() => docs.setSigners(actor, input.id, input.userIds));
+    }),
+    signField: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), fieldId: z.string().max(40), png: z.string().max(820_000), saveAsMine: z.boolean().optional() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "documents");
+        return run(() => docs.signField(actor, input.id, input, docMeta(ctx)));
+      }),
+    send: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return run(() => docs.sendOrFinish(actor, input.id, docMeta(ctx)));
+    }),
+    finishSigning: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), values: z.record(z.string().max(40), z.string().max(2000)) }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "documents");
+        return run(() => docs.signerFinish(actor, input.id, input.values, docMeta(ctx)));
+      }),
+    cancel: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return run(() => docs.cancelDocument(actor, input.id));
+    }),
+    saveAsTemplate: protectedProcedure.input(z.object({ id: z.number().int().positive(), title: z.string().max(255) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return run(() => docs.saveAsTemplate(actor, input.id, input.title));
+    }),
+    fromTemplate: protectedProcedure.input(z.object({ templateId: z.number().int().positive(), subjectKey: z.string().max(120).nullish() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return run(() => docs.newFromTemplate(actor, input.templateId, input.subjectKey ?? null));
+    }),
+    mySignature: protectedProcedure.query(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "documents");
+      return docs.mySignature(actor);
+    }),
+    saveMySignature: protectedProcedure
+      .input(z.object({ signaturePng: z.string().max(820_000).nullish(), initialsPng: z.string().max(820_000).nullish() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "documents");
+        return run(() => docs.saveMySignature(actor, {
+          ...(input.signaturePng !== undefined ? { signaturePng: input.signaturePng } : {}),
+          ...(input.initialsPng !== undefined ? { initialsPng: input.initialsPng } : {}),
+        }));
+      }),
   }),
 
   // Patient forms (intake + consents, replacing BoldSign): send a private link, see what came back.

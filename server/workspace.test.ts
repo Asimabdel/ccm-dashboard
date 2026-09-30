@@ -34,6 +34,7 @@ import { isFaxEmail, matchFaxPatient, parseFaxMeta, parseFaxReading } from "../s
 import { chartLine, patientInfo, patientOf, sectionType } from "../shared/fhir";
 import { clinicForLocation, parseBookingEmail, parsePreferred } from "../shared/booking";
 import { pcpIsOurs, splitName, summarizeCoverage } from "../shared/eligibility";
+import { cleanFields, missingFor, signerOf, usDate } from "../shared/documents";
 import { MEDICAL_INTAKE, PUBLIC_SLUG_RE, agreementIn, answerText, choiceIn, cleanAnswers, cleanChoices, dobFromParts, inviteText, langFromPreferred, missingInSection, needsAuthority, stableStringify, textBlocks } from "../shared/intake";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
@@ -751,6 +752,43 @@ describe("patient forms (intake)", () => {
   it("only staff with forms access can link forms to a patient", async () => {
     await expect(appRouter.createCaller(ctxFor("billing")).workspace.intake.link({ id: 1, subjectKey: "p:1" })).rejects.toThrow(/access/);
     await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.intake.forSubject({ subjectKey: "p:1" })).rejects.toThrow(/access/);
+  });
+});
+
+describe("documents (PDF editor)", () => {
+  const pages = [{ w: 612, h: 792, rotate: 0 }, { w: 612, h: 792, rotate: 0 }];
+  it("keeps only well-formed boxes on real pages", () => {
+    const f = cleanFields([
+      { id: "a", type: "text", page: 0, x: 50, y: 700, w: 180, h: 20, assignee: "preparer", value: "Hello" },
+      { id: "b", type: "checkbox", page: 1, x: 10, y: 10, w: 14, h: 14, assignee: "signer:5", value: "yes please" },
+      { id: "c", type: "date", page: 0, x: 1, y: 1, w: 90, h: 20, value: "03/15/1950" },
+      { id: "d", type: "signature", page: 0, x: 1, y: 1, w: 90, h: 20, value: "data:image/png;base64,AAAA" },
+      { type: "text", page: 7, x: 1, y: 1, w: 9, h: 9 },
+      { type: "hologram", page: 0, x: 1, y: 1, w: 9, h: 9 },
+      { id: "a", type: "text", page: 0, x: 1, y: 1, w: 9, h: 9, assignee: "somebody" },
+    ], pages);
+    expect(f.map((x) => x.id.slice(0, 1))).toEqual(["a", "b", "c", "d", "f"]);
+    expect(f[1]).toMatchObject({ assignee: "signer:5", value: "x" });
+    expect(f[2]!.value).toBeNull(); // dates must be YYYY-MM-DD
+    expect(f[3]!.value).toBeNull(); // signature boxes only point at signatures made in MyPCP
+    expect(f[4]!.assignee).toBe("preparer");
+  });
+  it("knows whose required boxes are still empty", () => {
+    const f = cleanFields([
+      { id: "s", type: "signature", page: 0, x: 1, y: 1, w: 90, h: 30, assignee: "signer:5", required: true },
+      { id: "c", type: "checkbox", page: 0, x: 1, y: 1, w: 12, h: 12, assignee: "preparer", required: true, value: "" },
+      { id: "t", type: "text", page: 0, x: 1, y: 1, w: 90, h: 20, assignee: "preparer", required: true, value: "ok" },
+    ], pages);
+    expect(missingFor(f, "preparer").map((x) => x.id)).toEqual(["c"]);
+    expect(missingFor(f, "signer:5").map((x) => x.id)).toEqual(["s"]);
+    expect(signerOf("signer:12")).toBe(12);
+    expect(signerOf("preparer")).toBeNull();
+    expect(usDate("2026-09-29")).toBe("09/29/2026");
+  });
+  it("keeps MAs and billing out of Documents", async () => {
+    expect(can("medical_assistant", "documents")).toBe(false);
+    expect(can("provider", "documents")).toBe(true);
+    await expect(appRouter.createCaller(ctxFor("billing")).workspace.documents.list({ view: "in_progress" })).rejects.toThrow(/access/);
   });
 });
 

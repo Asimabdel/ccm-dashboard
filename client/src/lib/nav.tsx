@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, ClipboardList, UserCog, AlertTriangle, Receipt,
   BarChart3, PhoneCall, CalendarClock, ShieldCheck, Building2, Stethoscope, Target,
   UserMinus, Ban, Pill, PhoneOutgoing, Activity, Sunrise, CalendarDays, BriefcaseBusiness,
-  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature,
+  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature, FileSignature,
 } from "lucide-react";
 
 export interface NavItem {
@@ -29,6 +29,7 @@ const EMAILS: NavItem = { label: "Patient emails", path: "/patient-emails", icon
 const FAXES: NavItem = { label: "Fax inbox", path: "/faxes", icon: Printer };
 const BOOKINGS: NavItem = { label: "Website bookings", path: "/bookings", icon: CalendarPlus };
 const FORMS: NavItem = { label: "Patient forms", path: "/intake-forms", icon: ClipboardSignature };
+const DOCUMENTS: NavItem = { label: "Documents", path: "/documents", icon: FileSignature };
 const INSURANCE: NavItem = { label: "Insurance checker", path: "/insurance", icon: BadgeCheck };
 
 // Every employee gets the self-service time clock + schedule pages and the team schedule.
@@ -44,7 +45,7 @@ const ME: NavGroup = {
 /** Role-based, grouped navigation for the Workspace sidebar. */
 export const NAV_GROUPS: Record<Role, NavGroup[]> = {
   admin: [
-    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, EMAILS, FAXES, FLOW, OPPORTUNITIES, PATIENTS, INSURANCE, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, DOCUMENTS, EMAILS, FAXES, FLOW, OPPORTUNITIES, PATIENTS, INSURANCE, PLAYBOOKS] },
     {
       label: "Care Management",
       items: [
@@ -84,7 +85,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
   ],
   // Admin for one office (their home clinic): everything here is limited to that office. No CCM pages.
   office_manager: [
-    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, FLOW, OPPORTUNITIES, INSURANCE, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, DOCUMENTS, FLOW, OPPORTUNITIES, INSURANCE, PLAYBOOKS] },
     {
       label: "My office",
       items: [
@@ -96,7 +97,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
     ME,
   ],
   staff: [
-    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, EMAILS, FAXES, FLOW, OPPORTUNITIES, PATIENTS, INSURANCE, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, DOCUMENTS, EMAILS, FAXES, FLOW, OPPORTUNITIES, PATIENTS, INSURANCE, PLAYBOOKS] },
     {
       label: "Care Management",
       items: [
@@ -112,7 +113,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
     ME,
   ],
   provider: [
-    { label: "Workspace", items: [HOME, MY_WORK, FORMS, FLOW, OPPORTUNITIES, PATIENTS, INSURANCE, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, FORMS, DOCUMENTS, FLOW, OPPORTUNITIES, PATIENTS, INSURANCE, PLAYBOOKS] },
     {
       label: "Care Management",
       items: [
@@ -134,7 +135,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
     ME,
   ],
   front_desk: [
-    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, EMAILS, FAXES, FLOW, OPPORTUNITIES, PATIENTS, INSURANCE, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, DOCUMENTS, EMAILS, FAXES, FLOW, OPPORTUNITIES, PATIENTS, INSURANCE, PLAYBOOKS] },
     { label: "Care Management", items: [{ label: "Follow-ups", path: "/follow-ups", icon: CalendarClock }] },
     ME,
   ],

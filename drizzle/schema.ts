@@ -450,6 +450,9 @@ export const auditLogs = mysqlTable("auditLogs", {
     "update_appointment",
     "opportunity_action",
     "manage_playbook",
+    // Documents (our own DocuSign), added 2026-09-30
+    "view_document",
+    "manage_document",
   ]).notNull(),
   entityType: varchar("entityType", { length: 50 }),
   entityId: int("entityId"),
@@ -1280,6 +1283,97 @@ export const intakeEvents = mysqlTable("intakeEvents", {
 }, (t) => ({
   packetIdx: index("intakeEvents_packet_idx").on(t.packetId, t.at),
 }));
+
+/**
+ * Documents (our own DocuSign): a PDF with boxes placed on it, filled in by whoever prepares it and then
+ * signed by teammates. The PDFs themselves live in the document store (private S3 bucket); this row holds
+ * where they are, the boxes, and who has signed.
+ */
+export const documents = mysqlTable("documents", {
+  id: int("id").autoincrement().primaryKey(),
+  title: varchar("title", { length: 255 }).notNull(),
+  isTemplate: boolean("isTemplate").default(false).notNull(),
+  templateId: int("templateId"),
+  /** draft | signing | completed | cancelled */
+  status: varchar("status", { length: 12 }).default("draft").notNull(),
+  fileKey: varchar("fileKey", { length: 255 }),
+  fileName: varchar("fileName", { length: 255 }),
+  fileSize: int("fileSize"),
+  fileSha256: varchar("fileSha256", { length: 64 }),
+  pages: json("pages").$type<{ w: number; h: number; rotate: number }[]>(),
+  fields: json("fields").$type<unknown[]>(),
+  finalKey: varchar("finalKey", { length: 255 }),
+  finalSha256: varchar("finalSha256", { length: 64 }),
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  patientId: int("patientId").references(() => patients.id),
+  clinicId: int("clinicId").references(() => clinics.id),
+  message: varchar("message", { length: 1000 }),
+  createdByUserId: int("createdByUserId").notNull().references(() => users.id),
+  updatedByUserId: int("updatedByUserId").references(() => users.id),
+  sentAt: datetime("sentAt"),
+  completedAt: datetime("completedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  statusIdx: index("documents_status_idx").on(t.status, t.updatedAt),
+  creatorIdx: index("documents_creator_idx").on(t.createdByUserId, t.status),
+  subjectIdx: index("documents_subject_idx").on(t.subjectKey),
+}));
+
+/** Teammates asked to sign a document. */
+export const documentSigners = mysqlTable("documentSigners", {
+  id: int("id").autoincrement().primaryKey(),
+  documentId: int("documentId").notNull().references(() => documents.id),
+  userId: int("userId").notNull().references(() => users.id),
+  sortOrder: int("sortOrder").default(0).notNull(),
+  /** pending | signed */
+  status: varchar("status", { length: 10 }).default("pending").notNull(),
+  taskId: int("taskId"),
+  signedAt: datetime("signedAt"),
+  ip: varchar("ip", { length: 64 }),
+  userAgent: varchar("userAgent", { length: 255 }),
+}, (t) => ({
+  userIdx: index("documentSigners_user_idx").on(t.userId, t.status),
+  docIdx: index("documentSigners_doc_idx").on(t.documentId),
+}));
+
+/** A signature or initials stamped into a document box (PNG), with who / when / from where. */
+export const documentSignatures = mysqlTable("documentSignatures", {
+  id: int("id").autoincrement().primaryKey(),
+  documentId: int("documentId").notNull().references(() => documents.id),
+  fieldId: varchar("fieldId", { length: 40 }).notNull(),
+  userId: int("userId").notNull().references(() => users.id),
+  kind: varchar("kind", { length: 10 }).notNull(),
+  png: mediumtext("png").notNull(),
+  sha256: varchar("sha256", { length: 64 }).notNull(),
+  signedAt: datetime("signedAt").notNull(),
+  ip: varchar("ip", { length: 64 }),
+  userAgent: varchar("userAgent", { length: 255 }),
+}, (t) => ({
+  docIdx: index("documentSignatures_doc_idx").on(t.documentId),
+}));
+
+/** Audit trail for a document (uploaded, sent, viewed, signed, completed, downloaded…). */
+export const documentEvents = mysqlTable("documentEvents", {
+  id: int("id").autoincrement().primaryKey(),
+  documentId: int("documentId").notNull().references(() => documents.id),
+  at: datetime("at").notNull(),
+  type: varchar("type", { length: 30 }).notNull(),
+  userId: int("userId").references(() => users.id),
+  ip: varchar("ip", { length: 64 }),
+  userAgent: varchar("userAgent", { length: 255 }),
+  detail: varchar("detail", { length: 255 }),
+}, (t) => ({
+  docIdx: index("documentEvents_doc_idx").on(t.documentId, t.at),
+}));
+
+/** Each person's saved signature and initials (drawn once, reused with one tap). */
+export const userSignatures = mysqlTable("userSignatures", {
+  userId: int("userId").primaryKey().references(() => users.id),
+  signaturePng: mediumtext("signaturePng"),
+  initialsPng: mediumtext("initialsPng"),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
 
 /** A patient's insurance as MyPCP knows it (for eligibility checks): Availity payer + member ID. */
 export const coverageOnFile = mysqlTable("coverageOnFile", {

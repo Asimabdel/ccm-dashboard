@@ -43,6 +43,8 @@ export const WORKSPACE_CAPS = {
   chartFull: ["admin", "staff", "provider"],
   /** Send patient forms (intake / consents) and see what patients filled in and signed. */
   intakeForms: ["admin", "office_manager", "staff", "provider", "front_desk"],
+  /** Documents: upload PDFs, fill and sign them, send them to teammates to co-sign. */
+  documents: ["admin", "office_manager", "staff", "provider", "front_desk"],
   /** The limited chart: contact, insurance, visits and allergies (minimum necessary for the front desk). */
   chartBasic: ["admin", "office_manager", "staff", "provider", "front_desk"],
 } as const satisfies Record<string, readonly WorkspaceRole[]>;

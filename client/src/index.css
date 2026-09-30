@@ -333,6 +333,9 @@
 .dark textarea,
 .dark select { background-color: #0f172a; color: #e2e8f0; border-color: #334155; }
 .dark input::placeholder, .dark textarea::placeholder { color: #64748b; }
+/* Documents editor: boxes sit on a white PDF page in every theme. */
+.pdf-field input, .pdf-field textarea { background-color: transparent !important; color: #0f172a !important; border: 0 !important; }
+.pdf-field input::placeholder, .pdf-field textarea::placeholder { color: #94a3b8 !important; }
 .dark select option { background-color: #1e293b; color: #e2e8f0; }
 .dark ::-webkit-scrollbar-track { background-color: #0f172a; }
 .dark ::-webkit-scrollbar-thumb { background-color: #334155; }
