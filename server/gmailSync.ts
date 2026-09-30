@@ -61,7 +61,11 @@ interface GmailConfig {
   /** The practice mailbox was connected with permission to send (patient-form invitations). */
   canSend?: boolean;
 }
-interface GmailState { lastRunAt: string | null; lastSuccessAt: string | null; lastError: string | null; processed: number; assigned: number; needsPatient: number }
+interface GmailState {
+  lastRunAt: string | null; lastSuccessAt: string | null; lastError: string | null; processed: number; assigned: number; needsPatient: number;
+  /** Messages Gmail says no longer exist (deleted before we read them): never asked for again. */
+  gone?: string[];
+}
 const EMPTY_STATE: GmailState = { lastRunAt: null, lastSuccessAt: null, lastError: null, processed: 0, assigned: 0, needsPatient: 0 };
 
 async function readSetting<T>(key: string): Promise<T | null> {
@@ -106,7 +110,7 @@ export async function getGmailStatus() {
     mailbox: c.mailbox,
     enabled: c.enabled,
     canSend: !!c.refreshTokenEnc && !!c.canSend,
-    state,
+    state: { ...state, gone: undefined },
     hasWaiting: !!waiting,
     hasContacts: !!contacts,
     callbackPath: CALLBACK_PATH,
@@ -403,9 +407,11 @@ export async function runGmailSync(opts: { maxMs: number; manual: boolean; slot?
       latestHistory = (await gmailGet<{ historyId: string }>("/profile", slot)).historyId;
     }
     ids = Array.from(new Set(ids));
+    const gone = new Set(state.gone ?? []);
     const already = ids.length ? new Set([
       ...(await d.select({ g: emailMessages.gmailId }).from(emailMessages).where(inArray(emailMessages.gmailId, ids))).map((r) => r.g),
       ...(await d.select({ g: faxes.gmailId }).from(faxes).where(inArray(faxes.gmailId, ids))).map((r) => r.g),
+      ...ids.filter((id) => gone.has(id)),
     ]) : new Set<string>();
     const todo = ids.filter((id) => !already.has(id));
     let complete = true;
@@ -418,8 +424,9 @@ export async function runGmailSync(opts: { maxMs: number; manual: boolean; slot?
         try {
           m = await gmailGet<GmailMessage>(`/messages/${id}?format=full`, slot);
         } catch (e) {
-          // Deleted before we got to it (Gmail answers 404): nothing to do, and it mustn't hold up everything after it.
-          if ((e as { status?: number }).status === 404) { stats.ignored++; continue; }
+          // Deleted before we got to it (Gmail answers 404): nothing to do, and it mustn't hold up everything
+          // after it. Remembered, so later runs don't spend their time asking about it again.
+          if ((e as { status?: number }).status === 404) { stats.ignored++; state.gone = [...(state.gone ?? []), id].slice(-1000); continue; }
           throw e;
         }
         stats.processed++;
