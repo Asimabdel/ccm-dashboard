@@ -966,13 +966,32 @@ function Agreement({ lang, session, form, notice, onExit, onSigned, onServerErro
                 <h2 className="text-2xl font-bold">{t(T.yourChoices, lang)}</h2>
                 <p className="mt-1 text-lg text-slate-600">{t(T.yourChoicesHelp, lang)}</p>
               </div>
+              {/* One tap for patients who want everything; each answer is still recorded (and changeable) on its own card. */}
+              {choices.length > 1 && (
+                <div className="rounded-3xl border-2 border-emerald-200 bg-emerald-50 p-4">
+                  <BigButton variant="success" className="w-full" onClick={() => setAnswers(Object.fromEntries(choices.map((c) => [c.kind, "yes" as const])))}>
+                    <Check className="size-6" strokeWidth={3} /> {t(T.yesToAll, lang)}
+                  </BigButton>
+                  {choices.every((c) => answers[c.kind] === "yes") ? (
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2" role="status">
+                      <p className="text-lg font-semibold text-emerald-900">{t(T.yesToAllDone, lang)}</p>
+                      <button type="button" className="text-lg font-bold text-teal-800 underline"
+                        onClick={() => document.getElementById("sign-here")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+                        {t(T.goToSign, lang)} ↓
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-center text-lg text-slate-600">{t(T.yesToAllHelp, lang)}</p>
+                  )}
+                </div>
+              )}
               {choices.map((c, i) => (
                 <ChoiceCard key={c.kind} lang={lang} n={i + 1} of={choices.length} choice={c} answer={answers[c.kind] ?? null}
                   onAnswer={(a) => setAnswers((x) => ({ ...x, [c.kind]: a }))} />
               ))}
             </section>
           )}
-          <section className="rounded-3xl border-2 border-teal-600 bg-white p-5 shadow-sm">
+          <section id="sign-here" className="scroll-mt-40 rounded-3xl border-2 border-teal-600 bg-white p-5 shadow-sm">
             <h2 className="text-2xl font-bold">{t(T.signTitle, lang)}</h2>
             <SignBlock lang={lang} session={session} formKey={form.key} version={form.version} language={text.lang}
               consentLabel={`${choices.length ? tr(CHOICES_CONSENT, text.lang) : t(T.agreeRead, text.lang)} ${tr(ESIGN_CONSENT, text.lang)}`}
