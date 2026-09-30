@@ -7,6 +7,7 @@ import { getDb } from "./db";
 import {
   users, clinics, notifications, jobRoles, jobDuties, staffProfiles, shifts,
   timeOffRequests, timePunches, dutyCompletions, performanceNotes, providers,
+  appSettings, workTasks, workTaskActivities,
 } from "../drizzle/schema";
 import {
   LATE_GRACE_MINUTES, MA_ROLE_TEMPLATE, addDays, attendanceTracked, localDateStr, localMinutes,
@@ -331,11 +332,12 @@ export async function assignCoverage(shiftId: number, coverUserId: number, creat
 
 // ---- Time off ----
 
-export async function listTimeOff(filter: { status?: string; userId?: number } = {}) {
+export async function listTimeOff(filter: { status?: string; userId?: number; id?: number } = {}) {
   const db = await requireDb();
   const conds = [];
   if (filter.status) conds.push(eq(timeOffRequests.status, filter.status as any));
   if (filter.userId) conds.push(eq(timeOffRequests.userId, filter.userId));
+  if (filter.id) conds.push(eq(timeOffRequests.id, filter.id));
   const rows = await db
     .select({ r: timeOffRequests, userName: users.name })
     .from(timeOffRequests)
@@ -346,20 +348,124 @@ export async function listTimeOff(filter: { status?: string; userId?: number } =
   return rows.map((x) => ({ ...x.r, userName: x.userName }));
 }
 
+// ---- Who decides time off: every request becomes a task for the approver (an admin) ----
+
+const APPROVER_KEY = "time_off_approver";
+const TIME_OFF_LABEL: Record<string, string> = { pto: "PTO", sick: "Sick", unpaid: "Unpaid", other: "Other" };
+const shortDay = (ymd: string) => new Date(`${ymd}T12:00:00Z`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+
+export async function listAdmins() {
+  const db = await requireDb();
+  return db.select({ id: users.id, name: users.name }).from(users).where(eq(users.role, "admin")).orderBy(asc(users.name));
+}
+
+/**
+ * IAM-only Lambda job: make one admin (found by name) the person every time-off request goes to,
+ * and give still-pending requests their task. Dry run unless apply.
+ */
+export async function timeOffApproverJob(input: { name: string; apply: boolean }) {
+  const needle = input.name.trim().toLowerCase();
+  const admins = (await listAdmins()).filter((a) => needle && (a.name ?? "").toLowerCase().includes(needle));
+  if (admins.length !== 1) return { matches: admins.map((a) => a.name), note: admins.length ? "More than one admin matches: be more specific." : "No admin matches that name." };
+  const pending = (await listTimeOff({ status: "pending" })).length;
+  if (!input.apply) return { wouldSet: admins[0]!.name, pendingRequests: pending, current: (await getTimeOffApprover())?.name ?? null };
+  const r = await setTimeOffApprover(admins[0]!.id, admins[0]!.id);
+  return { set: r.approver?.name ?? null, tasksCreatedForPending: r.created, pendingRequests: pending };
+}
+
+/** The admin every time-off request goes to (null = not set: the admins' shared queue). */
+export async function getTimeOffApprover(): Promise<{ userId: number; name: string | null } | null> {
+  const db = await requireDb();
+  const [row] = await db.select({ value: appSettings.value }).from(appSettings).where(eq(appSettings.key, APPROVER_KEY)).limit(1);
+  const id = Number((row?.value as { userId?: number } | undefined)?.userId ?? 0);
+  if (!id) return null;
+  const [u] = await db.select({ id: users.id, name: users.name, role: users.role }).from(users).where(eq(users.id, id)).limit(1);
+  return u && u.role === "admin" ? { userId: u.id, name: u.name } : null;
+}
+
+export async function setTimeOffApprover(userId: number | null, byUserId: number) {
+  const db = await requireDb();
+  if (userId) {
+    const [u] = await db.select({ role: users.role }).from(users).where(eq(users.id, userId)).limit(1);
+    if (u?.role !== "admin") throw new Error("Time-off requests can only go to an admin.");
+  }
+  const value = { userId };
+  await db.insert(appSettings).values({ key: APPROVER_KEY, value, updatedByUserId: byUserId }).onDuplicateKeyUpdate({ set: { value, updatedByUserId: byUserId } });
+  // Open requests follow the new approver.
+  const approver = await getTimeOffApprover();
+  await db.update(workTasks).set({ assignedUserId: approver?.userId ?? null, assignedRole: approver ? null : "admin" })
+    .where(and(eq(workTasks.sourceType, "time_off"), inArray(workTasks.status, ["open", "in_progress", "waiting"])));
+  return { approver, created: await ensureTimeOffTasks() };
+}
+
+/** Put a pending request in front of the approver: a task in their My Work (Approve / Deny right there). */
+async function timeOffTask(req: typeof timeOffRequests.$inferSelect) {
+  const db = await requireDb();
+  const [who] = await db.select({ name: users.name, role: users.role }).from(users).where(eq(users.id, req.userId)).limit(1);
+  const approver = await getTimeOffApprover();
+  const dates = `${shortDay(req.startDate)}${req.endDate !== req.startDate ? ` – ${shortDay(req.endDate)}` : ""}`;
+  const { createTask } = await import("./workspaceDb");
+  const today = localDateStr();
+  await createTask({ id: req.userId, name: who?.name ?? null, role: who?.role ?? "staff", clinicIds: null }, {
+    title: `Time off request: ${who?.name ?? "Employee"}, ${dates}`,
+    description: `${TIME_OFF_LABEL[req.type] ?? req.type}: ${dates}${req.reason ? `\nReason: ${req.reason}` : ""}\n\nApprove or deny it here, or in Workforce → Time off.`,
+    assignedUserId: approver?.userId ?? null,
+    assignedRole: approver ? null : "admin",
+    priority: "high",
+    category: "administrative",
+    dueDate: req.startDate > today ? req.startDate : today,
+    sourceType: "time_off",
+    sourceRef: String(req.id),
+  });
+  return approver;
+}
+
+/** Pending requests that don't have a task yet (e.g. made before this existed) get one. */
+export async function ensureTimeOffTasks() {
+  const db = await requireDb();
+  const pending = await db.select().from(timeOffRequests).where(eq(timeOffRequests.status, "pending"));
+  if (!pending.length) return 0;
+  const have = new Set((await db.select({ ref: workTasks.sourceRef }).from(workTasks).where(eq(workTasks.sourceType, "time_off"))).map((t) => t.ref));
+  let n = 0;
+  for (const r of pending) if (!have.has(String(r.id))) { await timeOffTask(r); n++; }
+  return n;
+}
+
+/** Close the request's task once it's decided or cancelled, so nothing is left hanging. */
+async function closeTimeOffTask(requestId: number, how: "completed" | "cancelled", byUserId: number, note: string) {
+  const db = await requireDb();
+  const open = await db.select({ id: workTasks.id }).from(workTasks)
+    .where(and(eq(workTasks.sourceType, "time_off"), eq(workTasks.sourceRef, String(requestId)), inArray(workTasks.status, ["open", "in_progress", "waiting"])));
+  for (const t of open) {
+    await db.update(workTasks).set({ status: how, completedAt: how === "completed" ? new Date() : null }).where(eq(workTasks.id, t.id));
+    await db.insert(workTaskActivities).values([
+      { taskId: t.id, userId: byUserId, type: "status_changed" as const, meta: { to: how } },
+      { taskId: t.id, userId: byUserId, type: "comment" as const, body: note },
+    ]);
+  }
+}
+
 export async function requestTimeOff(input: { userId: number; userName: string | null; startDate: string; endDate: string; type: "pto" | "sick" | "unpaid" | "other"; reason?: string | null }) {
   const db = await requireDb();
   const res = await db.insert(timeOffRequests).values({
     userId: input.userId, startDate: input.startDate, endDate: input.endDate, type: input.type, reason: input.reason ?? null,
   });
-  await notify(await adminIds(), `Time-off request: ${input.userName ?? "Employee"}`,
-    `${input.type.toUpperCase()} ${input.startDate}${input.endDate !== input.startDate ? ` → ${input.endDate}` : ""}`);
-  return { id: res?.[0]?.insertId as number };
+  const id = res?.[0]?.insertId as number;
+  const [req] = await db.select().from(timeOffRequests).where(eq(timeOffRequests.id, id)).limit(1);
+  const approver = req ? await timeOffTask(req) : null;
+  // The task tells the approver; with no approver set, every admin hears about it.
+  if (!approver) {
+    await notify(await adminIds(), `Time-off request: ${input.userName ?? "Employee"}`,
+      `${input.type.toUpperCase()} ${input.startDate}${input.endDate !== input.startDate ? ` → ${input.endDate}` : ""}`);
+  }
+  return { id };
 }
 
 export async function cancelTimeOff(id: number, userId: number) {
   const db = await requireDb();
   await db.update(timeOffRequests).set({ status: "cancelled" })
     .where(and(eq(timeOffRequests.id, id), eq(timeOffRequests.userId, userId), inArray(timeOffRequests.status, ["pending", "approved"])));
+  await closeTimeOffTask(id, "cancelled", userId, "The employee cancelled this request.");
 }
 
 /** Approve/deny. Returns the shifts that now conflict with an approved request. */
@@ -372,6 +478,8 @@ export async function decideTimeOff(input: { id: number; status: "approved" | "d
     status: input.status, managerNote: input.managerNote ?? null, decidedByUserId: input.decidedByUserId, decidedAt: new Date(),
   }).where(eq(timeOffRequests.id, input.id));
   await notify([req.userId], `Time off ${input.status}`, `${req.startDate}${req.endDate !== req.startDate ? ` → ${req.endDate}` : ""}${input.managerNote ? ` — ${input.managerNote}` : ""}`);
+  const [by] = await db.select({ name: users.name }).from(users).where(eq(users.id, input.decidedByUserId)).limit(1);
+  await closeTimeOffTask(req.id, "completed", input.decidedByUserId, `${input.status === "approved" ? "Approved" : "Denied"} by ${by?.name ?? "a manager"}${input.managerNote ? `: ${input.managerNote}` : ""}. The employee was notified.`);
   const conflicts = input.status === "approved"
     ? await db.select().from(shifts).where(and(eq(shifts.userId, req.userId), gte(shifts.date, req.startDate), lte(shifts.date, req.endDate), eq(shifts.status, "scheduled")))
     : [];

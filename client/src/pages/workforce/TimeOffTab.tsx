@@ -20,12 +20,38 @@ export function TimeOffTab() {
     onError: (e) => toast.error(e.message),
   });
 
+  const approver = trpc.workforce.timeOff.approver.useQuery();
+  const setApprover = trpc.workforce.timeOff.setApprover.useMutation({
+    onSuccess: (r) => {
+      utils.workforce.timeOff.invalidate();
+      utils.workspace.tasks.invalidate();
+      toast.success(r.approver ? `Every request now goes to ${r.approver.name} as a task in My Work${r.created ? ` (${r.created} waiting request${r.created === 1 ? "" : "s"} added)` : ""}.` : "Requests go to the admins' shared queue.");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const rows = list.data || [];
   const pending = rows.filter((r) => r.status === "pending");
   const history = rows.filter((r) => r.status !== "pending");
+  const admins = approver.data?.admins ?? [];
 
   return (
     <div className="grid lg:grid-cols-2 gap-5">
+      {approver.data && (
+        <div className="lg:col-span-2 flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm">
+          <span className="font-semibold text-slate-800">New requests go to</span>
+          {admins.length ? (
+            <select className={`${inputCls} w-auto`} value={approver.data.approver?.userId ?? ""} disabled={setApprover.isPending}
+              onChange={(e) => setApprover.mutate({ userId: e.target.value ? Number(e.target.value) : null })}>
+              <option value="">Every admin (shared queue)</option>
+              {admins.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          ) : (
+            <span className="text-slate-700">{approver.data.approver?.name ?? "Every admin"}</span>
+          )}
+          <span className="text-xs text-slate-500">as a task in My Work with Approve / Deny. It closes itself once decided, and the employee is told.</span>
+        </div>
+      )}
       <div className="bg-white rounded-3xl border border-slate-200 p-6">
         <h3 className="font-bold tracking-tight text-slate-900">Waiting for your decision <span className="text-slate-400 font-medium">({pending.length})</span></h3>
         {list.isLoading && <Loader2 className="animate-spin text-slate-400 mt-4" />}

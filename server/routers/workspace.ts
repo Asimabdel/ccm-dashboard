@@ -56,6 +56,12 @@ async function actorFor(ctx: Ctx, cap: WorkspaceCap): Promise<ws.WorkspaceActor>
   };
 }
 
+/** For My Work: also the provider-team queues this person is on (their tasks show in My Tasks). */
+async function taskActor(ctx: Ctx): Promise<ws.WorkspaceActor> {
+  const actor = await actorFor(ctx, "tasks");
+  return { ...actor, teamQueues: await ws.myTeamQueues(ctx.user.id) };
+}
+
 /** Map data-layer errors to tRPC errors with user-safe messages. */
 /** Opportunity Finder (every tab): care coordinators / front desk see their clinic's patients, providers their own. */
 async function oppActor(ctx: Ctx, cap: WorkspaceCap): Promise<ws.WorkspaceActor> {
@@ -118,7 +124,7 @@ export const workspaceRouter = router({
   }),
 
   home: protectedProcedure.input(z.object({ clinicId })).query(async ({ ctx, input }) => {
-    const actor = await actorFor(ctx, "tasks");
+    const actor = await taskActor(ctx);
     return run(() =>
       ws.homeDashboard(actor, {
         clinicId: input.clinicId,
@@ -144,15 +150,15 @@ export const workspaceRouter = router({
         }),
       )
       .query(async ({ ctx, input }) => {
-        const actor = await actorFor(ctx, "tasks");
+        const actor = await taskActor(ctx);
         return run(() => ws.listTasks(actor, input as ws.TaskFilters));
       }),
     counts: protectedProcedure.input(z.object({ clinicId })).query(async ({ ctx, input }) => {
-      const actor = await actorFor(ctx, "tasks");
+      const actor = await taskActor(ctx);
       return run(() => ws.taskCounts(actor, input.clinicId));
     }),
     detail: protectedProcedure.input(z.number().int().positive()).query(async ({ ctx, input }) => {
-      const actor = await actorFor(ctx, "tasks");
+      const actor = await taskActor(ctx);
       const t = await run(() => ws.taskDetail(actor, input));
       // MAs see the patient's name only; phone/DOB stay behind the full-record roles.
       if (!can(ctx.user.role, "patientFull")) return { ...t, patientDob: null, patientPhone: ctx.user.role === "medical_assistant" ? t.patientPhone : null };
@@ -194,8 +200,10 @@ export const workspaceRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        const actor = await actorFor(ctx, "tasks");
-        if ((input.assignedUserId !== undefined || input.assignedRole !== undefined) && !can(ctx.user.role, "assignTasks")) {
+        const actor = await taskActor(ctx);
+        // Anyone may take a task themselves (e.g. an MA picking one up from their provider's team queue).
+        const takingIt = input.assignedUserId === ctx.user.id && input.assignedRole === undefined;
+        if ((input.assignedUserId !== undefined || input.assignedRole !== undefined) && !takingIt && !can(ctx.user.role, "assignTasks")) {
           throw new TRPCError({ code: "FORBIDDEN", message: "You can't reassign tasks." });
         }
         const { id, ...rest } = input;
@@ -204,10 +212,30 @@ export const workspaceRouter = router({
     comment: protectedProcedure
       .input(z.object({ id: z.number().int().positive(), body: z.string().trim().min(1).max(5000) }))
       .mutation(async ({ ctx, input }) => {
-        const actor = await actorFor(ctx, "tasks");
+        const actor = await taskActor(ctx);
         await run(() => ws.commentTask(actor, input.id, input.body));
         return { success: true };
       }),
+  }),
+
+  // Provider teams: a provider + the people who work with them. Their patients' emails go to the team.
+  teams: router({
+    /** Team queues a task can be sent to (for reassigning). */
+    queues: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "assignTasks");
+      const t = await ws.listProviderTeams();
+      return t.providers.filter((p) => p.members.length).map((p) => ({ key: ws.teamQueueKey(p.id), label: `${p.name}'s team` }));
+    }),
+    list: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "tasks");
+      adminOnly(ctx, "set up provider teams");
+      return ws.listProviderTeams();
+    }),
+    set: protectedProcedure.input(z.object({ providerId: z.number().int().positive(), userIds: z.array(z.number().int().positive()).max(30) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "tasks");
+      adminOnly(ctx, "set up provider teams");
+      return run(() => ws.setProviderTeam(actor, input));
+    }),
   }),
 
   flow: router({

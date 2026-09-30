@@ -26,6 +26,8 @@ import {
   workTasks,
   fhirPatients,
   fhirResources,
+  providerTeamMembers,
+  timeOffRequests,
 } from "../drizzle/schema";
 import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
 import { getDb } from "./db";
@@ -87,7 +89,105 @@ export interface WorkspaceActor {
   clinicIds: number[] | null;
   /** Opportunity Finder only: a provider sees just their own patients (null / unset = no limit). */
   providerIds?: number[] | null;
+  /** Provider-team queues this person is on ("team:<providerId>"), for My Work. */
+  teamQueues?: string[];
   ip?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Provider teams: a provider + the people who work with them (their MAs etc.)
+// ---------------------------------------------------------------------------
+
+export const teamQueueKey = (providerId: number) => `team:${providerId}`;
+export const teamProviderId = (role: string | null | undefined) => {
+  const m = /^team:(\d+)$/.exec(role ?? "");
+  return m ? Number(m[1]) : null;
+};
+
+/** The team queues someone is on: the providers whose login it is, and the teams they were added to. */
+export async function myTeamQueues(userId: number): Promise<string[]> {
+  const d = await db();
+  const own = await d.select({ id: providers.id }).from(providers).where(eq(providers.userId, userId));
+  const member = await d.select({ id: providerTeamMembers.providerId }).from(providerTeamMembers).where(eq(providerTeamMembers.userId, userId));
+  return Array.from(new Set([...own, ...member].map((r) => teamQueueKey(r.id))));
+}
+
+/** Everyone on a provider's team: the provider's own login plus the members. */
+export async function teamUserIds(providerId: number): Promise<number[]> {
+  const d = await db();
+  const [p] = await d.select({ userId: providers.userId }).from(providers).where(eq(providers.id, providerId)).limit(1);
+  const members = await d.select({ userId: providerTeamMembers.userId }).from(providerTeamMembers).where(eq(providerTeamMembers.providerId, providerId));
+  return Array.from(new Set([p?.userId ?? null, ...members.map((m) => m.userId)].filter((x): x is number => !!x)));
+}
+
+/** "team:12" → "Dr. Sudad's team" for the queues in a list of tasks. */
+export async function queueLabels(roles: (string | null | undefined)[]): Promise<Map<string, string>> {
+  const ids = Array.from(new Set(roles.map(teamProviderId).filter((x): x is number => x != null)));
+  if (!ids.length) return new Map();
+  const rows = await (await db()).select({ id: providers.id, name: providers.name }).from(providers).where(inArray(providers.id, ids));
+  return new Map(rows.map((r) => [teamQueueKey(r.id), `${r.name}'s team`]));
+}
+
+/**
+ * Who a patient's email goes to: their provider's team (roster provider, else the provider of their
+ * latest visit), once that team has members set up. Null = no team yet (use the older routing).
+ */
+export async function providerTeamAssignee(subjectKey: string) {
+  const d = await db();
+  let providerId: number | null = null;
+  let clinicId: number | null = null;
+  const pid = /^p:(\d+)$/.exec(subjectKey)?.[1];
+  if (pid) {
+    const [p] = await d.select({ providerId: patients.providerId, clinicId: patients.clinicId }).from(patients).where(eq(patients.id, Number(pid))).limit(1);
+    providerId = p?.providerId ?? null;
+    clinicId = p?.clinicId ?? null;
+  }
+  if (!providerId) {
+    const s = (await loadScheduleSubjects()).get(subjectKey);
+    providerId = s?.providerId ?? null;
+    clinicId = clinicId ?? s?.clinicId ?? null;
+  }
+  if (!providerId) return null;
+  const [members] = await d.select({ n: sql<number>`count(*)` }).from(providerTeamMembers).where(eq(providerTeamMembers.providerId, providerId));
+  if (!Number(members?.n ?? 0)) return null;
+  const [prov] = await d.select({ name: providers.name, clinicId: providers.clinicId }).from(providers).where(eq(providers.id, providerId)).limit(1);
+  if (!prov) return null;
+  return { assignedUserId: null as number | null, assignedRole: teamQueueKey(providerId) as string | null, clinicId: clinicId ?? prov.clinicId ?? null, who: `${prov.name}'s team` };
+}
+
+/** Admin → Providers: each provider's team, plus who could be added. */
+export async function listProviderTeams() {
+  const d = await db();
+  const provs = await d.select({ id: providers.id, name: providers.name, title: providers.title, clinicId: providers.clinicId, userId: providers.userId, clinicName: clinics.name })
+    .from(providers).leftJoin(clinics, eq(clinics.id, providers.clinicId)).orderBy(asc(providers.name));
+  const members = await d.select({ providerId: providerTeamMembers.providerId, userId: users.id, name: users.name, role: users.role, homeClinicId: staffProfiles.homeClinicId })
+    .from(providerTeamMembers).innerJoin(users, eq(users.id, providerTeamMembers.userId)).leftJoin(staffProfiles, eq(staffProfiles.userId, users.id));
+  const people = (await assignableUsers({ id: 0, name: null, role: "admin", clinicIds: null }))
+    .filter((u) => u.role !== "billing");
+  const loginName = new Map(people.map((u) => [u.id, u.name]));
+  return {
+    providers: provs.map((p) => ({
+      id: p.id, name: p.name, title: p.title, clinicId: p.clinicId, clinicName: p.clinicName,
+      login: p.userId ? { userId: p.userId, name: loginName.get(p.userId) ?? p.name } : null,
+      members: members.filter((m) => m.providerId === p.id).map((m) => ({ userId: m.userId, name: m.name, role: m.role, homeClinicId: m.homeClinicId })),
+    })),
+    people: people.map((u) => ({ id: u.id, name: u.name, role: u.role, homeClinicId: u.homeClinicId })),
+  };
+}
+
+export async function setProviderTeam(actor: WorkspaceActor, input: { providerId: number; userIds: number[] }) {
+  const d = await db();
+  const [p] = await d.select({ id: providers.id, name: providers.name, userId: providers.userId }).from(providers).where(eq(providers.id, input.providerId)).limit(1);
+  if (!p) throw new WorkspaceError("Provider not found.", "NOT_FOUND");
+  const wanted = Array.from(new Set(input.userIds)).filter((id) => id !== p.userId).slice(0, 30);
+  if (wanted.length) {
+    const found = await d.select({ id: users.id }).from(users).where(and(inArray(users.id, wanted), ne(users.role, "user")));
+    if (found.length !== wanted.length) throw new WorkspaceError("Someone picked doesn't have a MyPCP login.");
+  }
+  await d.delete(providerTeamMembers).where(eq(providerTeamMembers.providerId, p.id));
+  if (wanted.length) await d.insert(providerTeamMembers).values(wanted.map((userId) => ({ providerId: p.id, userId, createdByUserId: actor.id })));
+  await audit(actor, "manage_access", { entityType: "providerTeam", entityId: p.id, description: `${p.name}'s team set (${wanted.length} member${wanted.length === 1 ? "" : "s"})` });
+  return { ok: true };
 }
 
 /** Does this patient belong to one of the actor's providers (always true when there's no provider limit)? */
@@ -289,9 +389,16 @@ export interface TaskFilters {
   patientId?: number;
 }
 
-/** Team = my role's queue, unassigned tasks, and (for managers) everything assigned. */
+/** Tasks in one of the provider-team queues I'm on. */
+function myTeamsCondition(actor: WorkspaceActor): SQL | null {
+  return actor.teamQueues?.length ? inArray(workTasks.assignedRole, actor.teamQueues) : null;
+}
+
+/** Team = my role's queue, my provider teams' queues, unassigned tasks, and (for managers) everything assigned. */
 function teamCondition(actor: WorkspaceActor): SQL {
   const parts: SQL[] = [eq(workTasks.assignedRole, actor.role), and(isNull(workTasks.assignedUserId), isNull(workTasks.assignedRole))!];
+  const teams = myTeamsCondition(actor);
+  if (teams) parts.push(teams);
   if (actor.role === "admin") parts.push(sql`${workTasks.assignedUserId} IS NOT NULL`);
   return or(...parts)!;
 }
@@ -304,13 +411,17 @@ function taskWhere(actor: WorkspaceActor, f: TaskFilters): SQL {
     const inScope = scope.length ? inArray(workTasks.clinicId, scope) : sql`1 = 0`;
     // Clinic-less tasks always show. A picked clinic filters the rest; an access limit
     // (MAs) never hides a task that was assigned directly to you.
-    conds.push(f.clinicId ? or(inScope, isNull(workTasks.clinicId))! : or(inScope, isNull(workTasks.clinicId), eq(workTasks.assignedUserId, actor.id))!);
+    // (Nor a task sent to one of your provider teams.)
+    const teams = myTeamsCondition(actor);
+    conds.push(f.clinicId ? or(inScope, isNull(workTasks.clinicId))! : or(inScope, isNull(workTasks.clinicId), eq(workTasks.assignedUserId, actor.id), ...(teams ? [teams] : []))!);
   }
   const open = inArray(workTasks.status, OPEN_TASK_STATUSES);
   const minePlusTeam = or(eq(workTasks.assignedUserId, actor.id), teamCondition(actor))!;
+  const myTeams = myTeamsCondition(actor);
   switch (f.view) {
     case "mine":
-      conds.push(eq(workTasks.assignedUserId, actor.id), open);
+      // Mine = assigned to me, plus anything sent to a provider team I'm on (until someone takes it).
+      conds.push(myTeams ? or(eq(workTasks.assignedUserId, actor.id), myTeams)! : eq(workTasks.assignedUserId, actor.id), open);
       break;
     case "team":
       conds.push(teamCondition(actor), open);
@@ -365,6 +476,7 @@ const taskSelect = {
   clinicId: workTasks.clinicId,
   clinicName: clinics.name,
   assigneeName: users.name,
+  sourceType: workTasks.sourceType,
 };
 
 export async function listTasks(actor: WorkspaceActor, f: TaskFilters) {
@@ -378,9 +490,11 @@ export async function listTasks(actor: WorkspaceActor, f: TaskFilters) {
     .where(taskWhere(actor, f))
     .orderBy(f.view === "completed" ? desc(workTasks.completedAt) : asc(workTasks.dueDate))
     .limit(300);
-  if (f.view === "completed") return rows;
+  const labels = await queueLabels(rows.map((r) => r.assignedRole));
+  const withLabels = rows.map((r) => ({ ...r, queueLabel: r.assignedRole ? labels.get(r.assignedRole) ?? null : null }));
+  if (f.view === "completed") return withLabels;
   // Due date first (no date last), then priority.
-  return rows.sort((a, b) => {
+  return withLabels.sort((a, b) => {
     const da = a.dueDate ?? "9999-99-99";
     const dbb = b.dueDate ?? "9999-99-99";
     if (da !== dbb) return da < dbb ? -1 : 1;
@@ -416,8 +530,9 @@ async function loadVisibleTask(actor: WorkspaceActor, taskId: number) {
   const d = await db();
   const [t] = await d.select().from(workTasks).where(eq(workTasks.id, taskId)).limit(1);
   if (!t) throw new WorkspaceError("Task not found.", "NOT_FOUND");
-  if (actor.clinicIds && t.clinicId && !actor.clinicIds.includes(t.clinicId) && t.assignedUserId !== actor.id) throw new WorkspaceError("Task not found.", "NOT_FOUND");
-  const mineOrQueue = t.assignedUserId === actor.id || t.assignedRole === actor.role || (!t.assignedUserId && !t.assignedRole) || t.createdByUserId === actor.id;
+  const myTeam = !!t.assignedRole && !t.assignedUserId && !!actor.teamQueues?.includes(t.assignedRole);
+  if (actor.clinicIds && t.clinicId && !actor.clinicIds.includes(t.clinicId) && t.assignedUserId !== actor.id && !myTeam) throw new WorkspaceError("Task not found.", "NOT_FOUND");
+  const mineOrQueue = t.assignedUserId === actor.id || t.assignedRole === actor.role || myTeam || (!t.assignedUserId && !t.assignedRole) || t.createdByUserId === actor.id;
   if (!mineOrQueue && !["admin", "staff", "provider", "front_desk"].includes(actor.role)) throw new WorkspaceError("Task not found.", "NOT_FOUND");
   return t;
 }
@@ -434,13 +549,14 @@ export async function taskDetail(actor: WorkspaceActor, taskId: number) {
     .where(eq(workTasks.id, taskId))
     .limit(1);
   const creator = t.createdByUserId ? (await d.select({ name: users.name }).from(users).where(eq(users.id, t.createdByUserId)).limit(1))[0] : undefined;
+  const queueLabel = t.assignedRole ? (await queueLabels([t.assignedRole])).get(t.assignedRole) ?? null : null;
   const activities = await d
     .select({ id: workTaskActivities.id, type: workTaskActivities.type, body: workTaskActivities.body, meta: workTaskActivities.meta, createdAt: workTaskActivities.createdAt, userName: users.name })
     .from(workTaskActivities)
     .leftJoin(users, eq(workTaskActivities.userId, users.id))
     .where(eq(workTaskActivities.taskId, taskId))
     .orderBy(asc(workTaskActivities.createdAt));
-  return { ...t, ...extra, createdByName: creator?.name ?? null, activities };
+  return { ...t, ...extra, queueLabel, createdByName: creator?.name ?? null, activities };
 }
 
 export async function assignableUsers(actor: WorkspaceActor) {
@@ -496,6 +612,9 @@ export async function createTask(actor: WorkspaceActor, input: CreateTaskInput) 
   await d.insert(workTaskActivities).values({ taskId: id, userId: actor.id, type: "created" });
   await audit(actor, "create_task", { entityType: "workTask", entityId: id, description: `category=${input.category}; source=${input.sourceType ?? "manual"}` });
   if (assignedUserId && assignedUserId !== actor.id) await notifyTask(assignedUserId, "New task assigned to you", input.title, input.patientId ?? null);
+  // Sent to a provider's team: everyone on it hears about it.
+  const teamOf = assignedUserId ? null : teamProviderId(input.assignedRole);
+  if (teamOf) for (const uid of await teamUserIds(teamOf)) if (uid !== actor.id) await notifyTask(uid, "New task for your team", input.title, input.patientId ?? null);
   return { id };
 }
 
@@ -510,6 +629,11 @@ export async function updateTask(
   const acts: (typeof workTaskActivities.$inferInsert)[] = [];
   if (input.status && input.status !== t.status) {
     if (t.status === "cancelled") throw new WorkspaceError("Cancelled tasks can't be changed.");
+    // A time-off request's task closes when the request is decided (or cancelled), never on its own.
+    if (t.sourceType === "time_off" && (input.status === "completed" || input.status === "cancelled")) {
+      const [r] = await d.select({ status: timeOffRequests.status }).from(timeOffRequests).where(eq(timeOffRequests.id, Number(t.sourceRef))).limit(1);
+      if (r?.status === "pending") throw new WorkspaceError("Approve or deny the time-off request first (the buttons are in the task).");
+    }
     patch.status = input.status;
     patch.completedAt = input.status === "completed" ? new Date() : null;
     acts.push({ taskId, userId: actor.id, type: "status_changed", meta: { from: t.status, to: input.status } });

@@ -168,6 +168,27 @@ export const workforceRouter = router({
         const m = await requireManager(ctx);
         return (await wf.listTimeOff({ status: input?.status })).filter((t) => manages(m, t.userId));
       }),
+    /** One request (for the Approve / Deny buttons on its task in My Work). */
+    get: protectedProcedure.input(z.number().int().positive()).query(async ({ input, ctx }) => {
+      const m = await requireManager(ctx);
+      const [req] = await wf.listTimeOff({ id: input });
+      if (!req) throw new TRPCError({ code: "NOT_FOUND", message: "Request not found." });
+      needPerson(m, req.userId);
+      return req;
+    }),
+    /** Who every request goes to (an admin), and the admins who could. */
+    approver: protectedProcedure.query(async ({ ctx }) => {
+      await requireManager(ctx);
+      return { approver: await wf.getTimeOffApprover(), admins: ctx.user.role === "admin" ? await wf.listAdmins() : [] };
+    }),
+    setApprover: protectedProcedure.input(z.object({ userId: z.number().int().positive().nullable() })).mutation(async ({ input, ctx }) => {
+      if (ctx.user.role !== "admin") throw forbid("Only an admin can choose who time-off requests go to.");
+      try {
+        return await wf.setTimeOffApprover(input.userId, ctx.user.id);
+      } catch (e) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: (e as Error).message });
+      }
+    }),
     decide: protectedProcedure
       .input(z.object({ id: z.number(), status: z.enum(["approved", "denied"]), managerNote: z.string().max(500).nullish() }))
       .mutation(async ({ input, ctx }) => {

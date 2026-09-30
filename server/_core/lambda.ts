@@ -75,6 +75,11 @@ export const handler = async (event: any, context: any) => {
     const { makeOfficeManager } = await import("../workspaceDb");
     return makeOfficeManager({ name: String(event.name ?? ""), apply: event.apply === true });
   }
+  // Who every time-off request goes to (IAM-only; dry run unless apply).
+  if (event && event.__job === "time-off-approver" && !event.requestContext && !event.version) {
+    const { timeOffApproverJob } = await import("../workforceDb");
+    return timeOffApproverJob({ name: String(event.name ?? ""), apply: event.apply === true });
+  }
   // Who sees what in the Opportunity Finder (IAM-only check; staff names and clinics, no patients).
   if (event && event.__job === "opportunity-scopes" && !event.requestContext && !event.version) {
     const { opportunityScopeReport } = await import("../workspaceDb");

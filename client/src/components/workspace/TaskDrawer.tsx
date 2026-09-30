@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
-import { CheckCircle2, User, Building2, CalendarClock, Tag, MessageSquare, Loader2 } from "lucide-react";
+import { CheckCircle2, User, Building2, CalendarClock, Tag, MessageSquare, Loader2, Hand, Plane, ThumbsDown, ThumbsUp } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { trpc } from "@/lib/trpc";
 import { localDateStr } from "@shared/workforce";
@@ -22,11 +22,47 @@ const ACTIVITY_TEXT: Record<string, (meta: Record<string, unknown> | null) => st
   comment: () => "commented",
 };
 
+const TIME_OFF_TYPE: Record<string, string> = { pto: "PTO", sick: "Sick", unpaid: "Unpaid", other: "Other" };
+
+/** A time-off request's task: decide it right here (the task closes itself and the employee is told). */
+function TimeOffDecision({ requestId, onDone }: { requestId: number; onDone: () => void }) {
+  const utils = trpc.useUtils();
+  const q = trpc.workforce.timeOff.get.useQuery(requestId, { retry: false });
+  const [note, setNote] = useState("");
+  const decide = trpc.workforce.timeOff.decide.useMutation({
+    onSuccess: (res, v) => {
+      void utils.workforce.invalidate();
+      onDone();
+      if (v.status === "approved" && res.conflicts.length) {
+        toast.warning(`Approved. ${res.conflicts.length} scheduled shift${res.conflicts.length > 1 ? "s fall" : " falls"} in those dates: mark ${res.conflicts.length > 1 ? "them" : "it"} called out in Workforce → Schedule to find coverage.`, { duration: 9000 });
+      } else toast.success(v.status === "approved" ? "Approved. They've been told." : "Denied. They've been told.");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  if (q.isLoading) return <Loading />;
+  if (q.error) return <p className="text-xs text-slate-500">{q.error.message}</p>;
+  const r = q.data;
+  if (!r) return null;
+  if (r.status !== "pending") return <p className="rounded-xl bg-slate-50 dark:bg-slate-800 p-3 text-sm text-slate-600 dark:text-slate-300">This request was {r.status}.</p>;
+  return (
+    <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
+      <p className="flex items-center gap-2 text-sm font-semibold text-slate-800 dark:text-slate-100"><Plane size={15} /> {r.userName} · {TIME_OFF_TYPE[r.type] ?? r.type}</p>
+      <input className={inputCls} placeholder="Note back to them (optional)" value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
+      <div className="grid grid-cols-2 gap-2">
+        <Btn disabled={decide.isPending} onClick={() => decide.mutate({ id: r.id, status: "approved", managerNote: note.trim() || null })}><ThumbsUp size={14} /> Approve</Btn>
+        <Btn variant="secondary" disabled={decide.isPending} onClick={() => decide.mutate({ id: r.id, status: "denied", managerNote: note.trim() || null })}><ThumbsDown size={14} /> Deny</Btn>
+      </div>
+      <Link href="/workforce?tab=timeoff" className="block text-xs font-semibold text-brand hover:underline">See all requests in Workforce → Time off</Link>
+    </div>
+  );
+}
+
 export function TaskDrawer({ taskId, onClose }: { taskId: number | null; onClose: () => void }) {
-  const { caps } = useWorkspace();
+  const { caps, user } = useWorkspace();
   const utils = trpc.useUtils();
   const q = trpc.workspace.tasks.detail.useQuery(taskId ?? 0, { enabled: !!taskId, retry: false });
   const assignees = trpc.workspace.tasks.assignees.useQuery(undefined, { enabled: !!taskId && !!caps?.assignTasks, staleTime: 5 * 60_000 });
+  const teamQueues = trpc.workspace.teams.queues.useQuery(undefined, { enabled: !!taskId && !!caps?.assignTasks, staleTime: 5 * 60_000 });
   const [comment, setComment] = useState("");
 
   const refresh = () => {
@@ -50,6 +86,9 @@ export function TaskDrawer({ taskId, onClose }: { taskId: number | null; onClose
   const today = localDateStr();
   const due = t ? fmtDue(t.dueDate, today) : null;
   const closed = t?.status === "completed" || t?.status === "cancelled";
+  const timeOff = t?.sourceType === "time_off" && !!t.sourceRef;
+  const inQueue = !!t && !t.assignedUserId && !!t.assignedRole;
+  const queueName = t ? t.queueLabel ?? (t.assignedRole ? `${WORKSPACE_ROLE_LABELS[t.assignedRole] ?? t.assignedRole} queue` : null) : null;
 
   return (
     <Sheet open={!!taskId} onOpenChange={(o) => !o && onClose()}>
@@ -59,7 +98,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: number | null; onClose
         {q.error && <div className="p-6"><ErrorNote message={q.error.message} /></div>}
         {t && (
           <>
-            <SheetHeader className="px-6 pt-6 pb-4 border-b border-slate-100 dark:border-slate-700">
+            <SheetHeader className="shrink-0 px-6 pt-6 pb-4 border-b border-slate-100 dark:border-slate-700">
               <div className="flex flex-wrap items-center gap-2 pr-6">
                 <TaskStatusBadge status={t.status} />
                 <PriorityBadge priority={t.priority} />
@@ -72,8 +111,14 @@ export function TaskDrawer({ taskId, onClose }: { taskId: number | null; onClose
               </SheetDescription>
             </SheetHeader>
 
-            <div className="px-6 py-5 space-y-5">
-              {!closed && (
+            <div className="shrink-0 px-6 py-5 space-y-5">
+              {!closed && timeOff && <TimeOffDecision requestId={Number(t.sourceRef)} onDone={refresh} />}
+              {!closed && inQueue && user && (
+                <Btn variant="secondary" className="w-full" onClick={() => update.mutate({ id: t.id, assignedUserId: user.id })} disabled={update.isPending}>
+                  <Hand size={15} /> Take it (sent to {queueName})
+                </Btn>
+              )}
+              {!closed && !timeOff && (
                 <Btn className="w-full" onClick={() => update.mutate({ id: t.id, status: "completed" })} disabled={update.isPending}>
                   {update.isPending ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={16} />} Mark complete
                 </Btn>
@@ -131,12 +176,18 @@ export function TaskDrawer({ taskId, onClose }: { taskId: number | null; onClose
                       <optgroup label="Team queue">
                         {["staff", "front_desk", "medical_assistant", "provider", "billing"].map((r) => <option key={r} value={`r${r}`}>{WORKSPACE_ROLE_LABELS[r]} queue</option>)}
                       </optgroup>
+                      {(teamQueues.data?.length || t.queueLabel) ? (
+                        <optgroup label="Provider teams">
+                          {(teamQueues.data ?? []).map((tq) => <option key={tq.key} value={`r${tq.key}`}>{tq.label}</option>)}
+                          {t.queueLabel && t.assignedRole && !(teamQueues.data ?? []).some((tq) => tq.key === t.assignedRole) && <option value={`r${t.assignedRole}`}>{t.queueLabel}</option>}
+                        </optgroup>
+                      ) : null}
                       <optgroup label="People">
                         {(assignees.data ?? []).map((u) => <option key={u.id} value={`u${u.id}`}>{u.name}</option>)}
                       </optgroup>
                     </select>
                   ) : (
-                    <p className="py-2 font-medium text-slate-800 dark:text-slate-100">{t.assigneeName ?? (t.assignedRole ? `${WORKSPACE_ROLE_LABELS[t.assignedRole] ?? t.assignedRole} queue` : "Unassigned")}</p>
+                    <p className="py-2 font-medium text-slate-800 dark:text-slate-100">{t.assigneeName ?? queueName ?? "Unassigned"}</p>
                   )}
                 </div>
                 {t.clinicName && (

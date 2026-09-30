@@ -3,6 +3,7 @@ import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { useState } from "react";
+import { ProviderTeams } from "@/components/workspace/ProviderTeams";
 import { Loader2, Stethoscope, Plus, Pencil, Trash2, Building2, ShieldCheck, KeyRound, CheckCircle2 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -107,6 +108,8 @@ export default function ProvidersPage() {
           </div>
         </div>
       )}
+
+      <ProviderTeams />
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>

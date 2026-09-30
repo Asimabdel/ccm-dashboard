@@ -166,7 +166,8 @@ export default function MyWorkPage() {
                         className="mt-0.5 shrink-0 text-slate-300 hover:text-emerald-600 disabled:opacity-50"
                         aria-label={done ? "Completed" : `Complete ${t.title}`}
                         disabled={done || t.status === "cancelled" || update.isPending}
-                        onClick={() => update.mutate({ id: t.id, status: "completed" })}
+                        // A time-off request is closed by approving or denying it (in the task), not by ticking it off.
+                        onClick={() => (t.sourceType === "time_off" ? setParams({ task: t.id }) : update.mutate({ id: t.id, status: "completed" }))}
                       >
                         {done ? <CheckCircle2 size={20} className="text-emerald-600" /> : <Circle size={20} />}
                       </button>
@@ -176,7 +177,7 @@ export default function MyWorkPage() {
                           <span>{TASK_CATEGORY_LABELS[t.category as TaskCategory] ?? t.category}</span>
                           {t.patientName && <span>· {t.patientName}</span>}
                           {t.clinicName && <span className="hidden sm:inline">· {t.clinicName}</span>}
-                          <span>· {t.assigneeName ?? (t.assignedRole ? `${WORKSPACE_ROLE_LABELS[t.assignedRole] ?? t.assignedRole} queue` : "Unassigned")}</span>
+                          <span>· {t.assigneeName ?? t.queueLabel ?? (t.assignedRole ? `${WORKSPACE_ROLE_LABELS[t.assignedRole] ?? t.assignedRole} queue` : "Unassigned")}</span>
                         </p>
                       </button>
                       <div className="hidden sm:flex items-center gap-2 shrink-0">

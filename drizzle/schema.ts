@@ -1613,3 +1613,20 @@ export const squareRequests = mysqlTable("squareRequests", {
   orderIdx: index("squareRequests_order_idx").on(t.orderId),
   squareIdx: index("squareRequests_square_idx").on(t.squareId),
 }));
+
+/**
+ * A provider's team (added 2026-09-30): the people who work with that provider (their MAs etc.).
+ * Patient emails for the provider's patients go to the team's shared queue ("team:<providerId>"),
+ * and the provider's own login is always on the team. A provider with no members set up keeps the
+ * old routing (care coordinator → front desk).
+ */
+export const providerTeamMembers = mysqlTable("providerTeamMembers", {
+  id: int("id").autoincrement().primaryKey(),
+  providerId: int("providerId").notNull().references(() => providers.id),
+  userId: int("userId").notNull().references(() => users.id),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  pairUnique: uniqueIndex("providerTeamMembers_pair_unique").on(t.providerId, t.userId),
+  userIdx: index("providerTeamMembers_user_idx").on(t.userId),
+}));

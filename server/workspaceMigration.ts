@@ -617,6 +617,18 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     INDEX \`phoneCalls_subject_idx\` (\`subjectKey\`),
     CONSTRAINT \`phoneCalls_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`),
     CONSTRAINT \`phoneCalls_patientId_fk\` FOREIGN KEY (\`patientId\`) REFERENCES \`patients\`(\`id\`))` },
+  // Provider teams (added 2026-09-30): who gets a provider's patient emails.
+  { label: "providerTeamMembers", sql: `CREATE TABLE IF NOT EXISTS \`providerTeamMembers\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`providerId\` int NOT NULL,
+    \`userId\` int NOT NULL,
+    \`createdByUserId\` int,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    UNIQUE KEY \`providerTeamMembers_pair_unique\` (\`providerId\`, \`userId\`),
+    INDEX \`providerTeamMembers_user_idx\` (\`userId\`),
+    CONSTRAINT \`providerTeamMembers_providerId_fk\` FOREIGN KEY (\`providerId\`) REFERENCES \`providers\`(\`id\`),
+    CONSTRAINT \`providerTeamMembers_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`),
+    CONSTRAINT \`providerTeamMembers_createdByUserId_fk\` FOREIGN KEY (\`createdByUserId\`) REFERENCES \`users\`(\`id\`))` },
   // Square payments (added 2026-09-30).
   { label: "squareCustomers", sql: `CREATE TABLE IF NOT EXISTS \`squareCustomers\` (
     \`id\` varchar(64) NOT NULL PRIMARY KEY,

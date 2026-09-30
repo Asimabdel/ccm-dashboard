@@ -1,7 +1,8 @@
 // Practice mailbox (Google Workspace / Gmail): read-only. New inbox emails are matched to a
 // patient (remembered/imported address → sender's full name → phone number the sender wrote)
-// and become a "Patient email" task for the patient's care coordinator, or else the front desk
-// at the patient's clinic. Emails nobody can match wait on the Patient emails page until a
+// and become a "Patient email" task for the patient's provider's team (the provider + their MAs,
+// set up in Admin → Providers); without a team, the care coordinator or else the front desk at
+// the patient's clinic. Emails nobody can match wait on the Patient emails page until a
 // staff member picks the patient; that address is then remembered.
 //
 // Runs every 2 minutes from an EventBridge schedule (lambda.ts, {"__job":"gmail-sync"}).
@@ -23,7 +24,7 @@ import { localDateStr } from "../shared/workforce";
 import { openSecret, sealSecret } from "./secretBox";
 import { relayFetch } from "./egress";
 import {
-  WorkspaceError, audit, buildNameDobIndex, buildNameIndex, buildPhoneIndex, careTeamAssignee, createTask, searchSubjects, subjectCare, type WorkspaceActor,
+  WorkspaceError, audit, buildNameDobIndex, buildNameIndex, buildPhoneIndex, careTeamAssignee, createTask, providerTeamAssignee, searchSubjects, subjectCare, type WorkspaceActor,
 } from "./workspaceDb";
 
 /** "practice" = the practice mailbox (patient emails + faxes); "fax" = an optional fax-only mailbox. */
@@ -361,6 +362,11 @@ export async function systemActor(slot: MailSlot = "practice"): Promise<Workspac
   return { id: u.id, name: "Practice mailbox", role: "admin", clinicIds: null };
 }
 
+/** Who a patient's email goes to: their provider's team once it's set up (Admin → Providers), else care coordinator → front desk. */
+async function emailAssignee(subjectKey: string) {
+  return (await providerTeamAssignee(subjectKey)) ?? (await careTeamAssignee(subjectKey));
+}
+
 // ---- The sync ----
 
 export async function runGmailSync(opts: { maxMs: number; manual: boolean; slot?: MailSlot }) {
@@ -485,7 +491,7 @@ async function processMessage(m: GmailMessage, mailbox: string, idx: EmailMatchI
     await d.insert(emailMessages).values({ ...base, preview, status: "assigned", ...matched });
     return "assigned";
   }
-  const who = await careTeamAssignee(match.subject.key);
+  const who = await emailAssignee(match.subject.key);
   const text = taskText({ ...base, preview, link: gmailMessageLink(mailbox, messageIdHeader, m.threadId), method: match.method }, match.subject.name);
   const task = await createTask(actor, {
     title: text.title, description: text.description, patientId: match.subject.patientId, clinicId: who.clinicId,
@@ -621,7 +627,7 @@ export async function linkEmail(actor: WorkspaceActor, input: { emailId: number;
     await d.insert(emailContacts).values({ email: m.fromEmail, kind: "patient", patientId: care.patientId, subjectKey: input.subjectKey, name: care.name.slice(0, 255), source: "linked", createdByUserId: actor.id })
       .onDuplicateKeyUpdate({ set: { kind: "patient", patientId: care.patientId, subjectKey: input.subjectKey, name: care.name.slice(0, 255), source: "linked", createdByUserId: actor.id } });
   }
-  const who = await careTeamAssignee(input.subjectKey);
+  const who = await emailAssignee(input.subjectKey);
   const c = await config();
   const text = taskText({ ...m, link: gmailMessageLink(c.mailbox ?? "", m.messageIdHeader, m.threadId ?? ""), method: "manual" }, care.name);
   let taskId = m.taskId;
