@@ -408,7 +408,14 @@ export async function runGmailSync(opts: { maxMs: number; manual: boolean; slot?
       const actor = slot === "practice" ? await systemActor() : null;
       for (const id of todo) {
         if (Date.now() - started > opts.maxMs) { complete = false; break; }
-        const m = await gmailGet<GmailMessage>(`/messages/${id}?format=full`, slot);
+        let m: GmailMessage;
+        try {
+          m = await gmailGet<GmailMessage>(`/messages/${id}?format=full`, slot);
+        } catch (e) {
+          // Deleted before we got to it (Gmail answers 404): nothing to do, and it mustn't hold up everything after it.
+          if ((e as { status?: number }).status === 404) { stats.ignored++; continue; }
+          throw e;
+        }
         stats.processed++;
         // Faxes: anything with a PDF/TIFF in the fax mailbox; fax-service emails in the practice mailbox.
         const fax = faxFrom(m, slot, faxSenders);
