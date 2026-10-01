@@ -10,7 +10,8 @@
 // record, and fills a missing roster date of birth (and phone) from Practice Fusion.
 import { eq } from "drizzle-orm";
 import { getDb } from "./db";
-import { appSettings, clinics, fhirPatients, patients } from "../drizzle/schema";
+import { appSettings, clinics, fhirPatients, patients, users } from "../drizzle/schema";
+import { isEmptyQuery, parseDirectoryQuery } from "../shared/directory";
 import { nameKey } from "../shared/workspace";
 import { normalizePhone } from "../shared/phone";
 import { addDays } from "../shared/workforce";
@@ -46,7 +47,7 @@ export const REVIEW_LABELS: Partial<Record<Bucket, string>> = {
 };
 
 interface Pf { fhirId: string; key: string; name: string; dob: string | null; phone: string | null; t: ReturnType<typeof tok> }
-type RosterRow = { id: number; name: string; dob: Date | null; phone: string; ccm: string | null; clinicId: number | null };
+type RosterRow = { id: number; name: string; dob: Date | null; phone: string; ccm: string | null; clinicId: number | null; staffId: number | null; lastCcm: Date | null };
 
 const NOT_SAME_KEY = "roster_pf_not_same";
 async function notSamePairs(): Promise<Set<string>> {
@@ -58,7 +59,7 @@ async function notSamePairs(): Promise<Set<string>> {
 /** Everyone unlinked on the roster, the free Practice Fusion records, and how each roster patient matches. */
 async function loadMatching() {
   const d = await db();
-  const roster = (await d.select({ id: patients.id, name: patients.name, dob: patients.dateOfBirth, phone: patients.phoneNumber, ccm: patients.ccmEnrollmentStatus, clinicId: patients.clinicId }).from(patients)) as RosterRow[];
+  const roster = (await d.select({ id: patients.id, name: patients.name, dob: patients.dateOfBirth, phone: patients.phoneNumber, ccm: patients.ccmEnrollmentStatus, clinicId: patients.clinicId, staffId: patients.assignedStaffId, lastCcm: patients.lastCCMDate }).from(patients)) as RosterRow[];
   const pfRows = await d.select({ fhirId: fhirPatients.fhirId, key: fhirPatients.subjectKey, patientId: fhirPatients.patientId, name: fhirPatients.name, dob: fhirPatients.dob, phone: fhirPatients.phone }).from(fhirPatients);
   const linkedRoster = new Set<number>();
   for (const p of pfRows) {
@@ -120,8 +121,15 @@ async function loadMatching() {
     if (close) return { bucket: "review_close_name", pf: close };
     return { bucket: "no_match_no_dob", pf: null };
   };
+  /** Several Practice Fusion records fit equally well (same name, and the same birthday when there is one). */
+  const candidates = (r: RosterRow): Pf[] => {
+    const t = tok(r.name);
+    const dob = ymd(r.dob);
+    const same = (c: Pf) => c.t.first === t.first && c.t.last === t.last && !notSame.has(`${r.id}|${c.fhirId}`);
+    return dob ? (byDob.get(dob) ?? []).filter(same) : (byName.get(`${t.first}|${t.last}`) ?? []).filter(same);
+  };
   const unlinked = roster.filter((r) => !linkedRoster.has(r.id));
-  return { roster, pfRows, linkedRoster, unlinked, decide };
+  return { roster, pfRows, linkedRoster, unlinked, decide, candidates, free };
 }
 
 /** Link one roster patient to one Practice Fusion record (fills a missing / day-shifted birthday and a missing phone). */
@@ -192,24 +200,53 @@ export async function matchRosterToPf(opts: { apply: boolean; name?: string | nu
 // Record matching page (admins): the pairs that need a person to confirm
 // ---------------------------------------------------------------------------
 
-export async function reviewCandidates() {
-  const { unlinked, decide } = await loadMatching();
+/**
+ * The Record matching page: pairs to confirm, roster patients with several equally good Practice Fusion
+ * records (pick one), and roster patients with no Practice Fusion match at all (search by hand).
+ */
+export async function matchingOverview() {
+  const { unlinked, decide, candidates } = await loadMatching();
   const d = await db();
   const clinicName = new Map((await d.select({ id: clinics.id, name: clinics.name }).from(clinics)).map((c) => [c.id, c.name]));
+  const staffName = new Map((await d.select({ id: users.id, name: users.name }).from(users)).map((u) => [u.id, u.name]));
   const dir = await loadDirectory();
-  const out = [];
-  for (const r of unlinked) {
-    const { bucket, pf } = decide(r);
-    if (!pf || !REVIEW.includes(bucket)) continue;
+  const pfInfo = (pf: Pf) => {
     const e = dir.get(pf.key);
-    out.push({
-      rosterId: r.id, rosterName: r.name, rosterDob: ymd(r.dob), rosterCcm: r.ccm, rosterClinic: r.clinicId ? clinicName.get(r.clinicId) ?? null : null,
+    return {
       pfId: pf.fhirId, pfName: pf.name, pfDob: pf.dob, pfPhoneLast4: pf.phone ? pf.phone.slice(-4) : null,
       pfClinic: e?.clinicId ? clinicName.get(e.clinicId) ?? null : null, pfProvider: e?.providerName ?? null, pfLastVisit: e?.lastVisit ?? null,
-      reason: REVIEW_LABELS[bucket] ?? bucket,
-    });
+    };
+  };
+  const rosterInfo = (r: RosterRow) => ({
+    rosterId: r.id, rosterName: r.name, rosterDob: ymd(r.dob), rosterCcm: r.ccm, rosterClinic: r.clinicId ? clinicName.get(r.clinicId) ?? null : null,
+    rosterCoordinator: r.staffId ? staffName.get(r.staffId) ?? null : null, rosterLastCcm: ymd(r.lastCcm),
+  });
+  const confirm = [], several = [], none = [];
+  for (const r of unlinked) {
+    const { bucket, pf } = decide(r);
+    if (pf && REVIEW.includes(bucket)) confirm.push({ ...rosterInfo(r), ...pfInfo(pf), reason: REVIEW_LABELS[bucket] ?? bucket });
+    else if (bucket === "ambiguous") several.push({ ...rosterInfo(r), candidates: candidates(r).map(pfInfo) });
+    else if (bucket === "no_match" || bucket === "no_match_no_dob") none.push(rosterInfo(r));
   }
-  return out.sort((a, b) => a.rosterName.localeCompare(b.rosterName));
+  const byName = <T extends { rosterName: string }>(a: T, b: T) => a.rosterName.localeCompare(b.rosterName);
+  return { confirm: confirm.sort(byName), several: several.sort(byName), none: none.sort(byName) };
+}
+
+/** Search the Practice Fusion records not linked to any roster patient (name in any order, birthday, phone). */
+export async function searchUnlinkedPf(q: string) {
+  const query = parseDirectoryQuery(q);
+  if (isEmptyQuery(query)) return [];
+  const { free } = await loadMatching();
+  const dir = await loadDirectory();
+  const d = await db();
+  const clinicName = new Map((await d.select({ id: clinics.id, name: clinics.name }).from(clinics)).map((c) => [c.id, c.name]));
+  return free
+    .filter((p) => (!query.dob || p.dob === query.dob) && (!query.digits || (p.phone ?? "").includes(query.digits)) && query.words.every((w) => p.t.words.some((x) => x.startsWith(w))))
+    .slice(0, 15)
+    .map((p) => {
+      const e = dir.get(p.key);
+      return { pfId: p.fhirId, pfName: p.name, pfDob: p.dob, pfPhoneLast4: p.phone ? p.phone.slice(-4) : null, pfClinic: e?.clinicId ? clinicName.get(e.clinicId) ?? null : null, pfProvider: e?.providerName ?? null, pfLastVisit: e?.lastVisit ?? null };
+    });
 }
 
 /** An admin confirms a pair: link it (only if both are still unlinked). */

@@ -1325,7 +1325,11 @@ export const workspaceRouter = router({
   recordMatching: router({
     list: protectedProcedure.query(async ({ ctx }) => {
       if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can match records." });
-      return rosterMatch.reviewCandidates();
+      return rosterMatch.matchingOverview();
+    }),
+    searchPf: protectedProcedure.input(z.object({ q: z.string().trim().min(2).max(100) })).query(async ({ ctx, input }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can match records." });
+      return rosterMatch.searchUnlinkedPf(input.q);
     }),
     confirm: protectedProcedure.input(z.object({ rosterId: z.number().int().positive(), pfId: z.string().min(1).max(128) })).mutation(async ({ ctx, input }) => {
       if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can match records." });
