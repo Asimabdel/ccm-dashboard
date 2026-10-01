@@ -109,19 +109,40 @@ const tokens = (name: string) => { const t = nameKey(name).split(" ").filter(Boo
  * A unique name without a date of birth is only a suggestion for staff to confirm.
  */
 export function matchFaxPatient(name: string | null, dob: string | null, people: PersonRef[]): { person: PersonRef; sure: boolean } | null {
-  if (!name) return null;
-  const n = tokens(name);
-  if (!n.first || !n.last) return null;
-  const same = (p: PersonRef) => { const t = tokens(p.name); return t.first === n.first && t.last === n.last; };
-  if (dob) {
-    const hits = people.filter((p) => p.dob === dob && same(p));
-    if (hits.length === 1) return { person: hits[0]!, sure: true };
-    // First name as an initial or a nickname: same DOB + same last name, only one such person.
-    const lastOnly = people.filter((p) => p.dob === dob && tokens(p.name).last === n.last);
-    if (lastOnly.length === 1) return { person: lastOnly[0]!, sure: false };
-    if (hits.length > 1) return null;
+  return makePersonMatcher(people)(name, dob);
+}
+
+/**
+ * The same matching as matchFaxPatient, with everyone's names worked out once up front. For matching
+ * many people against the same list (the Practice Fusion import): each lookup is then instant, instead
+ * of re-reading every name on the list each time.
+ */
+export function makePersonMatcher(people: PersonRef[]): (name: string | null, dob: string | null) => { person: PersonRef; sure: boolean } | null {
+  const byDobName = new Map<string, PersonRef[]>();
+  const byDobLast = new Map<string, PersonRef[]>();
+  const byName = new Map<string, PersonRef[]>();
+  const add = (m: Map<string, PersonRef[]>, k: string, p: PersonRef) => { const l = m.get(k); if (l) l.push(p); else m.set(k, [p]); };
+  for (const p of people) {
+    const t = tokens(p.name);
+    add(byName, `${t.first}|${t.last}`, p);
+    if (p.dob) {
+      add(byDobName, `${p.dob}|${t.first}|${t.last}`, p);
+      add(byDobLast, `${p.dob}|${t.last}`, p);
+    }
   }
-  const byName = people.filter(same);
-  const unique = Array.from(new Map(byName.map((p) => [p.key, p])).values());
-  return unique.length === 1 ? { person: unique[0]!, sure: false } : null;
+  return (name, dob) => {
+    if (!name) return null;
+    const n = tokens(name);
+    if (!n.first || !n.last) return null;
+    if (dob) {
+      const hits = byDobName.get(`${dob}|${n.first}|${n.last}`) ?? [];
+      if (hits.length === 1) return { person: hits[0]!, sure: true };
+      // First name as an initial or a nickname: same DOB + same last name, only one such person.
+      const lastOnly = byDobLast.get(`${dob}|${n.last}`) ?? [];
+      if (lastOnly.length === 1) return { person: lastOnly[0]!, sure: false };
+      if (hits.length > 1) return null;
+    }
+    const unique = Array.from(new Map((byName.get(`${n.first}|${n.last}`) ?? []).map((p) => [p.key, p])).values());
+    return unique.length === 1 ? { person: unique[0]!, sure: false } : null;
+  };
 }

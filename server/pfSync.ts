@@ -10,7 +10,7 @@ import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { appSettings, emailContacts, fhirPatients, fhirResources, patientTests, personDemographics } from "../drizzle/schema";
 import { chartLine, patientInfo, patientOf, sectionType, type FhirResource } from "../shared/fhir";
-import { matchFaxPatient, type PersonRef } from "../shared/fax";
+import { makePersonMatcher, type PersonRef } from "../shared/fax";
 import { recognizeTest } from "../shared/testing";
 import { localDateStr, localMinutes } from "../shared/workforce";
 import { relayFetch } from "./egress";
@@ -235,7 +235,14 @@ async function checkDownloads(s: PfSyncState): Promise<PfSyncState> {
 
 // ---- Loading ----
 
-interface LoadCtx { byFhirPatient: Map<string, { key: string; patientId: number | null }>; people: PersonRef[]; syncedAt: Date; manualSex: Set<string>; linkedEmails: Set<string> }
+interface LoadCtx {
+  byFhirPatient: Map<string, { key: string; patientId: number | null }>;
+  /** Name + date of birth → the MyPCP person (built once per run: matching thousands of patients must be instant). */
+  match: ReturnType<typeof makePersonMatcher>;
+  syncedAt: Date;
+  manualSex: Set<string>;
+  linkedEmails: Set<string>;
+}
 
 async function loadCtx(syncedAt: Date): Promise<LoadCtx> {
   const d = await db();
@@ -243,14 +250,18 @@ async function loadCtx(syncedAt: Date): Promise<LoadCtx> {
   const idx = await buildNameDobIndex();
   const manual = await d.select({ k: personDemographics.subjectKey }).from(personDemographics).where(eq(personDemographics.source, "manual"));
   const linked = await d.select({ e: emailContacts.email }).from(emailContacts).where(eq(emailContacts.source, "linked"));
+  const people: PersonRef[] = Array.from(idx.entries()).map(([k, v]) => ({ ...v, dob: k.split("|")[1] ?? null }));
   return {
     byFhirPatient: new Map(pts.map((p) => [p.fhirId, { key: p.key, patientId: p.patientId }])),
-    people: Array.from(idx.entries()).map(([k, v]) => ({ ...v, dob: k.split("|")[1] ?? null })),
+    match: makePersonMatcher(people),
     syncedAt,
     manualSex: new Set(manual.map((m) => m.k)),
     linkedEmails: new Set(linked.map((l) => l.e)),
   };
 }
+
+/** Records loaded between saves: a run must always get some saved before the Lambda's 30-second limit. */
+const SUB_BATCH = 200;
 
 async function load(s: PfSyncState, deadline: number): Promise<PfSyncState> {
   // Whole seconds: the database keeps datetimes to the second, and the clean-up below compares against this.
@@ -258,6 +269,7 @@ async function load(s: PfSyncState, deadline: number): Promise<PfSyncState> {
   for (const f of s.files) {
     if (f.status === "loaded") continue;
     while (Date.now() < deadline) {
+      const chunkStart = f.offset;
       let size = CHUNK;
       let buf = await readChunk(f.key, f.offset, size);
       let end = buf.length < size ? buf.length : buf.lastIndexOf(0x0a) + 1;
@@ -267,13 +279,28 @@ async function load(s: PfSyncState, deadline: number): Promise<PfSyncState> {
         end = buf.length < size ? buf.length : buf.lastIndexOf(0x0a) + 1;
       }
       if (end === 0 && buf.length === size) throw new Error(`A ${f.type} record is too large to load.`);
-      const lines = buf.subarray(0, end).toString("utf8").split("\n").filter((l) => l.trim());
-      const resources: FhirResource[] = [];
-      for (const l of lines) { try { resources.push(JSON.parse(l) as FhirResource); } catch { /* skip a bad line */ } }
-      await loadBatch(resources, ctx);
-      f.lines += lines.length;
-      s.counts[f.type] = (s.counts[f.type] ?? 0) + resources.length;
-      f.offset += end;
+      // Where each record (line) is, so progress can be saved part-way through the chunk.
+      const lineEnds: number[] = [];
+      for (let pos = 0; pos < end;) {
+        const nl = buf.indexOf(0x0a, pos);
+        pos = nl === -1 || nl >= end ? end : nl + 1;
+        lineEnds.push(pos);
+      }
+      for (let i = 0; i < lineEnds.length; i += SUB_BATCH) {
+        const from = i === 0 ? 0 : lineEnds[i - 1]!;
+        const to = lineEnds[Math.min(i + SUB_BATCH, lineEnds.length) - 1]!;
+        const lines = buf.subarray(from, to).toString("utf8").split("\n").filter((l) => l.trim());
+        const resources: FhirResource[] = [];
+        for (const l of lines) { try { resources.push(JSON.parse(l) as FhirResource); } catch { /* skip a bad line */ } }
+        await loadBatch(resources, ctx);
+        f.lines += lines.length;
+        s.counts[f.type] = (s.counts[f.type] ?? 0) + resources.length;
+        f.offset = chunkStart + to;
+        if (i + SUB_BATCH < lineEnds.length) {
+          await save(s); // resume point
+          if (Date.now() >= deadline) return s; // out of time mid-chunk; the next run picks up here
+        }
+      }
       if (buf.length < size || f.offset >= f.size) { f.status = "loaded"; await removeFile(f.key); break; }
       await save(s); // resume point
     }
@@ -300,25 +327,42 @@ const cut = (v: string | null, n: number) => (v ? v.slice(0, n) : null);
 async function loadBatch(resources: FhirResource[], ctx: LoadCtx) {
   if (!resources.length) return;
   const d = await db();
-  // 1) Patients: who each one is in MyPCP.
+  // 1) Patients: who each one is in MyPCP (written a batch at a time).
+  const ptRows: (typeof fhirPatients.$inferInsert)[] = [];
+  const sexRows: (typeof personDemographics.$inferInsert)[] = [];
+  const emailRows: (typeof emailContacts.$inferInsert)[] = [];
   for (const r of resources.filter((x) => x.resourceType === "Patient" && x.id)) {
     const info = patientInfo(r);
     const prev = ctx.byFhirPatient.get(info.fhirId);
-    const m = matchFaxPatient(info.name, info.dob, ctx.people);
+    const m = ctx.match(info.name, info.dob);
     const key = m?.sure ? m.person.key : prev && !prev.key.startsWith("f:") ? prev.key : `f:${info.fhirId}`;
     const patientId = key.startsWith("p:") ? Number(key.slice(2)) : null;
-    await d.insert(fhirPatients).values({ fhirId: info.fhirId, subjectKey: key, patientId, name: cut(info.name, 255), dob: info.dob, sex: info.sex, phone: info.phone, email: info.email, address: info.address, mrn: info.mrn, syncedAt: ctx.syncedAt })
-      .onDuplicateKeyUpdate({ set: { subjectKey: key, patientId, name: cut(info.name, 255), dob: info.dob, sex: info.sex, phone: info.phone, email: info.email, address: info.address, mrn: info.mrn, syncedAt: ctx.syncedAt } });
+    ptRows.push({ fhirId: info.fhirId, subjectKey: key, patientId, name: cut(info.name, 255), dob: info.dob, sex: info.sex, phone: info.phone, email: info.email, address: info.address, mrn: info.mrn, syncedAt: ctx.syncedAt });
     if (prev && prev.key !== key) await d.update(fhirResources).set({ subjectKey: key }).where(eq(fhirResources.patientFhirId, info.fhirId));
     ctx.byFhirPatient.set(info.fhirId, { key, patientId });
     // Sex for the testing tracker (staff corrections win) and the email address for patient emails.
-    if (info.sex && !ctx.manualSex.has(key)) {
-      await d.insert(personDemographics).values({ subjectKey: key, patientId, sex: info.sex, source: "import" }).onDuplicateKeyUpdate({ set: { sex: info.sex, source: "import" } });
-    }
-    if (info.email && !ctx.linkedEmails.has(info.email)) {
-      await d.insert(emailContacts).values({ email: info.email, kind: "patient", patientId, subjectKey: key, name: cut(info.name, 255), source: "import" })
-        .onDuplicateKeyUpdate({ set: { kind: "patient", patientId, subjectKey: key, name: cut(info.name, 255), source: "import" } });
-    }
+    if (info.sex && !ctx.manualSex.has(key)) sexRows.push({ subjectKey: key, patientId, sex: info.sex, source: "import" });
+    if (info.email && !ctx.linkedEmails.has(info.email)) emailRows.push({ email: info.email, kind: "patient", patientId, subjectKey: key, name: cut(info.name, 255), source: "import" });
+  }
+  if (ptRows.length) {
+    await d.insert(fhirPatients).values(ptRows).onDuplicateKeyUpdate({
+      set: {
+        subjectKey: sql`VALUES(${fhirPatients.subjectKey})`, patientId: sql`VALUES(${fhirPatients.patientId})`, name: sql`VALUES(${fhirPatients.name})`,
+        dob: sql`VALUES(${fhirPatients.dob})`, sex: sql`VALUES(${fhirPatients.sex})`, phone: sql`VALUES(${fhirPatients.phone})`, email: sql`VALUES(${fhirPatients.email})`,
+        address: sql`VALUES(${fhirPatients.address})`, mrn: sql`VALUES(${fhirPatients.mrn})`, syncedAt: sql`VALUES(${fhirPatients.syncedAt})`,
+      },
+    });
+  }
+  if (sexRows.length) {
+    await d.insert(personDemographics).values(sexRows).onDuplicateKeyUpdate({ set: { sex: sql`VALUES(${personDemographics.sex})`, source: sql`VALUES(${personDemographics.source})` } });
+  }
+  if (emailRows.length) {
+    await d.insert(emailContacts).values(emailRows).onDuplicateKeyUpdate({
+      set: {
+        kind: sql`VALUES(${emailContacts.kind})`, patientId: sql`VALUES(${emailContacts.patientId})`, subjectKey: sql`VALUES(${emailContacts.subjectKey})`,
+        name: sql`VALUES(${emailContacts.name})`, source: sql`VALUES(${emailContacts.source})`,
+      },
+    });
   }
   // 2) Every resource (patients included) into the chart copy.
   let rows: (typeof fhirResources.$inferInsert)[] = [];

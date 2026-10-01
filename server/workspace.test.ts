@@ -30,7 +30,7 @@ import { extractPhones, matchEmailSender, parseFromHeader, stripQuotedText } fro
 import { ageOn, evaluateTesting, parseSex, recognizeTest } from "../shared/testing";
 import { PLANS, checkInsurance, patientLine } from "../shared/insurance";
 import { orderMetrics, progressOf, usualPerDay, weekdaysLeftInMonth } from "../shared/metrics";
-import { isFaxEmail, matchFaxPatient, parseFaxMeta, parseFaxReading } from "../shared/fax";
+import { isFaxEmail, makePersonMatcher, matchFaxPatient, parseFaxMeta, parseFaxReading } from "../shared/fax";
 import { chartLine, patientInfo, patientOf, sectionType } from "../shared/fhir";
 import { clinicForLocation, parseBookingEmail, parsePreferred } from "../shared/booking";
 import { pcpIsOurs, splitName, summarizeCoverage } from "../shared/eligibility";
@@ -588,6 +588,17 @@ describe("fax inbox", () => {
     expect(matchFaxPatient("John Sample", null, people)).toBeNull(); // two John Samples
     expect(matchFaxPatient("John Sample", "1980-06-06", people)).toMatchObject({ person: { key: "p:3" }, sure: true });
     expect(matchFaxPatient(null, "1960-01-02", people)).toBeNull();
+  });
+  it("matches thousands of imported patients quickly with one prepared index (made-up people)", () => {
+    // Names are letters only (the name clean-up drops digits): person 7 → "Firsth Lasth".
+    const word = (n: number) => { let s = ""; do { s = String.fromCharCode(97 + (n % 26)) + s; n = Math.floor(n / 26); } while (n > 0); return s; };
+    const people = Array.from({ length: 15_000 }, (_, i) => ({ key: `s:person${i}`, patientId: null, name: `First${word(i)} Last${word(i % 5000)}`, dob: `19${String(40 + (i % 50)).padStart(2, "0")}-01-0${1 + (i % 9)}` }));
+    const match = makePersonMatcher(people);
+    const started = Date.now();
+    for (let i = 0; i < 5_000; i++) match(people[i]!.name, people[i]!.dob);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(match(people[7]!.name, people[7]!.dob)).toMatchObject({ person: { key: "s:person7" }, sure: true });
+    expect(match(people[7]!.name, people[7]!.dob)).toEqual(matchFaxPatient(people[7]!.name, people[7]!.dob, people));
   });
   it("fax settings are admin-only and MAs can't see faxes", async () => {
     await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.fax.status()).rejects.toThrow(/admin/);
