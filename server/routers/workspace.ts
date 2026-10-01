@@ -31,6 +31,8 @@ import * as docs from "../documentsDb";
 import * as square from "../squareDb";
 import * as folders from "../folderDb";
 import * as directory from "../directoryDb";
+import * as programs from "../programsDb";
+import { SUGGEST_PROGRAMS } from "../../shared/programRules";
 import { DIRECTORY_PROGRAMS, DIRECTORY_SORTS, DIRECTORY_STATUSES } from "../../shared/directory";
 import { FOLDER_SECTION_LIST, PATIENT_FILE_TYPE_LIST, type FolderSection, type PatientFileType } from "../../shared/folder";
 import { PAYMENT_CATEGORY_LIST, type PaymentCategory } from "../../shared/payments";
@@ -58,6 +60,12 @@ async function actorFor(ctx: Ctx, cap: WorkspaceCap): Promise<ws.WorkspaceActor>
     clinicIds,
     ip: (typeof fwd === "string" ? fwd.split(",")[0] : null) || ctx.req?.ip || null,
   };
+}
+
+/** Program approvals: only the people named as program approvers (office managers: their office). */
+async function programActor(ctx: Ctx): Promise<ws.WorkspaceActor> {
+  if (!(await programs.isProgramApprover(ctx.user.id))) throw new TRPCError({ code: "FORBIDDEN", message: "Only the program approvers can see this." });
+  return actorFor(ctx, "flowView");
 }
 
 /** Patient folders: anyone who can open a chart or the patient flow; each sub-folder checks its own rule. */
@@ -128,10 +136,11 @@ export const workspaceRouter = router({
   context: protectedProcedure.query(async ({ ctx }) => {
     const role = ctx.user.role;
     const caps = Object.fromEntries(Object.keys(WORKSPACE_CAPS).map((k) => [k, can(role, k as WorkspaceCap)])) as Record<WorkspaceCap, boolean>;
-    if (!caps.tasks && !caps.playbooksView) return { caps, clinics: [], limitedToClinics: false, noClinicAccess: false };
+    const programApprover = await programs.isProgramApprover(ctx.user.id);
+    if (!caps.tasks && !caps.playbooksView) return { caps, clinics: [], limitedToClinics: false, noClinicAccess: false, programApprover };
     const actor = await actorFor(ctx, caps.tasks ? "tasks" : "playbooksView");
     const clinics = await ws.listClinics(actor);
-    return { caps, clinics, limitedToClinics: actor.clinicIds !== null, noClinicAccess: actor.clinicIds !== null && actor.clinicIds.length === 0 };
+    return { caps, clinics, limitedToClinics: actor.clinicIds !== null, noClinicAccess: actor.clinicIds !== null && actor.clinicIds.length === 0, programApprover };
   }),
 
   home: protectedProcedure.input(z.object({ clinicId })).query(async ({ ctx, input }) => {
@@ -1263,6 +1272,41 @@ export const workspaceRouter = router({
     byKey: protectedProcedure.input(z.object({ key: patientKey })).query(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "flowView");
       return run(() => directory.patient360(actor, input.key));
+    }),
+  }),
+
+  /** Program approvals: patients whose diagnoses qualify them for CCM / BHI / RPM / APCM (approvers only). */
+  programs: router({
+    list: protectedProcedure
+      .input(z.object({
+        status: z.enum(["pending", "approved", "rejected"]).default("pending"),
+        program: z.enum(SUGGEST_PROGRAMS).nullish(),
+        clinicId,
+        q: z.string().trim().max(100).nullish(),
+        page: z.number().int().min(1).max(10_000).default(1),
+      }))
+      .query(async ({ ctx, input }) => {
+        const actor = await programActor(ctx);
+        return run(() => programs.listSuggestions(actor, input));
+      }),
+    count: protectedProcedure.query(async ({ ctx }) => {
+      if (!(await programs.isProgramApprover(ctx.user.id))) return { patients: 0 };
+      const actor = await actorFor(ctx, "flowView");
+      return { patients: await programs.pendingPatientCount(actor) };
+    }),
+    decide: protectedProcedure
+      .input(z.object({
+        decisions: z.array(z.object({ subjectKey: patientKey, approve: z.array(z.enum(SUGGEST_PROGRAMS)).max(4), reject: z.array(z.enum(SUGGEST_PROGRAMS)).max(4) })).min(1).max(25),
+        note: z.string().trim().max(255).nullish(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await programActor(ctx);
+        return run(() => programs.decideSuggestions(actor, input.decisions, input.note ?? null));
+      }),
+    /** Check everyone again now (it also runs every morning). */
+    scan: protectedProcedure.mutation(async ({ ctx }) => {
+      await programActor(ctx);
+      return run(() => programs.scanProgramSuggestions());
     }),
   }),
 

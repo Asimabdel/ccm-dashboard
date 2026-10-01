@@ -105,6 +105,16 @@ export const handler = async (event: any, context: any) => {
     const { runPfSync } = await import("../pfSync");
     return runPfSync({ deadline: Date.now() + 18_000 });
   }
+  // Every morning (EventBridge): who qualifies for care programs from their diagnoses (counts only in the log).
+  if (event && event.__job === "program-suggest" && !event.requestContext && !event.version) {
+    const { scanProgramSuggestions } = await import("../programsDb");
+    return scanProgramSuggestions();
+  }
+  // Who approves program suggestions, by name (IAM-only; dry run unless apply).
+  if (event && event.__job === "program-approvers" && !event.requestContext && !event.version) {
+    const { programApproversJob } = await import("../programsDb");
+    return programApproversJob({ names: Array.isArray(event.names) ? event.names.map(String) : [], apply: event.apply === true });
+  }
   // Every 5 minutes (EventBridge): copy new and changed Square payments (the webhook is the fast path).
   if (event && event.__job === "square-sync" && !event.requestContext && !event.version) {
     const { runSquareSync } = await import("../squareDb");

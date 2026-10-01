@@ -5,7 +5,7 @@ import { trpc } from "@/lib/trpc";
 import {
   LogOut, Menu, Bell, ChevronDown, Check, Clock, Search, Sun, Moon, PanelLeftClose, PanelLeftOpen, X, Building2, KeyRound,
 } from "lucide-react";
-import { NAV_GROUPS, ROLES, ROLE_HOME, type Role } from "@/lib/nav";
+import { NAV_GROUPS, PROGRAM_APPROVALS, ROLES, ROLE_HOME, type Role } from "@/lib/nav";
 import { useTheme } from "@/contexts/ThemeContext";
 import { CommandPalette } from "@/components/CommandPalette";
 import { useIdleLogout } from "@/hooks/useIdleLogout";
@@ -84,6 +84,9 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
   const { warning, secondsLeft, stayLoggedIn, logoutNow } = useIdleLogout({ enabled: !!user });
 
   const { data: notifications } = trpc.notifications.list.useQuery(undefined, { refetchInterval: 30000 });
+  // Program approvals: only the named approvers get the tab (with how many patients are waiting).
+  const { programApprover } = useWorkspace();
+  const approvals = trpc.workspace.programs.count.useQuery(undefined, { enabled: !!user && programApprover, refetchInterval: 5 * 60_000 });
   const markRead = trpc.notifications.markRead.useMutation({
     onSuccess: () => utils.notifications.list.invalidate(),
   });
@@ -108,7 +111,11 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
   if (!user) return null;
 
   const currentRole = (user.role in NAV_GROUPS ? user.role : "admin") as Role;
-  const groups = NAV_GROUPS[currentRole] || [];
+  const baseGroups = NAV_GROUPS[currentRole] || [];
+  const groups = programApprover
+    ? baseGroups.map((g, i) => (i === 0 ? { ...g, items: [...g.items.slice(0, 2), PROGRAM_APPROVALS, ...g.items.slice(2)] } : g))
+    : baseGroups;
+  const waitingApprovals = approvals.data?.patients ?? 0;
   const unread = (notifications || []).filter((n) => !n.read);
   const rail = !isMobile && collapsed;
   const initials = (user.name || user.email || "?").replace(/\(.*?\)/g, "").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
@@ -178,6 +185,9 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
                     {active && <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r bg-brand" />}
                     <Icon size={17} className={cn("shrink-0", active && "text-white")} />
                     {!rail && <span className="truncate">{item.label}</span>}
+                    {item.path === PROGRAM_APPROVALS.path && waitingApprovals > 0 && (
+                      <span className={cn("rounded-full bg-brand px-1.5 text-[11px] font-bold tabular-nums text-white", rail ? "absolute right-1 top-1" : "ml-auto")}>{waitingApprovals > 999 ? "999+" : waitingApprovals}</span>
+                    )}
                   </button>
                 );
               })}

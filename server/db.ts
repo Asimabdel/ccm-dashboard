@@ -1,4 +1,5 @@
 import { eq, and, or, gte, lte, desc, sql, like } from "drizzle-orm";
+import { countChronicConditions } from "../shared/programRules";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import {
@@ -1201,12 +1202,14 @@ export function apcmCptFor(level?: string | null): string {
  *   level_2 (G0557) = 2+ chronic conditions
  *   level_3 (G0558) = 2+ chronic conditions AND Qualified Medicare Beneficiary
  */
-export function computeApcmLevel(_conditionCount: number, isQMB: boolean): "level_1" | "level_2" | "level_3" {
-  // APCM here mirrors the CCM panel, and CCM eligibility REQUIRES 2+ chronic
-  // conditions — so every APCM patient is at least Level 2 (G0557). QMB raises them
-  // to Level 3 (G0558). Level 1 (a single chronic condition) cannot occur in the
-  // CCM-mirrored population, so we don't rely on the (often under-populated)
-  // chronicConditions list for the floor.
+export function computeApcmLevel(conditionCount: number, isQMB: boolean, mirrorsCcm = true): "level_1" | "level_2" | "level_3" {
+  // APCM mostly mirrors the CCM panel, and CCM eligibility REQUIRES 2+ chronic
+  // conditions — so a CCM-mirrored APCM patient is at least Level 2 (G0557). QMB raises
+  // them to Level 3 (G0558). We don't rely on the (often under-populated)
+  // chronicConditions list for that floor.
+  if (mirrorsCcm) return isQMB ? "level_3" : "level_2";
+  // APCM-only patients (not in CCM) are leveled by their conditions on file: 0–1 = Level 1 (G0556).
+  if (conditionCount < 2) return "level_1";
   return isQMB ? "level_3" : "level_2";
 }
 
@@ -1229,8 +1232,9 @@ export async function recomputeBilling(taskId: number, month: string) {
   // time-based (no 20-min rule) — it's a bundled service billed by complexity.
   const patient = await getPatientById(task.patientId);
   // CCM: a patient who declined CCM consent (e.g. said No on their consent form) must not be billed.
-  // Only a recorded "declined" blocks it; "pending" is how most of the roster was imported.
-  const ccmConsentOk = isBhi || isApcm || patient?.consentStatus !== "declined";
+  // Only a recorded "declined" blocks it; "pending" is how most of the roster was imported. Patients
+  // enrolled from a diagnosis-based program approval (ccmConsentRequired) bill only once they consent.
+  const ccmConsentOk = isBhi || isApcm || (patient?.ccmConsentRequired ? patient?.consentStatus === "consented" : patient?.consentStatus !== "declined");
   const lastVisit = patient?.lastOfficeVisit ? new Date(patient.lastOfficeVisit) : null;
   const twelveMonthsAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
   const threeYearsAgo = new Date(Date.now() - 3 * 365 * 24 * 60 * 60 * 1000);
@@ -1904,8 +1908,10 @@ export async function updatePatientAPCM(
 
   // Recompute complexity level from conditions + (possibly new) QMB status.
   const qmb = data.isQMB ?? (current.isQMB ?? false);
-  const conditionCount = ((current.chronicConditions as string[]) || []).length;
-  patch.apcmLevel = computeApcmLevel(conditionCount, !!qmb);
+  // APCM-only patients are leveled by the chronic conditions the program rules recognize (conservative:
+  // an unrecognized entry doesn't raise the level). CCM-mirrored patients keep the Level 2 floor.
+  const conditionCount = countChronicConditions(((current.chronicConditions as string[]) || []).filter(Boolean));
+  patch.apcmLevel = computeApcmLevel(conditionCount, !!qmb, current.ccmEnrollmentStatus === "active");
 
   await db.update(patients).set(patch as any).where(eq(patients.id, patientId));
 

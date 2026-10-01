@@ -1030,6 +1030,10 @@ interface ScheduleSubject {
 // Schedule history is read on every Home / Opportunity Finder load; keep it for a
 // minute per Lambda instance. Imports and flow-board moves clear it.
 const scheduleCache = new Map<string, { at: number; subjects: Map<string, ScheduleSubject> }>();
+/** After appointments are re-linked outside an import (e.g. someone added to the roster from a program approval). */
+export function clearScheduleCache() {
+  scheduleCache.clear();
+}
 
 export const subjectKeyFor = (patientId: number | null, name: string, dob: Date | null) => (patientId ? `p:${patientId}` : `s:${nameKey(name)}|${ymd(dob) ?? ""}`);
 

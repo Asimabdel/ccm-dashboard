@@ -43,6 +43,11 @@ const firstCode = (c: unknown): string | null => {
   const k = x?.coding?.find((y) => y.code);
   return k ? `${k.system?.split("/").pop() ?? ""}|${k.code}`.slice(0, 80) : null;
 };
+/** Diagnoses: the ICD-10 code when Practice Fusion sends one (program rules read it), else the first code. */
+const icdOrFirstCode = (c: unknown): string | null => {
+  const k = (c as CodeableConcept | undefined)?.coding?.find((y) => y.code && /icd-?10/i.test(y.system ?? ""));
+  return k ? `${k.system?.split("/").pop() ?? ""}|${k.code}`.slice(0, 80) : firstCode(c);
+};
 const qty = (q: unknown): string | null => {
   const x = q as Quantity | undefined;
   if (x?.value == null) return null;
@@ -93,7 +98,7 @@ export function chartLine(r: FhirResource): ChartLine {
   const status = (s: unknown) => (typeof s === "string" ? s : cc(s)) ?? null;
   switch (r.resourceType) {
     case "Condition":
-      return { title: cc(r.code), value: cc((r.category as unknown[] | undefined)?.[0]), status: status(r.clinicalStatus), date: ymd(r.onsetDateTime) ?? ymd(period(r.onsetPeriod)) ?? ymd(r.recordedDate), code: firstCode(r.code) };
+      return { title: cc(r.code), value: cc((r.category as unknown[] | undefined)?.[0]), status: status(r.clinicalStatus), date: ymd(r.onsetDateTime) ?? ymd(period(r.onsetPeriod)) ?? ymd(r.recordedDate), code: icdOrFirstCode(r.code) };
     case "Observation": {
       const comps = (r.component as { code?: CodeableConcept; valueQuantity?: Quantity }[] | undefined) ?? [];
       const bp = comps.length >= 2 && comps.every((c) => c.valueQuantity?.value != null)

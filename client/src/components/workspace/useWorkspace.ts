@@ -52,6 +52,8 @@ export function useWorkspace() {
     clinics,
     limitedToClinics: q.data?.limitedToClinics ?? false,
     noClinicAccess: q.data?.noClinicAccess ?? false,
+    /** One of the named people who approve program enrollments from diagnoses. */
+    programApprover: q.data?.programApprover ?? false,
     clinicId: effectiveClinic,
     setClinicId,
   };

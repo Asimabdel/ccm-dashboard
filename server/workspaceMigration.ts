@@ -641,6 +641,30 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     CONSTRAINT \`patientFiles_clinicId_fk\` FOREIGN KEY (\`clinicId\`) REFERENCES \`clinics\`(\`id\`),
     CONSTRAINT \`patientFiles_uploadedByUserId_fk\` FOREIGN KEY (\`uploadedByUserId\`) REFERENCES \`users\`(\`id\`),
     CONSTRAINT \`patientFiles_removedByUserId_fk\` FOREIGN KEY (\`removedByUserId\`) REFERENCES \`users\`(\`id\`))` },
+  // Program suggestions from diagnoses, waiting for an approver (added 2026-10-01).
+  { label: "programSuggestions", sql: `CREATE TABLE IF NOT EXISTS \`programSuggestions\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`subjectKey\` varchar(120) NOT NULL,
+    \`patientId\` int,
+    \`name\` varchar(255) NOT NULL,
+    \`dob\` varchar(10),
+    \`clinicId\` int,
+    \`program\` varchar(10) NOT NULL,
+    \`status\` varchar(12) NOT NULL DEFAULT 'pending',
+    \`reason\` varchar(500) NOT NULL,
+    \`diagnoses\` json,
+    \`fingerprint\` varchar(255) NOT NULL,
+    \`lastVisit\` varchar(10),
+    \`decidedByUserId\` int,
+    \`decidedAt\` datetime,
+    \`decisionNote\` varchar(255),
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+    INDEX \`programSuggestions_status_idx\` (\`status\`, \`clinicId\`),
+    INDEX \`programSuggestions_subject_idx\` (\`subjectKey\`, \`program\`),
+    CONSTRAINT \`programSuggestions_patientId_fk\` FOREIGN KEY (\`patientId\`) REFERENCES \`patients\`(\`id\`),
+    CONSTRAINT \`programSuggestions_clinicId_fk\` FOREIGN KEY (\`clinicId\`) REFERENCES \`clinics\`(\`id\`),
+    CONSTRAINT \`programSuggestions_decidedByUserId_fk\` FOREIGN KEY (\`decidedByUserId\`) REFERENCES \`users\`(\`id\`))` },
   // Provider teams (added 2026-09-30): who gets a provider's patient emails.
   { label: "providerTeamMembers", sql: `CREATE TABLE IF NOT EXISTS \`providerTeamMembers\` (
     \`id\` int AUTO_INCREMENT PRIMARY KEY,
@@ -862,6 +886,8 @@ const INTAKE_COLUMNS: { table: string; column: string; ddl: string }[] = [
   // Added 2026-09-30: a provider's signature applied by staff with the provider's approval.
   { table: "documentSignatures", column: "onBehalfOfUserId", ddl: "`onBehalfOfUserId` int NULL AFTER `sha256`" },
   { table: "documentSignatures", column: "approvalMethod", ddl: "`approvalMethod` varchar(20) NULL AFTER `onBehalfOfUserId`" },
+  // Added 2026-10-01: patients enrolled from a program approval bill CCM only with signed consent.
+  { table: "patients", column: "ccmConsentRequired", ddl: "`ccmConsentRequired` boolean DEFAULT false AFTER `rpmConsentDate`" },
   { table: "documentSignatures", column: "approvalNote", ddl: "`approvalNote` varchar(255) NULL AFTER `approvalMethod`" },
 ];
 async function upgradeIntake(db: Db): Promise<string[]> {

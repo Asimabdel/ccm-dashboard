@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, ClipboardList, UserCog, AlertTriangle, Receipt,
   BarChart3, PhoneCall, CalendarClock, ShieldCheck, Building2, Stethoscope, Target,
   UserMinus, Ban, Pill, PhoneOutgoing, Activity, Sunrise, CalendarDays, BriefcaseBusiness,
-  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature, FileSignature, Wallet, HeartPulse,
+  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature, FileSignature, Wallet, HeartPulse, ClipboardCheck,
 } from "lucide-react";
 
 export interface NavItem {
@@ -26,6 +26,8 @@ const OPPORTUNITIES: NavItem = { label: "Opportunities", path: "/opportunities",
 // Everyone at the clinics (Practice Fusion + schedule + CCM list); the CCM list itself is the CCM roster.
 const PATIENTS: NavItem = { label: "Patients", path: "/patients", icon: Users };
 const CCM_ROSTER: NavItem = { label: "CCM roster", path: "/ccm-roster", icon: HeartPulse };
+/** Only for the named program approvers (added to their sidebar by the layout, whatever their role). */
+export const PROGRAM_APPROVALS: NavItem = { label: "Program approvals", path: "/program-approvals", icon: ClipboardCheck };
 const PLAYBOOKS: NavItem = { label: "Playbooks", path: "/playbooks", icon: BookOpen };
 const EMAILS: NavItem = { label: "Patient emails", path: "/patient-emails", icon: Mail };
 const FAXES: NavItem = { label: "Fax inbox", path: "/faxes", icon: Printer };

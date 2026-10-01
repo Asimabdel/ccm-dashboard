@@ -50,6 +50,7 @@ import DocumentsPage from "./pages/DocumentsPage";
 import PaymentsPage from "./pages/PaymentsPage";
 import FolderPage from "./pages/FolderPage";
 import DirectoryPage from "./pages/DirectoryPage";
+import ProgramApprovalsPage from "./pages/ProgramApprovalsPage";
 import { RingCentralPhone } from "./components/phone/RingCentralPhone";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
 
@@ -75,6 +76,7 @@ function Router() {
       {/* Patients = everyone at the clinics; the CCM list is the CCM roster. */}
       <Route path="/patients" component={DirectoryPage} />
       <Route path="/ccm-roster" component={PatientsPage} />
+      <Route path="/program-approvals" component={ProgramApprovalsPage} />
       <Route path="/inactive-patients" component={InactivePatientsPage} />
       <Route path="/declined-patients" component={DeclinedPatientsPage} />
       <Route path="/patients/import" component={BulkImportPage} />

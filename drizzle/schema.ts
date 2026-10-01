@@ -157,6 +157,8 @@ export const patients = mysqlTable("patients", {
   rpmDeviceType: varchar("rpmDeviceType", { length: 100 }),
   rpmConsentStatus: mysqlEnum("rpmConsentStatus", ["consented", "pending", "declined"]).default("pending"),
   rpmConsentDate: datetime("rpmConsentDate"),
+  /** Enrolled from a diagnosis-based program approval: CCM bills only once consent is signed. */
+  ccmConsentRequired: boolean("ccmConsentRequired").default(false),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, (t) => ({
@@ -1099,6 +1101,35 @@ export const fhirResources = mysqlTable("fhirResources", {
   subjectIdx: index("fhirResources_subject_idx").on(t.subjectKey, t.section, t.date),
   syncedIdx: index("fhirResources_synced_idx").on(t.syncedAt),
   sectionIdx: index("fhirResources_section_idx").on(t.section, t.subjectKey),
+}));
+
+/**
+ * Program suggestions from diagnoses (shared/programRules.ts): a patient whose Practice Fusion problem
+ * list qualifies them for CCM / BHI / RPM / APCM waits here until an approver (named people only)
+ * approves (they're enrolled) or says not now (it stands until their qualifying diagnoses change).
+ */
+export const programSuggestions = mysqlTable("programSuggestions", {
+  id: int("id").autoincrement().primaryKey(),
+  subjectKey: varchar("subjectKey", { length: 120 }).notNull(),
+  patientId: int("patientId").references(() => patients.id),
+  name: varchar("name", { length: 255 }).notNull(),
+  dob: varchar("dob", { length: 10 }),
+  clinicId: int("clinicId").references(() => clinics.id),
+  program: varchar("program", { length: 10 }).notNull(),
+  /** pending | approved | rejected | withdrawn (no longer qualifies, or enrolled another way) */
+  status: varchar("status", { length: 12 }).default("pending").notNull(),
+  reason: varchar("reason", { length: 500 }).notNull(),
+  diagnoses: json("diagnoses").$type<{ category: string; label: string; title: string; icd: string | null }[]>(),
+  fingerprint: varchar("fingerprint", { length: 255 }).notNull(),
+  lastVisit: varchar("lastVisit", { length: 10 }),
+  decidedByUserId: int("decidedByUserId").references(() => users.id),
+  decidedAt: datetime("decidedAt"),
+  decisionNote: varchar("decisionNote", { length: 255 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  statusIdx: index("programSuggestions_status_idx").on(t.status, t.clinicId),
+  subjectIdx: index("programSuggestions_subject_idx").on(t.subjectKey, t.program),
 }));
 
 /** Appointment requests from the mypcpdr.com booking wizard (the front desk calls to confirm). */
