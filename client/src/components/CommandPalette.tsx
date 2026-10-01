@@ -10,6 +10,8 @@ import {
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { NAV, type Role } from "@/lib/nav";
+import { useWorkspace } from "@/components/workspace/useWorkspace";
+import { patientHref } from "@shared/folder";
 
 /**
  * Global ⌘K / Ctrl+K command palette: jump to any page, search patients live,
@@ -53,12 +55,21 @@ export function CommandPalette() {
   const navItems = NAV[role] || [];
   const isAdmin = user?.role === "admin";
 
-  const patientsQ = trpc.patients.list.useQuery(
-    { search: debounced },
-    // MAs have no access to the CCM roster search (the server fences it too).
-    { enabled: open && debounced.length >= 2 && user?.role !== "medical_assistant" }
+  // Everyone at the clinics (Patients list) for staff with the patient view; billing searches the CCM roster.
+  const { caps } = useWorkspace();
+  const everyone = !!caps?.flowView;
+  const directoryQ = trpc.workspace.directory.list.useQuery(
+    { q: debounced, status: "all", sort: "name", page: 1 },
+    { enabled: open && debounced.length >= 2 && everyone }
   );
-  const patients = patientsQ.data || [];
+  const rosterQ = trpc.patients.list.useQuery(
+    { search: debounced },
+    { enabled: open && debounced.length >= 2 && !everyone && user?.role !== "medical_assistant" }
+  );
+  const patientsQ = everyone ? directoryQ : rosterQ;
+  const patients = everyone
+    ? (directoryQ.data?.rows ?? []).map((r) => ({ key: r.key, name: r.name, hint: [r.dob ? `DOB ${r.dob.slice(5, 7)}/${r.dob.slice(8, 10)}/${r.dob.slice(0, 4)}` : null, r.clinicName].filter(Boolean).join(" · "), phone: r.phone ?? "" }))
+    : (rosterQ.data ?? []).map((row) => ({ key: `p:${row.patient.id}`, name: row.patient.name, hint: row.clinicName || row.patient.phoneNumber, phone: row.patient.phoneNumber }));
 
   const seed = trpc.admin.seed.useMutation({
     onSuccess: async (s) => {
@@ -108,15 +119,13 @@ export function CommandPalette() {
           <CommandGroup heading="Patients">
             {patients.slice(0, 8).map((row) => (
               <CommandItem
-                key={row.patient.id}
-                value={`patient ${row.patient.name} ${row.patient.phoneNumber}`}
-                onSelect={() => run(() => setLocation(`/patients/${row.patient.id}`))}
+                key={row.key}
+                value={`patient ${row.name} ${row.phone} ${debounced}`}
+                onSelect={() => run(() => setLocation(everyone ? patientHref(row.key, "overview") : `/patients/${row.key.slice(2)}`))}
               >
                 <UserIcon />
-                <span>{row.patient.name}</span>
-                <span className="ml-auto text-xs text-muted-foreground truncate max-w-[40%]">
-                  {row.clinicName || row.patient.phoneNumber}
-                </span>
+                <span>{row.name}</span>
+                <span className="ml-auto text-xs text-muted-foreground truncate max-w-[45%]">{row.hint}</span>
               </CommandItem>
             ))}
           </CommandGroup>

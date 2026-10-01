@@ -30,6 +30,8 @@ import * as availity from "../availityDb";
 import * as docs from "../documentsDb";
 import * as square from "../squareDb";
 import * as folders from "../folderDb";
+import * as directory from "../directoryDb";
+import { DIRECTORY_PROGRAMS, DIRECTORY_SORTS, DIRECTORY_STATUSES } from "../../shared/directory";
 import { FOLDER_SECTION_LIST, PATIENT_FILE_TYPE_LIST, type FolderSection, type PatientFileType } from "../../shared/folder";
 import { PAYMENT_CATEGORY_LIST, type PaymentCategory } from "../../shared/payments";
 import { CONSENT_KINDS, INTAKE_LANGS } from "../../shared/intake";
@@ -183,6 +185,8 @@ export const workspaceRouter = router({
           title: z.string().trim().min(1).max(255),
           description: z.string().max(5000).nullish(),
           patientId: z.number().int().positive().nullish(),
+          /** Anyone not on the CCM roster (Patient 360 for schedule / Practice Fusion-only patients). */
+          subjectKey: patientKey.nullish(),
           clinicId,
           assignedUserId: z.number().int().positive().nullish(),
           assignedRole: z.enum(["admin", "staff", "provider", "billing", "front_desk", "medical_assistant"]).nullish(),
@@ -195,7 +199,16 @@ export const workspaceRouter = router({
         const actor = await actorFor(ctx, "tasks");
         const assigningOthers = (input.assignedUserId && input.assignedUserId !== ctx.user.id) || !!input.assignedRole;
         if (assigningOthers && !can(ctx.user.role, "assignTasks")) throw new TRPCError({ code: "FORBIDDEN", message: "You can only create tasks for yourself." });
-        return run(() => ws.createTask(actor, input as ws.CreateTaskInput));
+        let task = input as ws.CreateTaskInput;
+        if (!input.patientId && input.subjectKey) {
+          if (/^p:d+$/.test(input.subjectKey)) task = { ...task, patientId: Number(input.subjectKey.slice(2)), subjectKey: null };
+          else {
+            const who = await directory.subjectForTask(input.subjectKey);
+            if (!who) throw new TRPCError({ code: "NOT_FOUND", message: "Patient not found." });
+            task = { ...task, subjectName: who.name, clinicId: input.clinicId ?? who.clinicId };
+          }
+        }
+        return run(() => ws.createTask(actor, task));
       }),
     update: protectedProcedure
       .input(
@@ -1246,6 +1259,29 @@ export const workspaceRouter = router({
       const actor = await actorFor(ctx, "flowView");
       return run(() => ws.patientOperational(actor, input));
     }),
+    /** Patient 360 for anyone: roster, schedule-only or Practice Fusion-only. */
+    byKey: protectedProcedure.input(z.object({ key: patientKey })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "flowView");
+      return run(() => directory.patient360(actor, input.key));
+    }),
+  }),
+
+  /** The Patients tab: every patient of the practice (clinic-limited staff see their clinic's). */
+  directory: router({
+    list: protectedProcedure
+      .input(z.object({
+        q: z.string().trim().max(100).nullish(),
+        status: z.enum(DIRECTORY_STATUSES).default("active"),
+        clinicId: z.union([z.number().int().positive(), z.literal("none")]).nullish(),
+        providerId: z.number().int().positive().nullish(),
+        program: z.enum(DIRECTORY_PROGRAMS).nullish(),
+        sort: z.enum(DIRECTORY_SORTS).default("name"),
+        page: z.number().int().min(1).max(10_000).default(1),
+      }))
+      .query(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "flowView");
+        return run(() => directory.listDirectory(actor, input));
+      }),
   }),
 
   playbooks: router({

@@ -37,11 +37,14 @@ export const MAX_PATIENT_FILE_BYTES = 25 * 1024 * 1024;
 
 export const isPatientKey = (key: string) => /^(p:\d+|s:.{1,110}|f:.{1,120})$/.test(key);
 
-/** Where a patient's folder is: the Folder tab of Patient 360 for roster patients, else its own page. */
-export const folderHref = (key: string, section?: FolderSection | null) => {
-  const q = section ? `s=${section}` : "";
-  return /^p:\d+$/.test(key) ? `/patients/${key.slice(2)}?tab=folder${q ? `&${q}` : ""}` : `/folder/${encodeURIComponent(key)}${q ? `?${q}` : ""}`;
+/** Patient 360 for anyone: roster patients by their number, everyone else by their patient key. */
+export const patientHref = (key: string, tab?: string | null, extra?: string) => {
+  const q = [tab ? `tab=${tab}` : "", extra ?? ""].filter(Boolean).join("&");
+  return `/patients/${/^p:\d+$/.test(key) ? key.slice(2) : encodeURIComponent(key)}${q ? `?${q}` : ""}`;
 };
+
+/** Where a patient's folder is: the Folder tab of their Patient 360. */
+export const folderHref = (key: string, section?: FolderSection | null) => patientHref(key, "folder", section ? `s=${section}` : "");
 
 /** How an item in the folder opens. */
 export type FolderOpen =

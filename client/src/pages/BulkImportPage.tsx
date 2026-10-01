@@ -40,7 +40,7 @@ export default function BulkImportPage() {
       toast.success(`Imported ${r.inserted} patients. Skipped ${r.skippedDuplicates} duplicates, ${r.invalid} invalid rows.`);
       utils.patients.list.invalidate();
       utils.patients.duplicates.invalidate();
-      setLocation("/patients");
+      setLocation("/ccm-roster");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -76,7 +76,7 @@ export default function BulkImportPage() {
 
   return (
     <CCMDashboardLayout title="Bulk Import Patients">
-      <button onClick={() => setLocation("/patients")} className="inline-flex items-center gap-1.5 text-sm text-slate-600 hover:text-slate-900 mb-4">
+      <button onClick={() => setLocation("/ccm-roster")} className="inline-flex items-center gap-1.5 text-sm text-slate-600 hover:text-slate-900 mb-4">
         <ArrowLeft size={15} /> Back to Patient Database
       </button>
 

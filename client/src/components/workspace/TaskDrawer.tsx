@@ -5,6 +5,7 @@ import { CheckCircle2, User, Building2, CalendarClock, Tag, MessageSquare, Loade
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { trpc } from "@/lib/trpc";
 import { localDateStr } from "@shared/workforce";
+import { patientHref } from "@shared/folder";
 import {
   TASK_CATEGORY_LABELS, TASK_PRIORITIES, TASK_PRIORITY_LABELS, TASK_STATUSES, TASK_STATUS_LABELS, WORKSPACE_ROLE_LABELS,
   type TaskCategory,
@@ -129,10 +130,10 @@ export function TaskDrawer({ taskId, onClose }: { taskId: number | null; onClose
 
               {t.description && <p className="text-sm text-slate-700 dark:text-slate-200 whitespace-pre-wrap">{t.description}</p>}
 
-              {t.patientId && (
+              {(t.patientId || t.subjectKey) && (
                 <div className="rounded-xl bg-slate-50 dark:bg-slate-800 p-4">
                   <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1">Patient</p>
-                  <Link href={`/patients/${t.patientId}?tab=tasks`} className="font-semibold text-slate-900 dark:text-slate-50 hover:underline">{t.patientName}</Link>
+                  <Link href={patientHref(t.patientId ? `p:${t.patientId}` : t.subjectKey!, "tasks")} className="font-semibold text-slate-900 dark:text-slate-50 hover:underline">{t.patientName}</Link>
                   <p className="text-xs text-slate-500 mt-0.5">
                     {t.patientDob ? `DOB ${fmtDob(t.patientDob)}` : ""}
                     {t.patientDob && t.patientPhone ? " · " : ""}

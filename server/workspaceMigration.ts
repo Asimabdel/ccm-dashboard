@@ -922,6 +922,18 @@ async function upgradeStaffProfiles(db: Db): Promise<string[]> {
   return applied;
 }
 
+/** Tasks about patients who aren't on the CCM roster (added 2026-10-01). */
+async function upgradeWorkTasks(db: Db): Promise<string[]> {
+  const cols = await rows<{ c: string }>(db, sql`SELECT COLUMN_NAME AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'workTasks'`);
+  if (!cols.length) return [];
+  const applied: string[] = [];
+  if (!cols.some((c) => c.c === "subjectKey")) {
+    await db.execute(sql.raw("ALTER TABLE `workTasks` ADD COLUMN `subjectKey` varchar(120) NULL AFTER `patientId`, ADD COLUMN `subjectName` varchar(255) NULL AFTER `subjectKey`, ADD INDEX `workTasks_subject_idx` (`subjectKey`)"));
+    applied.push("workTasks.subjectKey + subjectName added");
+  }
+  return applied;
+}
+
 const NEW_TABLES = ["workTasks", "workTaskActivities", "appointments", "appointmentStatusEvents", "scheduleImports", "opportunityActions", "playbooks", "playbookVersions"];
 const WATCHED_TABLES = ["users", "patients", "clinics", "providers", "ccmTasks", "ccmNotes", "billingRecords", "followUpItems", "providerEscalations", "refillRequests", "reachOutContacts", "notifications", "auditLogs"];
 
@@ -978,6 +990,7 @@ export async function runWorkspaceMigration(): Promise<string[]> {
     applied.push(s.label);
   }
   applied.push(...(await upgradeOpportunityActions(db)));
+  applied.push(...(await upgradeWorkTasks(db)));
   applied.push(...(await upgradeStaffProfiles(db)));
   applied.push(...(await upgradeShifts(db)));
   applied.push(...(await upgradePhoneCalls(db)));

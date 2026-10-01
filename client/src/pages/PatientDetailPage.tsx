@@ -295,7 +295,7 @@ export default function PatientDetailPage({ embedded = false, patientId }: { emb
     onError: (e) => toast.error(e.message),
   });
   const removePatient = trpc.patients.remove.useMutation({
-    onSuccess: () => { toast.success("Patient deleted."); setLocation("/patients"); },
+    onSuccess: () => { toast.success("Patient deleted."); setLocation("/ccm-roster"); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -501,8 +501,8 @@ export default function PatientDetailPage({ embedded = false, patientId }: { emb
   if (embedded) return body;
   return (
     <CCMDashboardLayout title="Patient Profile">
-      <button onClick={() => setLocation("/patients")} className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800 mb-4">
-        <ArrowLeft size={16} /> Back to Patients
+      <button onClick={() => setLocation("/ccm-roster")} className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800 mb-4">
+        <ArrowLeft size={16} /> Back to CCM roster
       </button>
       {body}
     </CCMDashboardLayout>

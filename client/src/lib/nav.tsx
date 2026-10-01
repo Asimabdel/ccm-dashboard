@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, ClipboardList, UserCog, AlertTriangle, Receipt,
   BarChart3, PhoneCall, CalendarClock, ShieldCheck, Building2, Stethoscope, Target,
   UserMinus, Ban, Pill, PhoneOutgoing, Activity, Sunrise, CalendarDays, BriefcaseBusiness,
-  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature, FileSignature, Wallet,
+  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature, FileSignature, Wallet, HeartPulse,
 } from "lucide-react";
 
 export interface NavItem {
@@ -23,7 +23,9 @@ const HOME: NavItem = { label: "Home", path: "/home", icon: Home };
 const MY_WORK: NavItem = { label: "My Work", path: "/my-work", icon: ListTodo };
 const FLOW: NavItem = { label: "Patient Flow", path: "/patient-flow", icon: Waypoints };
 const OPPORTUNITIES: NavItem = { label: "Opportunities", path: "/opportunities", icon: Radar };
+// Everyone at the clinics (Practice Fusion + schedule + CCM list); the CCM list itself is the CCM roster.
 const PATIENTS: NavItem = { label: "Patients", path: "/patients", icon: Users };
+const CCM_ROSTER: NavItem = { label: "CCM roster", path: "/ccm-roster", icon: HeartPulse };
 const PLAYBOOKS: NavItem = { label: "Playbooks", path: "/playbooks", icon: BookOpen };
 const EMAILS: NavItem = { label: "Patient emails", path: "/patient-emails", icon: Mail };
 const FAXES: NavItem = { label: "Fax inbox", path: "/faxes", icon: Printer };
@@ -51,6 +53,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
       label: "Care Management",
       items: [
         { label: "CCM Dashboard", path: "/admin", icon: LayoutDashboard },
+        CCM_ROSTER,
         { label: "Monthly Worklist", path: "/worklist", icon: ClipboardList },
         { label: "Staff Assignment", path: "/assignment", icon: UserCog },
         { label: "APCM", path: "/apcm", icon: Activity },
@@ -87,7 +90,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
   ],
   // Admin for one office (their home clinic): everything here is limited to that office. No CCM pages.
   office_manager: [
-    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, DOCUMENTS, FLOW, OPPORTUNITIES, INSURANCE, PAYMENTS, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, DOCUMENTS, FLOW, OPPORTUNITIES, PATIENTS, INSURANCE, PAYMENTS, PLAYBOOKS] },
     {
       label: "My office",
       items: [
@@ -105,6 +108,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
       items: [
         { label: "CCM Dashboard", path: "/coordinator", icon: LayoutDashboard },
         { label: "My Worklist", path: "/worklist", icon: ClipboardList },
+        CCM_ROSTER,
         { label: "Call Workflow", path: "/workflow", icon: PhoneCall },
         { label: "APCM", path: "/apcm", icon: Activity },
         { label: "Reach Out", path: "/reach-out", icon: PhoneOutgoing },
@@ -119,6 +123,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
     {
       label: "Care Management",
       items: [
+        CCM_ROSTER,
         { label: "Refill Requests", path: "/refill-requests", icon: Pill },
         { label: "Escalations", path: "/escalations", icon: AlertTriangle },
       ],
@@ -138,14 +143,14 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
   ],
   front_desk: [
     { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, DOCUMENTS, EMAILS, FAXES, FLOW, OPPORTUNITIES, PATIENTS, INSURANCE, PAYMENTS, PLAYBOOKS] },
-    { label: "Care Management", items: [{ label: "Follow-ups", path: "/follow-ups", icon: CalendarClock }] },
+    { label: "Care Management", items: [CCM_ROSTER, { label: "Follow-ups", path: "/follow-ups", icon: CalendarClock }] },
     ME,
   ],
   // MAs get operational pages only; the server fences CCM/billing data away from them.
   // Since 2026-10-01: the front desk's pages (each limited to the clinic they work at).
   medical_assistant: [
     { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, DOCUMENTS, EMAILS, FAXES, FLOW, OPPORTUNITIES, PATIENTS, INSURANCE, PAYMENTS, PLAYBOOKS] },
-    { label: "Care Management", items: [{ label: "Follow-ups", path: "/follow-ups", icon: CalendarClock }] },
+    { label: "Care Management", items: [CCM_ROSTER, { label: "Follow-ups", path: "/follow-ups", icon: CalendarClock }] },
     ME,
   ],
 };

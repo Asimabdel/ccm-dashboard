@@ -739,6 +739,9 @@ export const workTasks = mysqlTable("workTasks", {
   title: varchar("title", { length: 255 }).notNull(),
   description: text("description"),
   patientId: int("patientId").references(() => patients.id),
+  /** A patient who isn't on the CCM roster ("s:" schedule, "f:" Practice Fusion only), and their name. */
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  subjectName: varchar("subjectName", { length: 255 }),
   clinicId: int("clinicId").references(() => clinics.id),
   assignedUserId: int("assignedUserId").references(() => users.id),
   /** Role queue (e.g. "front_desk") when not assigned to a person. */
@@ -759,6 +762,7 @@ export const workTasks = mysqlTable("workTasks", {
   assigneeStatusIdx: index("workTasks_assignee_status_idx").on(t.assignedUserId, t.status),
   statusDueIdx: index("workTasks_status_due_idx").on(t.status, t.dueDate),
   patientIdx: index("workTasks_patient_idx").on(t.patientId),
+  subjectIdx: index("workTasks_subject_idx").on(t.subjectKey),
 }));
 
 export type WorkTask = typeof workTasks.$inferSelect;

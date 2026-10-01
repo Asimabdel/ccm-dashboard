@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { folderHref, isPatientKey, snippetAround, sortItems } from "../shared/folder";
+import { folderHref, isPatientKey, patientHref, snippetAround, sortItems } from "../shared/folder";
 import { folderSectionsFor } from "./folderDb";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
@@ -37,8 +37,11 @@ describe("patient folders", () => {
   it("links to the right place", () => {
     expect(folderHref("p:12")).toBe("/patients/12?tab=folder");
     expect(folderHref("p:12", "faxes")).toBe("/patients/12?tab=folder&s=faxes");
-    expect(folderHref("f:abc")).toBe("/folder/f%3Aabc");
-    expect(folderHref("s:jane example|1960-01-02", "chart")).toBe("/folder/s%3Ajane%20example%7C1960-01-02?s=chart");
+    // Everyone has a Patient 360 now; non-roster patients are addressed by their key.
+    expect(folderHref("f:abc")).toBe("/patients/f%3Aabc?tab=folder");
+    expect(folderHref("s:jane example|1960-01-02", "chart")).toBe("/patients/s%3Ajane%20example%7C1960-01-02?tab=folder&s=chart");
+    expect(patientHref("p:12", "overview")).toBe("/patients/12?tab=overview");
+    expect(patientHref("f:abc")).toBe("/patients/f%3Aabc");
   });
 
   it("finds the words around a match and sorts newest first", () => {

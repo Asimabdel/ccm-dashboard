@@ -473,7 +473,8 @@ const taskSelect = {
   assignedUserId: workTasks.assignedUserId,
   assignedRole: workTasks.assignedRole,
   patientId: workTasks.patientId,
-  patientName: patients.name,
+  subjectKey: workTasks.subjectKey,
+  patientName: sql<string | null>`coalesce(${patients.name}, ${workTasks.subjectName})`,
   clinicId: workTasks.clinicId,
   clinicName: clinics.name,
   assigneeName: users.name,
@@ -542,7 +543,7 @@ export async function taskDetail(actor: WorkspaceActor, taskId: number) {
   const t = await loadVisibleTask(actor, taskId);
   const d = await db();
   const [extra] = await d
-    .select({ patientName: patients.name, patientDob: patients.dateOfBirth, patientPhone: patients.phoneNumber, clinicName: clinics.name, assigneeName: users.name })
+    .select({ patientName: sql<string | null>`coalesce(${patients.name}, ${workTasks.subjectName})`, patientDob: patients.dateOfBirth, patientPhone: patients.phoneNumber, clinicName: clinics.name, assigneeName: users.name })
     .from(workTasks)
     .leftJoin(patients, eq(workTasks.patientId, patients.id))
     .leftJoin(clinics, eq(workTasks.clinicId, clinics.id))
@@ -575,6 +576,9 @@ export interface CreateTaskInput {
   title: string;
   description?: string | null;
   patientId?: number | null;
+  /** Someone not on the CCM roster ("s:"/"f:" key), with their name. */
+  subjectKey?: string | null;
+  subjectName?: string | null;
   clinicId?: number | null;
   assignedUserId?: number | null;
   assignedRole?: string | null;
@@ -599,6 +603,8 @@ export async function createTask(actor: WorkspaceActor, input: CreateTaskInput) 
     title: input.title,
     description: input.description ?? null,
     patientId: input.patientId ?? null,
+    subjectKey: input.patientId ? null : input.subjectKey ?? null,
+    subjectName: input.patientId ? null : input.subjectName?.slice(0, 255) ?? null,
     clinicId,
     assignedUserId,
     assignedRole: assignedUserId ? null : (input.assignedRole ?? null),
@@ -1360,6 +1366,8 @@ export async function actOnOpportunities(
         title: `${input.taskTitle} — ${c.name}`,
         description: `Created from Opportunity Finder${reason ? ` (${reason})` : ""}.${details} No one has contacted the patient yet.`,
         patientId: c.patientId,
+        subjectKey: c.patientId ? null : c.key,
+        subjectName: c.patientId ? null : c.name,
         clinicId: c.clinicId,
         assignedUserId: input.assigneeId ?? null,
         assignedRole: input.assigneeId ? null : "staff",
@@ -1497,6 +1505,8 @@ export async function scheduleFillAct(
         title: `${input.taskTitle} — ${c.name}`,
         description: `Fill ${prov.name}'s schedule: ${c.reason}.${c.phoneNumber ? ` Phone ${c.phoneNumber}.` : " No phone on file."}${details} No one has contacted the patient yet.`,
         patientId: c.patientId,
+        subjectKey: c.patientId ? null : c.key,
+        subjectName: c.patientId ? null : c.name,
         clinicId: c.clinicId ?? prov.clinicId,
         assignedUserId: input.assigneeId ?? null,
         assignedRole: input.assigneeId ? null : "front_desk",

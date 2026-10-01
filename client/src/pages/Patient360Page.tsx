@@ -22,37 +22,44 @@ import { PatientChartPanel } from "@/components/chart/PatientChartPanel";
 import { PatientPaymentsPanel } from "@/components/payments/PatientPaymentsPanel";
 import { FolderOpen, Wallet } from "lucide-react";
 import { PatientFolder } from "@/components/folder/PatientFolder";
-import { FOLDER_SECTION_LIST, type FolderSection } from "@shared/folder";
+import { FOLDER_SECTION_LIST, isPatientKey, type FolderSection } from "@shared/folder";
+import { fmtDay } from "@shared/workforce";
+import { DIRECTORY_PROGRAM_LABELS, type DirectoryProgram } from "@shared/directory";
 
 type Tab = "overview" | "folder" | "appointments" | "tasks" | "care" | "testing" | "chart" | "insurance" | "forms" | "payments";
 
 /**
- * Patient 360. Operational view (visits, flow, tasks) for everyone with
- * patient access; the CCM/BHI/APCM record is an extra tab for full-record roles.
+ * Patient 360, for every patient: CCM-roster patients by their number (/patients/123), everyone
+ * else (schedule-only, Practice Fusion-only) by their patient key. Operational view (visits, flow,
+ * tasks, folder, chart) for everyone with patient access; the CCM/BHI/APCM record is an extra tab
+ * for roster patients and the roles that manage it.
  */
 export default function Patient360Page() {
   const { user } = useAuth({ redirectOnUnauthenticated: true });
   const params = useParams<{ id: string }>();
-  const id = Number(params.id);
+  const raw = decodeURIComponent(params.id ?? "");
+  const key = /^\d+$/.test(raw) ? `p:${raw}` : raw;
+  const id = /^p:\d+$/.test(key) ? Number(key.slice(2)) : null;
   const ws = useWorkspace();
 
   if (!user || ws.loading) return null;
   // Billing has no operational patient view; keep their existing CCM record page.
-  if (!ws.caps?.flowView) return <PatientDetailPage patientId={id} />;
-  return <Patient360 id={id} />;
+  if (!ws.caps?.flowView) return id ? <PatientDetailPage patientId={id} /> : <CCMDashboardLayout title="Patient"><EmptyState title="No access" body="Your role doesn't include this patient view." /></CCMDashboardLayout>;
+  if (!isPatientKey(key)) return <CCMDashboardLayout title="Patient"><EmptyState title="Patient not found" /></CCMDashboardLayout>;
+  return <Patient360 subjectKey={key} id={id} />;
 }
 
-function Patient360({ id }: { id: number }) {
+function Patient360({ subjectKey, id }: { subjectKey: string; id: number | null }) {
   const { caps, user } = useWorkspace();
   const [params, setParams] = useUrlParams();
-  // The CCM record (older screens) stays with the roles that manage it; MAs see everything else.
-  const ccmRecord = !!caps?.patientFull && user?.role !== "medical_assistant";
+  // The CCM record (older screens) is for roster patients and stays with the roles that manage it; MAs see everything else.
+  const ccmRecord = !!id && !!caps?.patientFull && user?.role !== "medical_assistant";
   // Full-record roles open on the CCM record (what every existing patient link
   // expects); Workspace links pass ?tab=overview explicitly.
   const defaultTab: Tab = ccmRecord ? "care" : "overview";
   const tab = (params.get("tab") as Tab) || defaultTab;
   const [taskOpen, setTaskOpen] = useState(false);
-  const q = trpc.workspace.patients.summary.useQuery(id, { enabled: !!id, retry: false });
+  const q = trpc.workspace.patients.byKey.useQuery({ key: subjectKey }, { retry: false });
   const today = localDateStr();
 
   const tabs: { key: Tab; label: string; icon: React.ElementType; count?: number }[] = [
@@ -77,14 +84,14 @@ function Patient360({ id }: { id: number }) {
 
   return (
     <CCMDashboardLayout title="Patient 360" pageTitle={false}>
-      <Link href={caps?.patientFull ? "/patients" : "/patient-flow"} className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 mb-4">
-        <ArrowLeft size={15} /> {caps?.patientFull ? "Patients" : "Patient Flow"}
+      <Link href="/patients" className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 mb-4">
+        <ArrowLeft size={15} /> Patients
       </Link>
 
       {q.isLoading && <Loading />}
       {q.error && <ErrorNote message={q.error.message} />}
       {/* If the Workspace summary can't load, the CCM record must still be reachable. */}
-      {q.error && ccmRecord && <div className="mt-5"><PatientDetailPage embedded patientId={id} /></div>}
+      {q.error && ccmRecord && id && <div className="mt-5"><PatientDetailPage embedded patientId={id} /></div>}
 
       {d && p && (
         <>
@@ -99,11 +106,18 @@ function Patient360({ id }: { id: number }) {
                   <h2 className="text-xl md:text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-50">{p.name}</h2>
                   <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-500 dark:text-slate-400">
                     <span>DOB {fmtDob(p.dateOfBirth)}{age != null ? ` (${age})` : ""}</span>
-                    {p.phoneNumber && <PhoneLink phone={p.phoneNumber} context={{ patientId: p.id, name: p.name, source: "patient" }}><Phone size={13} /> {p.phoneNumber}</PhoneLink>}
+                    {p.phoneNumber && <PhoneLink phone={p.phoneNumber} context={{ patientId: p.id, subjectKey, name: p.name, source: "patient" }}><Phone size={13} /> {p.phoneNumber}</PhoneLink>}
                     {p.clinicName && <span className="inline-flex items-center gap-1"><Building2 size={13} /> {p.clinicName}</span>}
                     {p.providerName && <span className="inline-flex items-center gap-1"><Stethoscope size={13} /> {p.providerName}</span>}
                     {p.preferredLanguage && <span className="inline-flex items-center gap-1"><Globe size={13} /> {p.preferredLanguage}</span>}
+                    {p.mrn && <span>MRN {p.mrn}</span>}
                   </div>
+                  {(p.programs.length > 0 || !p.sources.roster) && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {p.programs.map((g) => <span key={g} className="rounded-full bg-brand-soft px-2 py-0.5 text-[11px] font-semibold text-brand">{DIRECTORY_PROGRAM_LABELS[g as DirectoryProgram]}</span>)}
+                      {!p.sources.roster && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500 dark:bg-slate-800">{p.sources.practiceFusion ? "From Practice Fusion" : "From the schedule"} · not in a care program</span>}
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -144,9 +158,9 @@ function Patient360({ id }: { id: number }) {
               <Panel title="Open tasks" action={<button className="text-xs font-semibold text-brand hover:underline" onClick={() => setParams({ tab: "tasks" })}>All tasks</button>} bodyClassName="p-0">
                 <TaskList rows={d.openTasks.slice(0, 6)} onOpen={(tid) => setParams({ task: tid })} onNew={() => setTaskOpen(true)} />
               </Panel>
-              {caps?.patientFull && <CallLog patientId={id} />}
-              {p.lastOfficeVisit && (
-                <p className="lg:col-span-2 text-xs text-slate-500">Last office visit on record: {fmtShortDate(p.lastOfficeVisit)}. Clinical details (problems, medications, notes) stay in Practice Fusion.</p>
+              {caps?.patientFull && id && <CallLog patientId={id} />}
+              {p.lastVisit && (
+                <p className="lg:col-span-2 text-xs text-slate-500">Last visit on record: {fmtDay(p.lastVisit, { month: "short", day: "numeric", year: "numeric" })}.{caps?.chartBasic ? " Problems, medications and notes are on the Chart tab (copied from Practice Fusion)." : ""}</p>
               )}
             </div>
           )}
@@ -161,17 +175,17 @@ function Patient360({ id }: { id: number }) {
             </Panel>
           )}
 
-          {tab === "care" && ccmRecord && <PatientDetailPage embedded patientId={id} />}
-          {tab === "testing" && caps?.patientFull && <Panel><PatientTestingPanel subjectKey={`p:${id}`} /></Panel>}
-          {tab === "chart" && caps?.chartBasic && <PatientChartPanel subjectKey={`p:${id}`} />}
-          {tab === "insurance" && caps?.eligibility && <InsurancePanel subjectKey={`p:${id}`} />}
-          {tab === "forms" && caps?.intakeForms && <PatientFormsPanel subjectKey={`p:${id}`} />}
+          {tab === "care" && ccmRecord && id && <PatientDetailPage embedded patientId={id} />}
+          {tab === "testing" && caps?.patientFull && <Panel><PatientTestingPanel subjectKey={subjectKey} /></Panel>}
+          {tab === "chart" && caps?.chartBasic && <PatientChartPanel subjectKey={subjectKey} />}
+          {tab === "insurance" && caps?.eligibility && <InsurancePanel subjectKey={subjectKey} />}
+          {tab === "forms" && caps?.intakeForms && <PatientFormsPanel subjectKey={subjectKey} />}
           {tab === "folder" && (caps?.chartBasic || caps?.flowView) && (
-            <PatientFolder subjectKey={`p:${id}`} initialSection={(FOLDER_SECTION_LIST as string[]).includes(params.get("s") ?? "") ? (params.get("s") as FolderSection) : null} />
+            <PatientFolder subjectKey={subjectKey} initialSection={(FOLDER_SECTION_LIST as string[]).includes(params.get("s") ?? "") ? (params.get("s") as FolderSection) : null} />
           )}
-          {tab === "payments" && caps?.payments && <PatientPaymentsPanel subjectKey={`p:${id}`} name={p.name} clinicId={p.clinicId ?? null} />}
+          {tab === "payments" && caps?.payments && <PatientPaymentsPanel subjectKey={subjectKey} name={p.name} clinicId={p.clinicId ?? null} />}
 
-          <NewTaskDialog open={taskOpen} onOpenChange={setTaskOpen} defaults={{ patientId: p.id, patientName: p.name, clinicId: p.clinicId }} />
+          <NewTaskDialog open={taskOpen} onOpenChange={setTaskOpen} defaults={{ patientId: p.id ?? undefined, subjectKey: p.id ? undefined : subjectKey, patientName: p.name, clinicId: p.clinicId }} />
           <TaskDrawer taskId={Number(params.get("task")) || null} onClose={() => setParams({ task: null })} />
         </>
       )}
@@ -188,7 +202,7 @@ function Attention({ icon: Icon, label, value, tone }: { icon: React.ElementType
   );
 }
 
-type Summary = RouterOutputs["workspace"]["patients"]["summary"];
+type Summary = RouterOutputs["workspace"]["patients"]["byKey"];
 
 function AppointmentList({ rows }: { rows: Summary["appointments"] }) {
   if (rows.length === 0) return <EmptyState icon={CalendarDays} title="No visits imported yet" body="Visits appear here once the Practice Fusion schedule that includes this patient is imported." />;

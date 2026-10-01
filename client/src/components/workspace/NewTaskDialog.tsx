@@ -5,11 +5,13 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { trpc } from "@/lib/trpc";
 import { localDateStr } from "@shared/workforce";
 import { TASK_CATEGORIES, TASK_CATEGORY_LABELS, TASK_PRIORITIES, TASK_PRIORITY_LABELS, WORKSPACE_ROLE_LABELS } from "@shared/workspace";
-import { Btn, inputCls } from "./ui";
+import { Btn, fmtDob, inputCls } from "./ui";
 import { useWorkspace } from "./useWorkspace";
 
 export interface NewTaskDefaults {
   patientId?: number;
+  /** A patient who isn't on the CCM roster (schedule / Practice Fusion-only), by patient key. */
+  subjectKey?: string;
   patientName?: string;
   clinicId?: number | null;
   title?: string;
@@ -26,7 +28,8 @@ export function NewTaskDialog({ open, onOpenChange, defaults }: { open: boolean;
   const [dueDate, setDueDate] = useState(localDateStr());
   const [assign, setAssign] = useState("me");
   const [clinicId, setClinicId] = useState<string>("");
-  const [patient, setPatient] = useState<{ id: number; name: string } | null>(null);
+  // Any patient: "p:<id>" (CCM roster) or a schedule / Practice Fusion patient key.
+  const [patient, setPatient] = useState<{ key: string; name: string } | null>(null);
   const [patientSearch, setPatientSearch] = useState("");
   const [debounced, setDebounced] = useState("");
 
@@ -39,7 +42,8 @@ export function NewTaskDialog({ open, onOpenChange, defaults }: { open: boolean;
     setDueDate(localDateStr());
     setAssign("me");
     setClinicId(String(defaults?.clinicId ?? selectedClinic ?? ""));
-    setPatient(defaults?.patientId ? { id: defaults.patientId, name: defaults.patientName ?? "Patient" } : null);
+    const fixed = defaults?.patientId ? `p:${defaults.patientId}` : defaults?.subjectKey ?? null;
+    setPatient(fixed ? { key: fixed, name: defaults?.patientName ?? "Patient" } : null);
     setPatientSearch("");
     // Callers pass `defaults` inline; reset only when the dialog opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -50,9 +54,9 @@ export function NewTaskDialog({ open, onOpenChange, defaults }: { open: boolean;
     return () => clearTimeout(t);
   }, [patientSearch]);
 
-  // Roster search is for full-record roles; MAs attach patients from Patient Flow instead.
-  const canSearchPatients = !!caps?.patientFull;
-  const results = trpc.patients.list.useQuery({ search: debounced }, { enabled: open && canSearchPatients && !patient && debounced.length >= 2 });
+  // Anyone on the Patients list (clinic-limited staff: their clinic's patients).
+  const canSearchPatients = !!caps?.flowView;
+  const results = trpc.workspace.directory.list.useQuery({ q: debounced, status: "all", sort: "name", page: 1 }, { enabled: open && canSearchPatients && !patient && debounced.length >= 2 });
   const assignees = trpc.workspace.tasks.assignees.useQuery(undefined, { enabled: open && !!caps?.assignTasks, staleTime: 5 * 60_000 });
 
   const create = trpc.workspace.tasks.create.useMutation({
@@ -61,6 +65,7 @@ export function NewTaskDialog({ open, onOpenChange, defaults }: { open: boolean;
       void utils.workspace.tasks.invalidate();
       void utils.workspace.home.invalidate();
       void utils.workspace.patients.summary.invalidate();
+      void utils.workspace.patients.byKey.invalidate();
       onOpenChange(false);
     },
     onError: (e) => toast.error(e.message),
@@ -72,7 +77,8 @@ export function NewTaskDialog({ open, onOpenChange, defaults }: { open: boolean;
     create.mutate({
       title: title.trim(),
       description: description.trim() || null,
-      patientId: patient?.id ?? null,
+      patientId: patient && /^p:\d+$/.test(patient.key) ? Number(patient.key.slice(2)) : null,
+      subjectKey: patient && !/^p:\d+$/.test(patient.key) ? patient.key : null,
       clinicId: clinicId ? Number(clinicId) : null,
       assignedUserId: assign === "me" ? user?.id ?? null : assign.startsWith("u") ? Number(assign.slice(1)) : null,
       assignedRole: assign.startsWith("r") ? (assign.slice(1) as "staff") : null,
@@ -102,25 +108,25 @@ export function NewTaskDialog({ open, onOpenChange, defaults }: { open: boolean;
             {patient ? (
               <div className="flex items-center justify-between rounded-xl border border-slate-200 dark:border-slate-600 px-3 py-2 text-sm">
                 <span className="font-medium">{patient.name}</span>
-                {!defaults?.patientId && <button type="button" onClick={() => setPatient(null)} aria-label="Remove patient"><X size={15} className="text-slate-400" /></button>}
+                {!defaults?.patientId && !defaults?.subjectKey && <button type="button" onClick={() => setPatient(null)} aria-label="Remove patient"><X size={15} className="text-slate-400" /></button>}
               </div>
             ) : canSearchPatients ? (
               <div className="relative">
-                <input className={inputCls} value={patientSearch} onChange={(e) => setPatientSearch(e.target.value)} placeholder="Search by name or phone" />
+                <input className={inputCls} value={patientSearch} onChange={(e) => setPatientSearch(e.target.value)} placeholder="Search by name, date of birth or phone" />
                 {debounced.length >= 2 && (
                   <div className="absolute z-10 mt-1 w-full rounded-xl border border-slate-200 dark:border-slate-600 bg-white shadow-lg max-h-56 overflow-y-auto">
                     {results.isFetching && <p className="px-3 py-2 text-xs text-slate-400">Searching…</p>}
-                    {!results.isFetching && (results.data ?? []).length === 0 && <p className="px-3 py-2 text-xs text-slate-400">No matches</p>}
-                    {(results.data ?? []).slice(0, 8).map((r) => (
-                      <button type="button" key={r.patient.id} onClick={() => { setPatient({ id: r.patient.id, name: r.patient.name }); if (!clinicId && r.patient.clinicId) setClinicId(String(r.patient.clinicId)); }} className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700">
-                        {r.patient.name} <span className="text-xs text-slate-400">{r.clinicName ?? ""}</span>
+                    {!results.isFetching && (results.data?.rows ?? []).length === 0 && <p className="px-3 py-2 text-xs text-slate-400">No matches</p>}
+                    {(results.data?.rows ?? []).slice(0, 8).map((r) => (
+                      <button type="button" key={r.key} onClick={() => { setPatient({ key: r.key, name: r.name }); if (!clinicId && r.clinicId) setClinicId(String(r.clinicId)); }} className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700">
+                        {r.name} <span className="text-xs text-slate-400">{[r.dob ? `DOB ${fmtDob(r.dob)}` : null, r.clinicName].filter(Boolean).join(" · ")}</span>
                       </button>
                     ))}
                   </div>
                 )}
               </div>
             ) : (
-              <p className="text-xs text-slate-500">Open a patient from Patient Flow to attach them to a task.</p>
+              <p className="text-xs text-slate-500">Open a patient's page to attach them to a task.</p>
             )}
           </div>
 

@@ -5,10 +5,10 @@ import { inputCls } from "@/components/workspace/ui";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { fmtDay } from "@shared/workforce";
-import { folderHref } from "@shared/folder";
+import { folderHref, patientHref } from "@shared/folder";
 
-/** Where a person's chart lives: roster patients' Patient 360 Chart tab, everyone else the Chart sub-folder of their folder. */
-export const chartHref = (key: string) => (key.startsWith("p:") ? `/patients/${key.slice(2)}?tab=chart` : folderHref(key, "chart"));
+/** Where a person's chart lives: the Chart tab of their Patient 360 (every patient has one). */
+export const chartHref = (key: string) => patientHref(key, "chart");
 
 /** Find anyone's chart, including patients who are only in Practice Fusion. */
 export function ChartLookup({ className }: { className?: string }) {
