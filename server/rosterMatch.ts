@@ -87,7 +87,8 @@ async function notSamePairs(): Promise<Set<string>> {
 /** Everyone unlinked on the roster, the free Practice Fusion records, and how each roster patient matches. */
 async function loadMatching() {
   const d = await db();
-  const roster = (await d.select({ id: patients.id, name: patients.name, dob: patients.dateOfBirth, phone: patients.phoneNumber, ccm: patients.ccmEnrollmentStatus, clinicId: patients.clinicId, staffId: patients.assignedStaffId, lastCcm: patients.lastCCMDate }).from(patients)) as RosterRow[];
+  const roster = ((await d.select({ id: patients.id, name: patients.name, dob: patients.dateOfBirth, phone: patients.phoneNumber, ccm: patients.ccmEnrollmentStatus, clinicId: patients.clinicId, staffId: patients.assignedStaffId, lastCcm: patients.lastCCMDate }).from(patients)) as RosterRow[])
+    .filter((r) => !/\(merged into #\d+\)\s*$/.test(r.name));
   const pfRows = await d.select({ fhirId: fhirPatients.fhirId, key: fhirPatients.subjectKey, patientId: fhirPatients.patientId, name: fhirPatients.name, dob: fhirPatients.dob, phone: fhirPatients.phone }).from(fhirPatients);
   const linkedRoster = new Set<number>();
   for (const p of pfRows) {
@@ -336,14 +337,21 @@ export async function rejectPair(actor: WorkspaceActor, rosterId: number, pfId: 
  * name), and whether both records are CCM-active or were billed for the same program in the same month.
  * Counts only.
  */
+/** [unlinked duplicate, roster patient whose Practice Fusion record has the same name] for every likely duplicate. */
+export async function duplicatePairs(): Promise<[number, number][]> {
+  const { unlinked, decide, duplicateOf } = await loadMatching();
+  const pairs: [number, number][] = [];
+  for (const r of unlinked) if (decide(r).bucket === "duplicate_of_linked_roster") { const other = duplicateOf(r); if (other) pairs.push([r.id, other]); }
+  return pairs;
+}
+
 export async function duplicateRosterReport() {
-  const { unlinked, decide, duplicateOf, roster } = await loadMatching();
+  const { roster } = await loadMatching();
   const d = await db();
   const { billingRecords } = await import("../drizzle/schema");
   const { inArray: inA } = await import("drizzle-orm");
   const byId = new Map(roster.map((r) => [r.id, r]));
-  const pairs: [number, number][] = [];
-  for (const r of unlinked) if (decide(r).bucket === "duplicate_of_linked_roster") { const other = duplicateOf(r); if (other) pairs.push([r.id, other]); }
+  const pairs = await duplicatePairs();
   const ids = Array.from(new Set(pairs.flat()));
   const billed = ids.length ? await d.select({ pid: billingRecords.patientId, month: billingRecords.month, program: billingRecords.program, status: billingRecords.billingStatus })
     .from(billingRecords).where(inA(billingRecords.patientId, ids)) : [];

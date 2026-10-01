@@ -120,6 +120,11 @@ export const handler = async (event: any, context: any) => {
     const { syncRosterConditions } = await import("../conditionSync");
     return syncRosterConditions({ apply: event.apply !== false, deadline: Date.now() + 24_000 });
   }
+  // Merge duplicate roster records (IAM-only; dry run unless apply; counts only). Re-run until done.
+  if (event && event.__job === "merge-duplicate-roster" && !event.requestContext && !event.version) {
+    const { mergeDuplicates, mergeActor } = await import("../rosterMerge");
+    return mergeDuplicates(await mergeActor(), { apply: event.apply === true, deadline: Date.now() + 22_000 });
+  }
   // Duplicate roster records (same name as an already-linked roster patient): counts only.
   if (event && event.__job === "duplicate-roster-report" && !event.requestContext && !event.version) {
     const { duplicateRosterReport } = await import("../rosterMatch");

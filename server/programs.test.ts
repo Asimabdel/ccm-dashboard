@@ -3,6 +3,7 @@ import { NOT_ON_ROSTER, classifyDiagnosis, countChronicConditions, diagnosesFing
 import { computeApcmLevel } from "./db";
 import { firstClose, similarSpelling, tok } from "./rosterMatch";
 import { conditionsToAdd } from "./conditionSync";
+import { pickKeep } from "./rosterMerge";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 
@@ -107,6 +108,16 @@ describe("program suggestions from diagnoses", () => {
     expect(similarSpelling("smith", "smyth")).toBe(true);
     expect(similarSpelling("lee", "lea")).toBe(false); // too short to call a typo
     expect(similarSpelling("garcia", "gomez")).toBe(false);
+  });
+
+  it("duplicate roster records: keep the CCM-active copy, else the one with more CCM history, else the one with a birthday", () => {
+    const base = { ccmEnrollmentStatus: "inactive", dateOfBirth: null } as never;
+    const p = (id: number, over: Record<string, unknown>) => ({ ...(base as object), id, ...over }) as Parameters<typeof pickKeep>[0];
+    const none = new Map<number, number>();
+    expect(pickKeep(p(1, {}), p(2, { ccmEnrollmentStatus: "active" }), none)[0].id).toBe(2);
+    expect(pickKeep(p(1, {}), p(2, {}), new Map([[1, 5], [2, 1]]))[0].id).toBe(1);
+    expect(pickKeep(p(1, {}), p(2, { dateOfBirth: new Date("1950-01-01") }), none)[0].id).toBe(2);
+    expect(pickKeep(p(3, {}), p(2, {}), none)[0].id).toBe(2);
   });
 
   it("record matching: close first names are nicknames / initials; only admins confirm pairs", async () => {
