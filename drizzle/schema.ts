@@ -1630,3 +1630,31 @@ export const providerTeamMembers = mysqlTable("providerTeamMembers", {
   pairUnique: uniqueIndex("providerTeamMembers_pair_unique").on(t.providerId, t.userId),
   userIdx: index("providerTeamMembers_user_idx").on(t.userId),
 }));
+
+/**
+ * Files staff put in a patient's folder (added 2026-09-30): scans, insurance card / ID photos, outside
+ * records. The bytes live in the private documents bucket (documents/patient-files/…); removing a file
+ * hides it (kept for the record).
+ */
+export const patientFiles = mysqlTable("patientFiles", {
+  id: int("id").autoincrement().primaryKey(),
+  subjectKey: varchar("subjectKey", { length: 120 }).notNull(),
+  patientId: int("patientId").references(() => patients.id),
+  clinicId: int("clinicId").references(() => clinics.id),
+  fileType: varchar("fileType", { length: 24 }).notNull(),
+  title: varchar("title", { length: 255 }).notNull(),
+  note: varchar("note", { length: 500 }),
+  storageKey: varchar("storageKey", { length: 200 }).notNull(),
+  fileName: varchar("fileName", { length: 255 }),
+  mimeType: varchar("mimeType", { length: 80 }).notNull(),
+  sizeBytes: int("sizeBytes"),
+  /** uploading | ready */
+  status: varchar("status", { length: 12 }).notNull().default("uploading"),
+  uploadedByUserId: int("uploadedByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  removedAt: datetime("removedAt"),
+  removedByUserId: int("removedByUserId").references(() => users.id),
+}, (t) => ({
+  subjectIdx: index("patientFiles_subject_idx").on(t.subjectKey, t.createdAt),
+  patientIdx: index("patientFiles_patient_idx").on(t.patientId),
+}));

@@ -250,7 +250,8 @@ type AuditAction =
   | "view_document"
   | "manage_document"
   | "view_payments"
-  | "manage_payment";
+  | "manage_payment"
+  | "export_data";
 
 export async function audit(actor: WorkspaceActor, action: AuditAction, opts: { entityType?: string; entityId?: number; description?: string } = {}) {
   try {

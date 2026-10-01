@@ -29,6 +29,8 @@ import * as intake from "../intakeDb";
 import * as availity from "../availityDb";
 import * as docs from "../documentsDb";
 import * as square from "../squareDb";
+import * as folders from "../folderDb";
+import { FOLDER_SECTION_LIST, PATIENT_FILE_TYPE_LIST, type FolderSection, type PatientFileType } from "../../shared/folder";
 import { PAYMENT_CATEGORY_LIST, type PaymentCategory } from "../../shared/payments";
 import { CONSENT_KINDS, INTAKE_LANGS } from "../../shared/intake";
 import { APPROVAL_METHODS } from "../../shared/documents";
@@ -54,6 +56,11 @@ async function actorFor(ctx: Ctx, cap: WorkspaceCap): Promise<ws.WorkspaceActor>
     clinicIds,
     ip: (typeof fwd === "string" ? fwd.split(",")[0] : null) || ctx.req?.ip || null,
   };
+}
+
+/** Patient folders: anyone who can open a chart or the patient flow; each sub-folder checks its own rule. */
+async function folderActor(ctx: Ctx): Promise<ws.WorkspaceActor> {
+  return actorFor(ctx, can(ctx.user.role, "chartBasic") ? "chartBasic" : "flowView");
 }
 
 /** For My Work: also the provider-team queues this person is on (their tasks show in My Tasks). */
@@ -100,6 +107,8 @@ const csvText = z.string().min(1).max(5_000_000);
 const subjectKeyRe = /^(p:\d+|s:.{1,110})$/;
 /** Payments can belong to anyone MyPCP knows: roster (p:), schedule (s:) or Practice Fusion-only (f:) patients. */
 const paymentSubjectRe = /^(p:\d+|s:.{1,110}|f:.{1,120})$/;
+/** Any patient: roster (p:), schedule (s:) or Practice Fusion-only (f:). */
+const patientKey = z.string().regex(paymentSubjectRe);
 const newPaymentRequest = z.object({
   amountCents: z.number().int().min(50).max(5_000_000),
   category: z.enum(PAYMENT_CATEGORY_LIST as [PaymentCategory, ...PaymentCategory[]]),
@@ -216,6 +225,59 @@ export const workspaceRouter = router({
         await run(() => ws.commentTask(actor, input.id, input.body));
         return { success: true };
       }),
+  }),
+
+  // Patient folders: everything about one patient (any patient), sub-folder by sub-folder.
+  folder: router({
+    summary: protectedProcedure.input(z.object({ key: patientKey })).query(async ({ ctx, input }) => {
+      const actor = await folderActor(ctx);
+      return run(() => folders.folderSummary(actor, input.key));
+    }),
+    items: protectedProcedure.input(z.object({ key: patientKey, section: z.enum(["everything", ...FOLDER_SECTION_LIST] as [string, ...string[]]) })).query(async ({ ctx, input }) => {
+      const actor = await folderActor(ctx);
+      return run(() => folders.folderItems(actor, input.key, input.section as FolderSection | "everything"));
+    }),
+    search: protectedProcedure.input(z.object({ key: patientKey, q: z.string().trim().min(2).max(100) })).query(async ({ ctx, input }) => {
+      const actor = await folderActor(ctx);
+      return run(() => folders.folderSearch(actor, input.key, input.q));
+    }),
+    startUpload: protectedProcedure
+      .input(z.object({
+        subjectKey: patientKey, fileName: z.string().trim().min(1).max(255), mimeType: z.string().max(80), size: z.number().int().positive(),
+        fileType: z.enum(PATIENT_FILE_TYPE_LIST as [PatientFileType, ...PatientFileType[]]), title: z.string().trim().max(255), note: z.string().max(500).nullish(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await folderActor(ctx);
+        return run(() => folders.startFileUpload(actor, input));
+      }),
+    uploadLocal: protectedProcedure.input(z.object({ id: z.number().int().positive(), base64: z.string().max(36_000_000) })).mutation(async ({ ctx, input }) => {
+      const actor = await folderActor(ctx);
+      return run(() => folders.uploadFileLocal(actor, input.id, input.base64));
+    }),
+    finishUpload: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await folderActor(ctx);
+      return run(() => folders.finishFileUpload(actor, input.id));
+    }),
+    openFile: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await folderActor(ctx);
+      return run(() => folders.openFile(actor, input.id));
+    }),
+    removeFile: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await folderActor(ctx);
+      return run(() => folders.removeFile(actor, input.id));
+    }),
+    openFax: protectedProcedure.input(z.object({ key: patientKey, id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await folderActor(ctx);
+      return run(() => folders.openFolderFax(actor, input.key, input.id));
+    }),
+    openDocument: protectedProcedure.input(z.object({ key: patientKey, id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await folderActor(ctx);
+      return run(() => folders.openFolderDocument(actor, input.key, input.id));
+    }),
+    export: protectedProcedure.input(z.object({ key: patientKey })).mutation(async ({ ctx, input }) => {
+      const actor = await folderActor(ctx);
+      return run(() => folders.exportFolder(actor, input.key));
+    }),
   }),
 
   // Provider teams: a provider + the people who work with them. Their patients' emails go to the team.

@@ -20,9 +20,11 @@ import { InsurancePanel } from "@/components/insurance/InsurancePanel";
 import { PatientFormsPanel } from "@/components/intake/PatientFormsPanel";
 import { PatientChartPanel } from "@/components/chart/PatientChartPanel";
 import { PatientPaymentsPanel } from "@/components/payments/PatientPaymentsPanel";
-import { Wallet } from "lucide-react";
+import { FolderOpen, Wallet } from "lucide-react";
+import { PatientFolder } from "@/components/folder/PatientFolder";
+import { FOLDER_SECTION_LIST, type FolderSection } from "@shared/folder";
 
-type Tab = "overview" | "appointments" | "tasks" | "care" | "testing" | "chart" | "insurance" | "forms" | "payments";
+type Tab = "overview" | "folder" | "appointments" | "tasks" | "care" | "testing" | "chart" | "insurance" | "forms" | "payments";
 
 /**
  * Patient 360. Operational view (visits, flow, tasks) for everyone with
@@ -53,6 +55,8 @@ function Patient360({ id }: { id: number }) {
 
   const tabs: { key: Tab; label: string; icon: React.ElementType; count?: number }[] = [
     { key: "overview", label: "Overview", icon: LayoutGrid },
+    // Everything about the patient in one place (each sub-folder follows its own access rule).
+    ...(caps?.chartBasic || caps?.flowView ? [{ key: "folder" as Tab, label: "Folder", icon: FolderOpen }] : []),
     { key: "appointments", label: "Appointments", icon: CalendarDays, count: q.data?.appointments.length },
     { key: "tasks", label: "Tasks", icon: ClipboardList, count: q.data?.openTasks.length },
   ];
@@ -162,6 +166,9 @@ function Patient360({ id }: { id: number }) {
           {tab === "chart" && caps?.chartBasic && <PatientChartPanel subjectKey={`p:${id}`} />}
           {tab === "insurance" && caps?.eligibility && <InsurancePanel subjectKey={`p:${id}`} />}
           {tab === "forms" && caps?.intakeForms && <PatientFormsPanel subjectKey={`p:${id}`} />}
+          {tab === "folder" && (caps?.chartBasic || caps?.flowView) && (
+            <PatientFolder subjectKey={`p:${id}`} initialSection={(FOLDER_SECTION_LIST as string[]).includes(params.get("s") ?? "") ? (params.get("s") as FolderSection) : null} />
+          )}
           {tab === "payments" && caps?.payments && <PatientPaymentsPanel subjectKey={`p:${id}`} name={p.name} clinicId={p.clinicId ?? null} />}
 
           <NewTaskDialog open={taskOpen} onOpenChange={setTaskOpen} defaults={{ patientId: p.id, patientName: p.name, clinicId: p.clinicId }} />

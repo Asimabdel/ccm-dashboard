@@ -24,21 +24,21 @@ async function s3Client() {
 }
 
 /** How the browser should send a new PDF: straight to S3 with a signed link, or through the API (local). */
-export async function uploadTarget(key: string): Promise<{ url: string | null }> {
+export async function uploadTarget(key: string, contentType = "application/pdf"): Promise<{ url: string | null }> {
   if (!onS3()) return { url: null };
   const { PutObjectCommand } = await import("@aws-sdk/client-s3");
   const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
-  const url = await getSignedUrl(await s3Client(), new PutObjectCommand({ Bucket: bucket(), Key: key, ContentType: "application/pdf" }), { expiresIn: LINK_SECONDS });
+  const url = await getSignedUrl(await s3Client(), new PutObjectCommand({ Bucket: bucket(), Key: key, ContentType: contentType }), { expiresIn: LINK_SECONDS });
   return { url };
 }
 
 /** A short-lived link for the browser to read a PDF (S3), or the bytes themselves (local). */
-export async function readTarget(key: string, downloadName?: string | null): Promise<{ url: string | null; base64: string | null }> {
+export async function readTarget(key: string, downloadName?: string | null, contentType = "application/pdf"): Promise<{ url: string | null; base64: string | null }> {
   if (!onS3()) return { url: null, base64: (await getBytes(key)).toString("base64") };
   const { GetObjectCommand } = await import("@aws-sdk/client-s3");
   const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
   const disposition = downloadName ? `attachment; filename="${downloadName.replace(/[^\w .()-]/g, "_").slice(0, 120)}"` : undefined;
-  const url = await getSignedUrl(await s3Client(), new GetObjectCommand({ Bucket: bucket(), Key: key, ResponseContentDisposition: disposition, ResponseContentType: "application/pdf" }), { expiresIn: LINK_SECONDS });
+  const url = await getSignedUrl(await s3Client(), new GetObjectCommand({ Bucket: bucket(), Key: key, ResponseContentDisposition: disposition, ResponseContentType: contentType }), { expiresIn: LINK_SECONDS });
   return { url, base64: null };
 }
 
@@ -49,12 +49,21 @@ export async function getBytes(key: string): Promise<Buffer> {
   return Buffer.from(await r.Body!.transformToByteArray());
 }
 
-export async function putBytes(key: string, bytes: Uint8Array) {
+export async function putBytes(key: string, bytes: Uint8Array, contentType = "application/pdf") {
   if (!onS3()) {
     await mkdir(localDir, { recursive: true });
     await writeFile(localPath(key), bytes);
     return;
   }
   const { PutObjectCommand } = await import("@aws-sdk/client-s3");
-  await (await s3Client()).send(new PutObjectCommand({ Bucket: bucket(), Key: key, Body: bytes, ContentType: "application/pdf" }));
+  await (await s3Client()).send(new PutObjectCommand({ Bucket: bucket(), Key: key, Body: bytes, ContentType: contentType }));
+}
+
+/** Is the object there (an upload that finished)? */
+export async function exists(key: string): Promise<boolean> {
+  if (!onS3()) {
+    try { await readFile(localPath(key)); return true; } catch { return false; }
+  }
+  const { HeadObjectCommand } = await import("@aws-sdk/client-s3");
+  try { await (await s3Client()).send(new HeadObjectCommand({ Bucket: bucket(), Key: key })); return true; } catch { return false; }
 }
