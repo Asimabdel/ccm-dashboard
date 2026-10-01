@@ -115,6 +115,11 @@ export const handler = async (event: any, context: any) => {
     const { backfillChartFacts } = await import("../chartFacts");
     return backfillChartFacts({ deadline: Date.now() + 24_000, restart: event.restart === true });
   }
+  // Where recent "last visit" dates come from (IAM-only; counts and visit-type names only).
+  if (event && event.__job === "seen-since-breakdown" && !event.requestContext && !event.version) {
+    const { seenSinceBreakdown } = await import("../officeTestingDb");
+    return seenSinceBreakdown();
+  }
   // Testing tab check: how many qualify for ABI-Q / PFT / RMR and how long the list takes (IAM-only, counts only).
   if (event && event.__job === "office-testing-summary" && !event.requestContext && !event.version) {
     const { officeTestingSummary } = await import("../officeTestingDb");

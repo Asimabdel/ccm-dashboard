@@ -5,7 +5,7 @@
 // match a roster or schedule person are folded into that person). The list is built in memory
 // (around ten thousand people) and kept for a minute per Lambda instance; searching, filtering
 // and paging run on that copy.
-import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { appointments, clinics, emailMessages, faxes, fhirPatients, fhirResources, opportunityActions, patients, providers, users, workTasks } from "../drizzle/schema";
 import {
@@ -162,10 +162,12 @@ async function buildDirectory(): Promise<Map<string, DirectoryEntry>> {
     e.mrn ??= p.mrn;
   }
 
-  // Visits from the chart copy (all the way back), and the provider for people only PF knows.
+  // Visits from the chart copy (all the way back), and the provider for people only PF knows. Encounters
+  // with no visit type ("Unknown") are not visits: Practice Fusion created ~5,600 of them on 2026-09-28/29.
+  const realVisit = and(isNotNull(fhirResources.title), ne(fhirResources.title, "Unknown"));
   const enc = await d.select({ key: fhirResources.subjectKey, last: sql<string | null>`max(${fhirResources.date})`, first: sql<string | null>`min(${fhirResources.date})` })
     .from(fhirResources)
-    .where(and(eq(fhirResources.section, "Encounter"), isNotNull(fhirResources.subjectKey), lte(fhirResources.date, today), or(isNull(fhirResources.status), notInArray(fhirResources.status, ["cancelled", "entered-in-error"]))))
+    .where(and(eq(fhirResources.section, "Encounter"), isNotNull(fhirResources.subjectKey), lte(fhirResources.date, today), realVisit, or(isNull(fhirResources.status), notInArray(fhirResources.status, ["cancelled", "entered-in-error"]))))
     .groupBy(fhirResources.subjectKey);
   for (const v of enc) {
     const e = v.key ? out.get(v.key) : undefined;
@@ -175,7 +177,7 @@ async function buildDirectory(): Promise<Map<string, DirectoryEntry>> {
   }
   const pfOnly = await d.select({ key: fhirResources.subjectKey, date: fhirResources.date, value: fhirResources.value })
     .from(fhirResources)
-    .where(and(eq(fhirResources.section, "Encounter"), like(fhirResources.subjectKey, "f:%"), lte(fhirResources.date, today)));
+    .where(and(eq(fhirResources.section, "Encounter"), like(fhirResources.subjectKey, "f:%"), lte(fhirResources.date, today), realVisit));
   const latest = new Map<string, { date: string; who: string | null }>();
   for (const v of pfOnly) {
     if (!v.key || !v.date) continue;

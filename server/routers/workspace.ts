@@ -33,6 +33,7 @@ import * as folders from "../folderDb";
 import * as directory from "../directoryDb";
 import * as programs from "../programsDb";
 import * as officeTests from "../officeTestingDb";
+import * as seenSince from "../seenSince";
 import { OFFICE_TESTS } from "../../shared/officeTests";
 import { SUGGEST_PROGRAMS } from "../../shared/programRules";
 import { DIRECTORY_PROGRAMS, DIRECTORY_SORTS, DIRECTORY_STATUSES } from "../../shared/directory";
@@ -1316,6 +1317,23 @@ export const workspaceRouter = router({
     scan: protectedProcedure.mutation(async ({ ctx }) => {
       await programActor(ctx);
       return run(() => programs.scanProgramSuggestions());
+    }),
+  }),
+
+  /** The start date for Program approvals and the Testing tab (patients seen on or after it). */
+  seenSince: router({
+    get: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "flowView");
+      return { date: await seenSince.getSeenSince() };
+    }),
+    set: protectedProcedure.input(z.object({ date: dateStr })).mutation(async ({ ctx, input }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can change the start date." });
+      if (input.date > localDateStr()) throw new TRPCError({ code: "BAD_REQUEST", message: "The start date can't be in the future." });
+      const actor = await actorFor(ctx, "flowView");
+      await seenSince.setSeenSince(ctx.user.id, input.date);
+      await ws.audit(actor, "manage_access", { entityType: "setting", description: `Program approvals / Testing start date set to ${input.date}` });
+      const scan = await programs.scanProgramSuggestions();
+      return { date: input.date, scan };
     }),
   }),
 

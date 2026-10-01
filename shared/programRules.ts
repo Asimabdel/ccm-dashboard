@@ -13,8 +13,12 @@ export const SUGGEST_PROGRAMS = ["ccm", "bhi", "rpm", "apcm"] as const;
 export type SuggestProgram = (typeof SUGGEST_PROGRAMS)[number];
 export const SUGGEST_PROGRAM_LABELS: Record<SuggestProgram, string> = { ccm: "CCM", bhi: "BHI", rpm: "RPM", apcm: "APCM" };
 
-/** Only patients seen this recently are suggested (Medicare's initiating-visit window for CCM/BHI). */
-export const SUGGEST_SEEN_WITHIN_DAYS = 365;
+/**
+ * Program approvals and the Testing tab only consider patients seen on or after a start date (the
+ * practice chose 2026-10-01: "start 2 weeks ago and go on from there"). Admins can move it; this is
+ * the date until they do.
+ */
+export const DEFAULT_SEEN_SINCE = "2026-09-17";
 
 interface Category {
   key: string;

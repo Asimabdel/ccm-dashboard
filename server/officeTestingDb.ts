@@ -1,4 +1,4 @@
-// The Testing tab: patients seen in the last 12 months (or booked) who qualify for the in-office tests
+// The Testing tab: patients seen since the start date (seenSince.ts), or booked, who qualify for the in-office tests
 // (ABI-Q, PFT, RMR) under the practice's criteria (shared/officeTests.ts), and where each stands.
 // Staff schedule them: a call task, or mark Scheduled / Done / Declined / Not needed. The provider
 // orders each test; nothing here contacts patients or makes a clinical decision.
@@ -6,7 +6,7 @@ import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import { getDb } from "./db";
 import { clinics, opportunityActions, patientTests } from "../drizzle/schema";
 import {
-  OFFICE_TESTS, OFFICE_TEST_LABELS, OFFICE_TEST_SEEN_DAYS, eligibleTests, officeTestState,
+  OFFICE_TESTS, OFFICE_TEST_LABELS, eligibleTests, officeTestState,
   type OfficeTest, type OfficeTestRecord, type OfficeTestRecordStatus, type OfficeTestState, type Qualifier,
 } from "../shared/officeTests";
 import { ageOn } from "../shared/testing";
@@ -15,6 +15,7 @@ import { addDays, localDateStr } from "../shared/workforce";
 import { conditionFacts, smokingAndBmi } from "./chartFacts";
 import { loadDirectory, type DirectoryEntry } from "./directoryDb";
 import { WorkspaceError, audit, createTask, frontDeskFor, type WorkspaceActor } from "./workspaceDb";
+import { getSeenSince } from "./seenSince";
 
 async function db() {
   const d = await getDb();
@@ -31,20 +32,21 @@ export interface Eligible {
 }
 
 // Who qualifies changes only when the chart or schedule does: kept for 10 minutes per Lambda instance.
-let cache: { at: number; build: Promise<Map<string, Eligible>> } | null = null;
+let cache: { at: number; since: string; build: Promise<Map<string, Eligible>> } | null = null;
 const CACHE_MS = 10 * 60_000;
 
 async function loadEligible(): Promise<Map<string, Eligible>> {
-  if (cache && Date.now() - cache.at < CACHE_MS) return cache.build;
-  const build = buildEligible();
-  cache = { at: Date.now(), build };
+  const since = await getSeenSince();
+  if (cache && cache.since === since && Date.now() - cache.at < CACHE_MS) return cache.build;
+  const build = buildEligible(since);
+  cache = { at: Date.now(), since, build };
   build.catch(() => { if (cache?.build === build) cache = null; });
   return build;
 }
 
-async function buildEligible(): Promise<Map<string, Eligible>> {
+/** Seen on or after the start date, or with a visit booked (the test can be done at that visit). */
+async function buildEligible(since: string): Promise<Map<string, Eligible>> {
   const today = localDateStr();
-  const since = addDays(today, -OFFICE_TEST_SEEN_DAYS);
   const people = Array.from((await loadDirectory()).values()).filter((e) => (e.lastVisit && e.lastVisit >= since) || e.nextVisit);
   const keys = new Set(people.map((p) => p.key));
   const [dx, { smoking, bmi }] = await Promise.all([conditionFacts(keys), smokingAndBmi(keys)]);
@@ -137,6 +139,7 @@ export async function listOfficeTesting(actor: WorkspaceActor, f: OfficeTestFilt
     pageSize: PAGE,
     counts,
     patientCounts,
+    since: await getSeenSince(),
     clinics: Array.from(new Set(all.map((p) => p.entry.clinicId).filter((c): c is number => c != null))).map((id) => ({ id, name: clinicName.get(id) ?? "Clinic" })).sort((a, b) => a.name.localeCompare(b.name)),
     providers: Array.from(providers.entries()).map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)),
   };
@@ -231,4 +234,26 @@ export async function officeTestingSummary() {
   const counts = Object.fromEntries(OFFICE_TESTS.map((x) => [x, 0])) as Record<OfficeTest, number>;
   for (const p of Array.from(eligible.values())) for (const x of p.tests) counts[x.test]++;
   return { steps, sizes: { people: dir.size, withConditions: c.size, withSmoking: f.smoking.size, withBmi: f.bmi.size }, patientsWithAnyTest: eligible.size, eligibleByTest: counts };
+}
+
+/** IAM-only check: where "last visit since the start date" comes from (counts and visit-type names only). */
+export async function seenSinceBreakdown() {
+  const d = await db();
+  const since = await getSeenSince();
+  const { fhirResources, patients } = await import("../drizzle/schema");
+  const { sql: s, and: a, eq: e, gte: g, isNotNull: nn } = await import("drizzle-orm");
+  const { loadScheduleSubjects } = await import("./workspaceDb");
+  const { SEEN_STATUSES } = await import("../shared/workspace");
+  const enc = await d.select({ title: fhirResources.title, status: fhirResources.status, n: s<number>`count(*)`, people: s<number>`count(distinct ${fhirResources.subjectKey})` })
+    .from(fhirResources).where(a(e(fhirResources.section, "Encounter"), g(fhirResources.date, since), nn(fhirResources.subjectKey)))
+    .groupBy(fhirResources.title, fhirResources.status).orderBy(s`count(*) desc`).limit(25);
+  const byDay = await d.select({ day: fhirResources.date, n: s<number>`count(*)` }).from(fhirResources)
+    .where(a(e(fhirResources.section, "Encounter"), g(fhirResources.date, since))).groupBy(fhirResources.date).orderBy(fhirResources.date);
+  const [pfPeople] = await d.select({ n: s<number>`count(distinct ${fhirResources.subjectKey})` }).from(fhirResources)
+    .where(a(e(fhirResources.section, "Encounter"), g(fhirResources.date, since), s`${fhirResources.date} <= ${localDateStr()}`));
+  const [roster] = await d.select({ n: s<number>`count(*)` }).from(patients).where(g(patients.lastOfficeVisit, new Date(`${since}T00:00:00Z`)));
+  let sched = 0;
+  const now = new Date();
+  for (const x of Array.from((await loadScheduleSubjects()).values())) if (x.visits.some((v) => v.startsAt <= now && localDateStr(v.startsAt) >= since && SEEN_STATUSES.includes(v.status))) sched++;
+  return { since, peopleWithPfEncounterSince: Number(pfPeople?.n ?? 0), rosterLastOfficeVisitSince: Number(roster?.n ?? 0), scheduleSeenSince: sched, encounterTypes: enc.map((r) => ({ title: r.title, status: r.status, n: Number(r.n), people: Number(r.people) })), encountersPerDay: byDay.map((r) => `${r.day}:${r.n}`) };
 }

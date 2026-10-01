@@ -5,6 +5,7 @@ import { CheckCircle2, ChevronLeft, ChevronRight, ClipboardCheck, Loader2, Refre
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { useUrlParams, useWorkspace } from "@/components/workspace/useWorkspace";
+import { SeenSince } from "@/components/workspace/SeenSince";
 import { Btn, EmptyState, ErrorNote, Loading, PageHeader, SelectBox, ageFrom, cardCls, fmtDob, fmtShortDate, inputCls } from "@/components/workspace/ui";
 import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -104,9 +105,11 @@ export default function ProgramApprovalsPage() {
     <CCMDashboardLayout title="Program approvals" pageTitle={false}>
       <PageHeader
         title="Program approvals"
-        subtitle={<>Patients seen in the last 12 months whose diagnoses in Practice Fusion qualify them for a care program{d?.scope === "office" ? " (your office)" : ""}. Approving enrolls them; nothing bills until they consent.</>}
+        subtitle={<>Patients whose diagnoses in Practice Fusion qualify them for a care program{d?.scope === "office" ? " (your office)" : ""}. Approving enrolls them; nothing bills until they consent.</>}
         actions={<Btn variant="secondary" onClick={() => scan.mutate()} disabled={scan.isPending}>{scan.isPending ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />} Check now</Btn>}
       />
+
+      <SeenSince date={d?.since} isAdmin={user.role === "admin"} className="mb-4" />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="flex gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-800" role="tablist">
@@ -161,7 +164,7 @@ export default function ProgramApprovalsPage() {
         <div className={cardCls}>
           <EmptyState icon={ClipboardCheck}
             title={status === "pending" ? "No one is waiting" : status === "approved" ? "No approvals yet" : "Nothing marked \"not now\""}
-            body={status === "pending" ? "Everyone is checked each morning. Use \"Check now\" after new diagnoses come in from Practice Fusion." : undefined} />
+            body={status === "pending" ? "Everyone seen since the start date is checked each morning. Use \"Check now\" after new visits or diagnoses come in." : undefined} />
         </div>
       )}
 

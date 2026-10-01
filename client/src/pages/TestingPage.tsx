@@ -7,6 +7,7 @@ import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { useUrlParams, useWorkspace } from "@/components/workspace/useWorkspace";
 import { Btn, EmptyState, ErrorNote, Loading, PageHeader, SelectBox, cardCls, fmtClock, fmtDob, fmtShortDate, inputCls } from "@/components/workspace/ui";
 import { MarkTestsDialog, STATE_TEXT, TEST_PILL, dayText } from "@/components/testing/OfficeTests";
+import { SeenSince } from "@/components/workspace/SeenSince";
 import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { patientHref } from "@shared/folder";
@@ -23,7 +24,7 @@ const COMING: { days: number | null; label: string }[] = [
 ];
 
 /**
- * Testing: in-office tests (ABI-Q, PFT, RMR) for patients seen in the last 12 months or booked, by the
+ * Testing: in-office tests (ABI-Q, PFT, RMR) for patients seen since the start date or booked, by the
  * practice's criteria. Staff book them (call task, or mark Scheduled / Done / Declined / Not needed).
  */
 export default function TestingPage() {
@@ -69,7 +70,8 @@ export default function TestingPage() {
 
   return (
     <CCMDashboardLayout title="Testing" pageTitle={false}>
-      <PageHeader title="Testing" subtitle="In-office tests for patients seen in the last 12 months or booked, by the practice's criteria. Their provider orders each test; each can be repeated once a year." />
+      <PageHeader title="Testing" subtitle="In-office tests by the practice's criteria, for patients seen since the start date or with a visit booked. Their provider orders each test; each can be repeated once a year." />
+      <SeenSince date={d?.since} isAdmin={user.role === "admin"} className="mb-4" />
 
       <details className={cn(cardCls, "mb-4 px-4 py-3 text-sm")}>
         <summary className="cursor-pointer font-semibold text-slate-800 dark:text-slate-100">Who qualifies</summary>

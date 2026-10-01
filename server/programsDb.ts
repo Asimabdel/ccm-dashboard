@@ -1,6 +1,6 @@
 // Program approvals: patients whose Practice Fusion diagnoses qualify them for CCM / BHI / RPM / APCM.
 //
-// Every morning (and on "Check now") everyone seen in the last 12 months is checked against the
+// Every morning (and on "Check now") everyone seen since the start date (seenSince.ts) is checked against the
 // practice's rules (shared/programRules.ts). New matches wait in programSuggestions for an approver:
 // only the people named in the "program approvers" setting see them (office managers only their
 // office's patients). Approving enrolls the patient (adding them to the CCM roster first if they
@@ -12,7 +12,7 @@ import { getDb, ensureMonthlyTask, getPatientById, updatePatientAPCM, updatePati
 import { currentMonth } from "./seed";
 import { appSettings, appointments, clinics, fhirResources, notifications, patients, programSuggestions, users } from "../drizzle/schema";
 import {
-  NOT_ON_ROSTER, SUGGEST_PROGRAMS, SUGGEST_PROGRAM_LABELS, SUGGEST_SEEN_WITHIN_DAYS, classifyDiagnosis, diagnosesFingerprint, suggestPrograms,
+  NOT_ON_ROSTER, SUGGEST_PROGRAMS, SUGGEST_PROGRAM_LABELS, classifyDiagnosis, diagnosesFingerprint, suggestPrograms,
   type MatchedDiagnosis, type ProgramStanding, type SuggestProgram,
 } from "../shared/programRules";
 import { nameKey } from "../shared/workspace";
@@ -20,6 +20,7 @@ import { addDays, localDateStr } from "../shared/workforce";
 import { clearDirectoryCache, loadDirectory, type DirectoryEntry } from "./directoryDb";
 import { WorkspaceError, audit, buildNameDobIndex, clearScheduleCache, createTask, officeClinicIds, subjectKeyFor, type WorkspaceActor } from "./workspaceDb";
 import { checkEnrollmentsFor } from "./enrollDb";
+import { getSeenSince } from "./seenSince";
 import { conditionFacts } from "./chartFacts";
 
 async function db() {
@@ -92,12 +93,12 @@ async function diagnosesByPerson(keys: Set<string>): Promise<Map<string, Matched
   return out;
 }
 
-/** Check everyone seen in the last 12 months; add new suggestions, refresh open ones, withdraw ones that no longer apply. */
+/** Check everyone seen since the start date; add new suggestions, refresh open ones, withdraw ones that no longer apply. */
 export async function scanProgramSuggestions() {
   const d = await db();
   clearDirectoryCache();
   const dir = await loadDirectory();
-  const since = addDays(localDateStr(), -SUGGEST_SEEN_WITHIN_DAYS);
+  const since = await getSeenSince();
   const people = Array.from(dir.values()).filter((e) => e.lastVisit && e.lastVisit >= since);
   const keys = new Set(people.map((p) => p.key));
   const roster = new Map((await d.select(rosterCols).from(patients)).map((r) => [`p:${r.id}`, r as RosterRow]));
@@ -137,13 +138,20 @@ export async function scanProgramSuggestions() {
     }
   }
   for (let i = 0; i < inserts.length; i += 300) await d.insert(programSuggestions).values(inserts.slice(i, i + 300));
-  const withdraw = Array.from(pending.values()).filter((s) => !stillPending.has(s.id)).map((s) => s.id);
-  for (let i = 0; i < withdraw.length; i += 500) {
-    await d.update(programSuggestions).set({ status: "withdrawn", decisionNote: "No longer qualifies (or enrolled another way)", decidedAt: new Date() }).where(inArray(programSuggestions.id, withdraw.slice(i, i + 500)));
+  // Waiting suggestions that no longer apply: outside the start date, or they no longer qualify / were enrolled another way.
+  const gone = Array.from(pending.values()).filter((s) => !stillPending.has(s.id));
+  const outside = gone.filter((s) => !keys.has(s.key)).map((s) => s.id);
+  const other = gone.filter((s) => keys.has(s.key)).map((s) => s.id);
+  for (const [ids, note] of [[outside, `Not seen since ${since}`], [other, "No longer qualifies (or enrolled another way)"]] as const) {
+    for (let i = 0; i < ids.length; i += 500) {
+      await d.update(programSuggestions).set({ status: "withdrawn", decisionNote: note, decidedAt: new Date() }).where(inArray(programSuggestions.id, ids.slice(i, i + 500)));
+    }
   }
+  const withdraw = gone;
   const newPatients = new Set(inserts.map((s) => s.subjectKey)).size;
   if (newPatients) await notifyApprovers(newPatients, inserts);
-  const summary = { checked: people.length, withDiagnoses: dx.size, added: inserts.length, newPatients, refreshed, withdrawn: withdraw.length };
+  const waiting = await d.select({ key: programSuggestions.subjectKey }).from(programSuggestions).where(eq(programSuggestions.status, "pending"));
+  const summary = { since, checked: people.length, withDiagnoses: dx.size, added: inserts.length, newPatients, refreshed, withdrawn: withdraw.length, withdrawnOutsideDates: outside.length, waitingPatients: new Set(waiting.map((w) => w.key)).size, waitingSuggestions: waiting.length };
   console.log(`[program-suggest] ${JSON.stringify(summary)}`); // counts only
   return summary;
 }
@@ -219,6 +227,7 @@ export async function listSuggestions(actor: WorkspaceActor, f: SuggestionFilter
     counts,
     clinics: myClinics,
     scope: actor.clinicIds ? "office" as const : "all" as const,
+    since: await getSeenSince(),
   };
 }
 

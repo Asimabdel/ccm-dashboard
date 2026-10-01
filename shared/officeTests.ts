@@ -21,8 +21,6 @@ export const OFFICE_TEST_NAMES: Record<OfficeTest, string> = {
 };
 /** Months before the same test can be done again. */
 export const OFFICE_TEST_REPEAT_MONTHS = 12;
-/** Patients seen within this many days (or with an appointment booked) are listed. */
-export const OFFICE_TEST_SEEN_DAYS = 365;
 
 export const QUALIFIERS = ["hyperlipidemia", "t2dm", "obesity", "smoker", "age55", "respiratory"] as const;
 export type Qualifier = (typeof QUALIFIERS)[number];

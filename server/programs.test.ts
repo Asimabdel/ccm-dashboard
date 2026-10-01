@@ -77,6 +77,12 @@ describe("program suggestions from diagnoses", () => {
     expect(computeApcmLevel(0, false, true)).toBe("level_2");
   });
 
+  it("only admins move the start date (patients seen since …)", async () => {
+    await expect(appRouter.createCaller(ctxFor("staff")).workspace.seenSince.set({ date: "2026-09-01" })).rejects.toThrow(/admin/);
+    await expect(appRouter.createCaller(ctxFor("office_manager")).workspace.seenSince.set({ date: "2026-09-01" })).rejects.toThrow(/admin/);
+    await expect(appRouter.createCaller(ctxFor("admin")).workspace.seenSince.set({ date: "2999-01-01" })).rejects.toThrow(/future/);
+  });
+
   it("only the named approvers reach the approval tab", async () => {
     // No database here: not being on the approvers list fails before anything is read.
     await expect(appRouter.createCaller(ctxFor("billing")).workspace.programs.list({})).rejects.toThrow();
