@@ -115,6 +115,11 @@ export const handler = async (event: any, context: any) => {
     const { backfillChartFacts } = await import("../chartFacts");
     return backfillChartFacts({ deadline: Date.now() + 24_000, restart: event.restart === true });
   }
+  // Every night (EventBridge): add Practice Fusion chronic / behavioral diagnoses to CCM-roster records (counts only).
+  if (event && event.__job === "condition-sync" && !event.requestContext && !event.version) {
+    const { syncRosterConditions } = await import("../conditionSync");
+    return syncRosterConditions({ apply: event.apply !== false, deadline: Date.now() + 24_000 });
+  }
   // Link CCM-roster patients to their Practice Fusion records (IAM-only; dry run unless apply; counts only).
   if (event && event.__job === "roster-pf-match" && !event.requestContext && !event.version) {
     const { matchRosterToPf } = await import("../rosterMatch");

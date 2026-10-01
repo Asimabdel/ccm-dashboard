@@ -13,14 +13,15 @@ async function db() {
 
 export interface ConditionFact { title: string | null; code: string | null; status: string | null; date: string | null }
 
-/** Every problem-list entry per patient key (Practice Fusion), plus a roster record's conditions (as names). */
-export async function conditionFacts(keys: Set<string>): Promise<Map<string, ConditionFact[]>> {
+/** Every problem-list entry per patient key (Practice Fusion), plus (unless pfOnly) a roster record's conditions (as names). */
+export async function conditionFacts(keys: Set<string>, opts: { pfOnly?: boolean } = {}): Promise<Map<string, ConditionFact[]>> {
   const d = await db();
   const out = new Map<string, ConditionFact[]>();
   const add = (key: string, f: ConditionFact) => { const l = out.get(key); if (l) l.push(f); else out.set(key, [f]); };
   const rows = await d.select({ key: fhirResources.subjectKey, title: fhirResources.title, code: fhirResources.code, status: fhirResources.status, date: fhirResources.date })
     .from(fhirResources).where(and(eq(fhirResources.resourceType, "Condition"), isNotNull(fhirResources.subjectKey)));
   for (const r of rows) if (r.key && keys.has(r.key)) add(r.key, { title: r.title, code: r.code, status: r.status, date: r.date });
+  if (opts.pfOnly) return out;
   const roster = await d.select({ id: patients.id, chronic: patients.chronicConditions, bhi: patients.bhiConditions }).from(patients);
   for (const r of roster) {
     const key = `p:${r.id}`;

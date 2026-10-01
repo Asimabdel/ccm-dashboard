@@ -71,6 +71,10 @@ const CATEGORIES: Category[] = [
   { key: "eating", label: "Eating disorder", icd: /^F50/, text: /anorexia nervosa|bulimia|binge eating/, chronic: false, behavioral: true },
 ];
 const BY_KEY = new Map(CATEGORIES.map((c) => [c.key, c]));
+/** A recognized chronic condition (counts toward CCM's 2+). */
+export const isChronicCategory = (key: string) => !!BY_KEY.get(key)?.chronic;
+/** A behavioral-health diagnosis (BHI). */
+export const isBehavioralCategory = (key: string) => !!BY_KEY.get(key)?.behavioral;
 
 /** Problems that are over (or were never right) don't count. */
 const NOT_CURRENT = /resolved|inactive|remission|refuted|entered.in.error|history/i;

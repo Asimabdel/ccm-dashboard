@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { NOT_ON_ROSTER, classifyDiagnosis, countChronicConditions, diagnosesFingerprint, icd10Of, suggestPrograms, type MatchedDiagnosis } from "../shared/programRules";
 import { computeApcmLevel } from "./db";
 import { firstClose } from "./rosterMatch";
+import { conditionsToAdd } from "./conditionSync";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 
@@ -76,6 +77,24 @@ describe("program suggestions from diagnoses", () => {
     expect(computeApcmLevel(1, true, false)).toBe("level_1");
     expect(computeApcmLevel(3, true, false)).toBe("level_3");
     expect(computeApcmLevel(0, false, true)).toBe("level_2");
+  });
+
+  it("fills CCM chronic conditions from Practice Fusion: adds with ICD-10, keeps what's there, no duplicates", () => {
+    const problems = [
+      { title: "Type 2 diabetes mellitus without complications", code: "icd-10-cm|E11.9", status: "active", date: "2022-01-01" },
+      { title: "Type 2 diabetes mellitus with hyperglycemia", code: "icd-10-cm|E11.65", status: "active", date: "2025-03-01" },
+      { title: "Essential hypertension", code: "icd-10-cm|I10", status: "active", date: "2020-05-05" },
+      { title: "Asthma", code: "icd-10-cm|J45.909", status: "resolved", date: "2019-01-01" },
+      { title: "Major depressive disorder, recurrent, moderate", code: "icd-10-cm|F33.1", status: "active", date: "2024-02-02" },
+      { title: "Gastro-esophageal reflux disease", code: "icd-10-cm|K21.9", status: "active", date: "2024-02-02" },
+    ];
+    // Staff already typed "HTN": high blood pressure isn't added again; the newest diabetes problem is used.
+    expect(conditionsToAdd({ chronic: ["HTN"], bhi: [], bhiActive: true }, problems)).toEqual({
+      chronic: ["Major depressive disorder, recurrent, moderate (F33.1)", "Type 2 diabetes mellitus with hyperglycemia (E11.65)"],
+      bhi: ["Major depressive disorder, recurrent, moderate (F33.1)"],
+    });
+    // Not in BHI: nothing goes on the BHI list. Everything already there: nothing added.
+    expect(conditionsToAdd({ chronic: ["Diabetes", "Hypertension", "Depression"], bhi: [], bhiActive: false }, problems)).toEqual({ chronic: [], bhi: [] });
   });
 
   it("record matching: close first names are nicknames / initials; only admins confirm pairs", async () => {
