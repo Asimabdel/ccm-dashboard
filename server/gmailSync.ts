@@ -24,7 +24,7 @@ import { localDateStr } from "../shared/workforce";
 import { openSecret, sealSecret } from "./secretBox";
 import { relayFetch } from "./egress";
 import {
-  WorkspaceError, audit, buildNameDobIndex, buildNameIndex, buildPhoneIndex, careTeamAssignee, createTask, providerTeamAssignee, searchSubjects, subjectCare, type WorkspaceActor,
+  WorkspaceError, audit, buildNameDobIndex, buildNameIndex, buildPhoneIndex, careTeamAssignee, clinicOfSubjects, createTask, inClinics, providerTeamAssignee, searchSubjects, subjectCare, type WorkspaceActor,
 } from "./workspaceDb";
 
 /** "practice" = the practice mailbox (patient emails + faxes); "fax" = an optional fax-only mailbox. */
@@ -605,7 +605,17 @@ export async function runGmailBackfill(opts: { deadline: number }) {
 
 // ---- Patient emails page: list, link, ignore ----
 
-export async function listEmails(filter: "needs_patient" | "all") {
+/** Which patient an email is about (null = nobody yet). */
+const emailKey = (m: { subjectKey: string | null; patientId: number | null }) => m.subjectKey ?? (m.patientId ? `p:${m.patientId}` : null);
+
+/** Clinic-limited staff (MAs) only reach emails about patients at their clinic(s); unmatched ones are the front desk's. */
+async function assertEmailInScope(actor: WorkspaceActor, m: { subjectKey: string | null; patientId: number | null }) {
+  if (!actor.clinicIds) return;
+  const key = emailKey(m);
+  if (!key || !inClinics(actor.clinicIds, (await clinicOfSubjects([key])).get(key))) throw new WorkspaceError("Email not found.", "NOT_FOUND");
+}
+
+export async function listEmails(filter: "needs_patient" | "all", clinicIds: number[] | null = null) {
   const d = await db();
   const since = new Date(Date.now() - 30 * 86_400_000);
   const conds = [gte(emailMessages.receivedAt, since)];
@@ -614,7 +624,9 @@ export async function listEmails(filter: "needs_patient" | "all") {
     .leftJoin(users, eq(users.id, emailMessages.assignedUserId))
     .where(and(...conds)).orderBy(desc(emailMessages.receivedAt)).limit(1000);
   const c = await config();
-  return rows.map(({ m, assignee }) => ({
+  const clinicOf = clinicIds ? await clinicOfSubjects(rows.map(({ m }) => emailKey(m))) : null;
+  const visible = clinicOf ? rows.filter(({ m }) => { const k = emailKey(m); return !!k && inClinics(clinicIds, clinicOf.get(k)); }) : rows;
+  return visible.map(({ m, assignee }) => ({
     id: m.id, fromEmail: m.fromEmail, fromName: m.fromName, subject: m.subject, preview: m.preview, receivedAt: m.receivedAt,
     status: m.status, patientName: m.patientName, patientId: m.patientId, matchMethod: m.matchMethod, taskId: m.taskId, historical: m.historical,
     assigneeName: assignee, link: c.mailbox ? gmailMessageLink(c.mailbox, m.messageIdHeader, m.threadId ?? "") : null,
@@ -630,6 +642,10 @@ export async function linkEmail(actor: WorkspaceActor, input: { emailId: number;
   if (!m) throw new WorkspaceError("Email not found.", "NOT_FOUND");
   const care = await subjectCare(input.subjectKey);
   if (!care) throw new WorkspaceError("Patient not found.", "NOT_FOUND");
+  if (actor.clinicIds) {
+    await assertEmailInScope(actor, m);
+    if (!inClinics(actor.clinicIds, care.clinicId)) throw new WorkspaceError("That patient isn't at your clinic.", "FORBIDDEN");
+  }
   if (m.fromEmail) {
     await d.insert(emailContacts).values({ email: m.fromEmail, kind: "patient", patientId: care.patientId, subjectKey: input.subjectKey, name: care.name.slice(0, 255), source: "linked", createdByUserId: actor.id })
       .onDuplicateKeyUpdate({ set: { kind: "patient", patientId: care.patientId, subjectKey: input.subjectKey, name: care.name.slice(0, 255), source: "linked", createdByUserId: actor.id } });
@@ -660,6 +676,7 @@ export async function ignoreEmailSender(actor: WorkspaceActor, emailId: number) 
   const d = await db();
   const [m] = await d.select().from(emailMessages).where(eq(emailMessages.id, emailId)).limit(1);
   if (!m) throw new WorkspaceError("Email not found.", "NOT_FOUND");
+  await assertEmailInScope(actor, m);
   if (m.fromEmail) {
     await d.insert(emailContacts).values({ email: m.fromEmail, kind: "ignore", source: "linked", createdByUserId: actor.id })
       .onDuplicateKeyUpdate({ set: { kind: "ignore", patientId: null, subjectKey: null, source: "linked", createdByUserId: actor.id } });

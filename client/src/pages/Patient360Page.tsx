@@ -43,11 +43,13 @@ export default function Patient360Page() {
 }
 
 function Patient360({ id }: { id: number }) {
-  const { caps } = useWorkspace();
+  const { caps, user } = useWorkspace();
   const [params, setParams] = useUrlParams();
+  // The CCM record (older screens) stays with the roles that manage it; MAs see everything else.
+  const ccmRecord = !!caps?.patientFull && user?.role !== "medical_assistant";
   // Full-record roles open on the CCM record (what every existing patient link
   // expects); Workspace links pass ?tab=overview explicitly.
-  const defaultTab: Tab = caps?.patientFull ? "care" : "overview";
+  const defaultTab: Tab = ccmRecord ? "care" : "overview";
   const tab = (params.get("tab") as Tab) || defaultTab;
   const [taskOpen, setTaskOpen] = useState(false);
   const q = trpc.workspace.patients.summary.useQuery(id, { enabled: !!id, retry: false });
@@ -60,10 +62,8 @@ function Patient360({ id }: { id: number }) {
     { key: "appointments", label: "Appointments", icon: CalendarDays, count: q.data?.appointments.length },
     { key: "tasks", label: "Tasks", icon: ClipboardList, count: q.data?.openTasks.length },
   ];
-  if (caps?.patientFull) {
-    tabs.unshift({ key: "care", label: "Care Management", icon: HeartPulse });
-    tabs.push({ key: "testing", label: "Testing", icon: FlaskConical });
-  }
+  if (ccmRecord) tabs.unshift({ key: "care", label: "Care Management", icon: HeartPulse });
+  if (caps?.patientFull) tabs.push({ key: "testing", label: "Testing", icon: FlaskConical });
   if (caps?.intakeForms) tabs.push({ key: "forms", label: "Forms", icon: ClipboardSignature });
   if (caps?.eligibility) tabs.push({ key: "insurance", label: "Insurance", icon: ShieldCheck });
   if (caps?.chartBasic) tabs.push({ key: "chart", label: "Chart", icon: Database });
@@ -84,7 +84,7 @@ function Patient360({ id }: { id: number }) {
       {q.isLoading && <Loading />}
       {q.error && <ErrorNote message={q.error.message} />}
       {/* If the Workspace summary can't load, the CCM record must still be reachable. */}
-      {q.error && caps?.patientFull && <div className="mt-5"><PatientDetailPage embedded patientId={id} /></div>}
+      {q.error && ccmRecord && <div className="mt-5"><PatientDetailPage embedded patientId={id} /></div>}
 
       {d && p && (
         <>
@@ -161,7 +161,7 @@ function Patient360({ id }: { id: number }) {
             </Panel>
           )}
 
-          {tab === "care" && caps?.patientFull && <PatientDetailPage embedded patientId={id} />}
+          {tab === "care" && ccmRecord && <PatientDetailPage embedded patientId={id} />}
           {tab === "testing" && caps?.patientFull && <Panel><PatientTestingPanel subjectKey={`p:${id}`} /></Panel>}
           {tab === "chart" && caps?.chartBasic && <PatientChartPanel subjectKey={`p:${id}`} />}
           {tab === "insurance" && caps?.eligibility && <InsurancePanel subjectKey={`p:${id}`} />}

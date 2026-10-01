@@ -34,6 +34,8 @@ const WORKFORCE_ONLY_ALLOWED_PREFIXES = ["auth.", "workforce.", "workspace.", "n
 // Office managers (admin for one office) are fenced the same way, plus the few older procedures
 // their pages use; each of those limits them to their office (staff logins, patient search, clinics).
 const OFFICE_MANAGER_ALLOWED = [...WORKFORCE_ONLY_ALLOWED_PREFIXES, "users.", "members.create", "patients.list", "patients.duplicates", "clinics.list"];
+// MAs (since 2026-10-01: the front desk's pages, at their clinic): plus the older procedures those pages use, each limited to their clinic.
+const MEDICAL_ASSISTANT_ALLOWED = [...WORKFORCE_ONLY_ALLOWED_PREFIXES, "patients.list", "patients.duplicates", "clinics.list", "followUps.list", "followUps.updateStatus"];
 const allowedFor = (list: string[], path: string) => list.some((p) => (p.endsWith(".") ? path.startsWith(p) : path === p));
 
 const requireUser = t.middleware(async opts => {
@@ -45,7 +47,7 @@ const requireUser = t.middleware(async opts => {
 
   if (
     (WORKFORCE_ONLY_ROLES as readonly string[]).includes(ctx.user.role) &&
-    !WORKFORCE_ONLY_ALLOWED_PREFIXES.some((p) => path.startsWith(p))
+    !allowedFor(ctx.user.role === "medical_assistant" ? MEDICAL_ASSISTANT_ALLOWED : WORKFORCE_ONLY_ALLOWED_PREFIXES, path)
   ) {
     throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this resource." });
   }

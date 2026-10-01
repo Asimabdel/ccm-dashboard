@@ -16,19 +16,22 @@ function ctxFor(role: string): TrpcContext {
   return { user, req: { protocol: "https", headers: {} } as TrpcContext["req"], res: {} as TrpcContext["res"] };
 }
 
-describe("medical_assistant is fenced off from patient data", () => {
+describe("medical_assistant: the front desk's pages, but not the CCM record", () => {
   const ma = () => appRouter.createCaller(ctxFor("medical_assistant"));
+  /** Reached the procedure (any failure is about the missing test database, not access). */
+  const reaches = async (p: Promise<unknown>) => { try { await p; } catch (e) { expect(String((e as Error).message)).not.toMatch(/access/i); } };
 
-  it("blocks procedures that have their own role check", async () => {
-    await expect(ma().patients.list({})).rejects.toThrow(/access/i);
-    await expect(ma().worklist.forMonth({ month: "2026-09" })).rejects.toThrow(/access/i);
+  it("reaches the older pages the front desk uses (each limited to their clinic)", async () => {
+    await reaches(ma().patients.list({}));
+    await reaches(ma().clinics.list());
+    await reaches(ma().followUps.list({}));
   });
 
-  it("blocks procedures that have NO role check of their own", async () => {
+  it("still blocks the CCM record and worklist", async () => {
+    await expect(ma().worklist.forMonth({ month: "2026-09" })).rejects.toThrow(/access/i);
     await expect(ma().patients.getById(1)).rejects.toThrow(/access/i);
     await expect(ma().worklist.getTask(1)).rejects.toThrow(/access/i);
     await expect(ma().ccmNotes.getByTaskId(1)).rejects.toThrow(/access/i);
-    await expect(ma().clinics.list()).rejects.toThrow(/access/i);
   });
 
   it("still lets them read their own session", async () => {

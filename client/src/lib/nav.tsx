@@ -142,7 +142,12 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
     ME,
   ],
   // MAs get operational pages only; the server fences CCM/billing data away from them.
-  medical_assistant: [{ label: "Workspace", items: [HOME, FLOW, MY_WORK, INSURANCE, PLAYBOOKS] }, ME],
+  // Since 2026-10-01: the front desk's pages (each limited to the clinic they work at).
+  medical_assistant: [
+    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, DOCUMENTS, EMAILS, FAXES, FLOW, OPPORTUNITIES, PATIENTS, INSURANCE, PAYMENTS, PLAYBOOKS] },
+    { label: "Care Management", items: [{ label: "Follow-ups", path: "/follow-ups", icon: CalendarClock }] },
+    ME,
+  ],
 };
 
 /** Flat list per role — used by the ⌘K command palette. */

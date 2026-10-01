@@ -15,7 +15,18 @@ import {
 } from "../shared/fax";
 import { gmailMessageLink } from "../shared/email";
 import { localDateStr } from "../shared/workforce";
-import { WorkspaceError, audit, buildNameDobIndex, careTeamAssignee, createTask, subjectCare, type WorkspaceActor } from "./workspaceDb";
+import { WorkspaceError, audit, buildNameDobIndex, careTeamAssignee, clinicOfSubjects, createTask, inClinics, subjectCare, type WorkspaceActor } from "./workspaceDb";
+
+/** Which patient a fax is about (null = nobody yet). */
+const faxKey = (f: { subjectKey: string | null; patientId: number | null }) => f.subjectKey ?? (f.patientId ? `p:${f.patientId}` : null);
+
+/** Clinic-limited staff (MAs) only reach faxes about patients at their clinic(s); unmatched ones are the front desk's. */
+async function assertFaxInScope(actor: WorkspaceActor, faxId: number) {
+  if (!actor.clinicIds) return;
+  const [f] = await (await db()).select({ subjectKey: faxes.subjectKey, patientId: faxes.patientId }).from(faxes).where(eq(faxes.id, faxId)).limit(1);
+  const key = f ? faxKey(f) : null;
+  if (!key || !inClinics(actor.clinicIds, (await clinicOfSubjects([key])).get(key))) throw new WorkspaceError("Fax not found.", "NOT_FOUND");
+}
 import type { MailSlot } from "./gmailSync";
 
 const SETTINGS_KEY = "fax_settings";
@@ -172,6 +183,10 @@ async function assign(actor: WorkspaceActor, faxId: number, subjectKey: string, 
 }
 
 export async function assignFax(actor: WorkspaceActor, input: { faxId: number; subjectKey: string; docType?: FaxDocType | null }) {
+  if (actor.clinicIds) {
+    await assertFaxInScope(actor, input.faxId);
+    if (!inClinics(actor.clinicIds, (await subjectCare(input.subjectKey))?.clinicId)) throw new WorkspaceError("That patient isn't at your clinic.", "FORBIDDEN");
+  }
   const r = await assign(actor, input.faxId, input.subjectKey, "manual", input.docType ?? undefined);
   await audit(actor, "update_task", { entityType: "fax", entityId: input.faxId, description: "Fax matched to a patient" });
   return r;
@@ -187,6 +202,7 @@ async function closeTask(actor: WorkspaceActor, taskId: number | null, to: "comp
 }
 
 export async function markFiled(actor: WorkspaceActor, faxId: number) {
+  await assertFaxInScope(actor, faxId);
   const d = await db();
   const [f] = await d.select().from(faxes).where(eq(faxes.id, faxId)).limit(1);
   if (!f) throw new WorkspaceError("Fax not found.", "NOT_FOUND");
@@ -198,6 +214,7 @@ export async function markFiled(actor: WorkspaceActor, faxId: number) {
 }
 
 export async function markNotPatient(actor: WorkspaceActor, faxId: number) {
+  await assertFaxInScope(actor, faxId);
   const d = await db();
   const [f] = await d.select().from(faxes).where(eq(faxes.id, faxId)).limit(1);
   if (!f) throw new WorkspaceError("Fax not found.", "NOT_FOUND");
@@ -210,6 +227,7 @@ export async function markNotPatient(actor: WorkspaceActor, faxId: number) {
 /** Read (or re-read) one fax with the AI now. */
 export async function rereadFax(actor: WorkspaceActor, faxId: number) {
   if (!aiReady()) throw new WorkspaceError("AI reading isn't set up on this server.");
+  await assertFaxInScope(actor, faxId);
   const d = await db();
   const [f] = await d.select({ status: faxes.status, mimeType: faxes.mimeType, filename: faxes.filename }).from(faxes).where(eq(faxes.id, faxId)).limit(1);
   if (!f) throw new WorkspaceError("Fax not found.", "NOT_FOUND");
@@ -226,7 +244,7 @@ export async function rereadFax(actor: WorkspaceActor, faxId: number) {
 
 export type FaxFilter = "needs_patient" | "to_file" | "filed" | "not_patient" | "all";
 
-export async function listFaxes(filter: FaxFilter) {
+export async function listFaxes(filter: FaxFilter, clinicIds: number[] | null = null) {
   const d = await db();
   const since = new Date(Date.now() - 60 * 86_400_000);
   const conds = [gte(faxes.receivedAt, since)];
@@ -241,7 +259,9 @@ export async function listFaxes(filter: FaxFilter) {
   if (doneInMyWork.length) await d.update(faxes).set({ status: "filed", filedAt: new Date() }).where(inArray(faxes.id, doneInMyWork));
   const { mailboxAddress } = await import("./gmailSync");
   const boxes: Record<string, string | null> = { practice: await mailboxAddress("practice"), fax: await mailboxAddress("fax") };
+  const clinicOf = clinicIds ? await clinicOfSubjects(rows.map(({ f }) => faxKey(f))) : null;
   return rows
+    .filter(({ f }) => { if (!clinicOf) return true; const k = faxKey(f); return !!k && inClinics(clinicIds, clinicOf.get(k)); })
     .map(({ f, assignee, taskRole }) => ({ ...f, status: doneInMyWork.includes(f.id) ? ("filed" as const) : f.status, assignee: assignee ?? (taskRole ? "Front desk queue" : null) }))
     .filter((f) => filter === "all" || filter === "needs_patient" || filter === "not_patient" || (filter === "to_file" ? f.status === "to_file" : f.status === "filed"))
     .map((f) => ({
@@ -255,6 +275,7 @@ export async function listFaxes(filter: FaxFilter) {
 
 /** The fax PDF for viewing, straight from the mailbox (not stored in MyPCP). */
 export async function faxFile(actor: WorkspaceActor, faxId: number) {
+  await assertFaxInScope(actor, faxId);
   const d = await db();
   const [f] = await d.select().from(faxes).where(eq(faxes.id, faxId)).limit(1);
   if (!f?.attachmentId) throw new WorkspaceError("Fax not found.", "NOT_FOUND");

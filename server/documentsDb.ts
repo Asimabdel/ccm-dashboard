@@ -120,7 +120,7 @@ async function subjectNames(keys: (string | null)[]) {
 /** People who can be asked to sign (anyone with Documents). */
 export async function signerChoices() {
   const rows = await (await db()).select({ id: users.id, name: users.name, role: users.role }).from(users)
-    .where(and(inArray(users.role, ["admin", "office_manager", "staff", "provider", "front_desk"]), sql`${users.openId} NOT LIKE 'roster:%'`)).orderBy(asc(users.name));
+    .where(and(inArray(users.role, ["admin", "office_manager", "staff", "provider", "front_desk", "medical_assistant"]), sql`${users.openId} NOT LIKE 'roster:%'`)).orderBy(asc(users.name));
   return rows.filter((u) => u.name);
 }
 

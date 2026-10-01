@@ -534,7 +534,7 @@ async function loadVisibleTask(actor: WorkspaceActor, taskId: number) {
   const myTeam = !!t.assignedRole && !t.assignedUserId && !!actor.teamQueues?.includes(t.assignedRole);
   if (actor.clinicIds && t.clinicId && !actor.clinicIds.includes(t.clinicId) && t.assignedUserId !== actor.id && !myTeam) throw new WorkspaceError("Task not found.", "NOT_FOUND");
   const mineOrQueue = t.assignedUserId === actor.id || t.assignedRole === actor.role || myTeam || (!t.assignedUserId && !t.assignedRole) || t.createdByUserId === actor.id;
-  if (!mineOrQueue && !["admin", "staff", "provider", "front_desk"].includes(actor.role)) throw new WorkspaceError("Task not found.", "NOT_FOUND");
+  if (!mineOrQueue && !["admin", "staff", "provider", "front_desk", "medical_assistant"].includes(actor.role)) throw new WorkspaceError("Task not found.", "NOT_FOUND");
   return t;
 }
 
@@ -1121,6 +1121,23 @@ export async function subjectCare(key: string): Promise<{ patientId: number | nu
   }
   return visit ? { patientId: null, name: visit.name, clinicId: visit.clinicId, coordinatorId: null } : null;
 }
+
+/** The clinic each person belongs to: roster patients' clinic, else the clinic of their latest visit. */
+export async function clinicOfSubjects(keys: (string | null | undefined)[]): Promise<Map<string, number | null>> {
+  const out = new Map<string, number | null>();
+  const uniq = Array.from(new Set(keys.filter((k): k is string => !!k)));
+  if (!uniq.length) return out;
+  const d = await db();
+  const pids = uniq.map((k) => /^p:(\d+)$/.exec(k)?.[1]).filter((x): x is string => !!x).map(Number);
+  const roster = pids.length ? await d.select({ id: patients.id, clinicId: patients.clinicId }).from(patients).where(inArray(patients.id, pids)) : [];
+  const rosterClinic = new Map(roster.map((r) => [`p:${r.id}`, r.clinicId]));
+  const sched = await loadScheduleSubjects();
+  for (const k of uniq) out.set(k, rosterClinic.get(k) ?? sched.get(k)?.clinicId ?? null);
+  return out;
+}
+
+/** Is a clinic within someone's reach (null = every clinic)? People with no known clinic are out of reach of clinic-limited staff. */
+export const inClinics = (clinicIds: number[] | null | undefined, clinicId: number | null | undefined) => !clinicIds || (clinicId != null && clinicIds.includes(clinicId));
 
 /** Find patients by name (roster + imported schedule), for linking an email to the right person. */
 export async function searchSubjects(q: string, limit = 20, clinicIds: number[] | null = null) {

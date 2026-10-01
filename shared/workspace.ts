@@ -16,39 +16,39 @@ export const WORKSPACE_CAPS = {
   /** My Work task queue. */
   tasks: ["admin", "office_manager", "staff", "provider", "billing", "front_desk", "medical_assistant"],
   /** Assign tasks to other people. */
-  assignTasks: ["admin", "office_manager", "staff", "provider", "front_desk"],
+  assignTasks: ["admin", "office_manager", "staff", "provider", "front_desk", "medical_assistant"],
   /** See the Patient Flow board. */
   flowView: ["admin", "office_manager", "staff", "provider", "front_desk", "medical_assistant"],
   /** Move patients between flow columns. */
   flowUpdate: ["admin", "office_manager", "staff", "provider", "front_desk", "medical_assistant"],
   /** Upload the Practice Fusion schedule export. */
-  scheduleImport: ["admin", "front_desk"],
+  scheduleImport: ["admin", "front_desk", "medical_assistant"],
   /** See Opportunity Finder lists. */
-  opportunitiesView: ["admin", "office_manager", "staff", "provider", "front_desk"],
+  opportunitiesView: ["admin", "office_manager", "staff", "provider", "front_desk", "medical_assistant"],
   /** Act on opportunities (create tasks, mark reviewed). */
-  opportunitiesAct: ["admin", "office_manager", "staff", "front_desk"],
+  opportunitiesAct: ["admin", "office_manager", "staff", "front_desk", "medical_assistant"],
   /** Read playbooks. */
   playbooksView: ["admin", "office_manager", "staff", "provider", "billing", "front_desk", "medical_assistant"],
   /** Create / edit playbooks. */
   playbooksEdit: ["admin"],
   /** Check a patient's insurance with Availity (eligibility). */
-  eligibility: ["admin", "office_manager", "staff", "provider", "front_desk"],
+  eligibility: ["admin", "office_manager", "staff", "provider", "front_desk", "medical_assistant"],
   /** Website booking requests (call to confirm). */
-  bookings: ["admin", "office_manager", "staff", "front_desk"],
+  bookings: ["admin", "office_manager", "staff", "front_desk", "medical_assistant"],
   /** Triage patient emails from the practice mailbox (link a sender to a patient). */
-  emailTriage: ["admin", "staff", "front_desk"],
-  /** Full patient record incl. CCM/BHI/APCM detail. MAs get an operational view only. */
-  patientFull: ["admin", "office_manager", "staff", "provider", "front_desk"],
+  emailTriage: ["admin", "staff", "front_desk", "medical_assistant"],
+  /** Full patient record incl. CCM/BHI/APCM detail (MAs: since 2026-10-01, like the front desk, at their clinic). */
+  patientFull: ["admin", "office_manager", "staff", "provider", "front_desk", "medical_assistant"],
   /** The whole Practice Fusion chart copy (problems, meds, labs, notes…). */
   chartFull: ["admin", "staff", "provider"],
   /** Send patient forms (intake / consents) and see what patients filled in and signed. */
-  intakeForms: ["admin", "office_manager", "staff", "provider", "front_desk"],
+  intakeForms: ["admin", "office_manager", "staff", "provider", "front_desk", "medical_assistant"],
   /** Documents: upload PDFs, fill and sign them, send them to teammates to co-sign. */
-  documents: ["admin", "office_manager", "staff", "provider", "front_desk"],
+  documents: ["admin", "office_manager", "staff", "provider", "front_desk", "medical_assistant"],
   /** The limited chart: contact, insurance, visits and allergies (minimum necessary for the front desk). */
-  chartBasic: ["admin", "office_manager", "staff", "provider", "front_desk"],
+  chartBasic: ["admin", "office_manager", "staff", "provider", "front_desk", "medical_assistant"],
   /** Square payments: see payments, link them to patients, send payment links, charge on the Terminal. */
-  payments: ["admin", "office_manager", "front_desk"],
+  payments: ["admin", "office_manager", "front_desk", "medical_assistant"],
 } as const satisfies Record<string, readonly WorkspaceRole[]>;
 
 export type WorkspaceCap = keyof typeof WORKSPACE_CAPS;

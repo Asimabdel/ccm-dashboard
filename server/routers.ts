@@ -76,7 +76,7 @@ import {
   users,
 } from "../drizzle/schema";
 import { ccmNotesRouter } from "./routers/ccmNotes";
-import { officeClinicIds, officeStaff } from "./workspaceDb";
+import { getMaClinicIds, officeClinicIds, officeStaff } from "./workspaceDb";
 import { OFFICE_ASSIGNABLE_ROLES, officeCanManageLogin } from "../shared/workspace";
 import { staffProfiles } from "../drizzle/schema";
 import { workforceRouter } from "./routers/workforce";
@@ -489,21 +489,27 @@ export const appRouter = router({
         }).optional()
       )
       .query(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin", "office_manager", "staff", "provider", "billing", "front_desk"]);
+        requireRole(ctx, ["admin", "office_manager", "staff", "provider", "billing", "front_desk", "medical_assistant"]);
         void logAudit(ctx, "list_patients", { entityType: "patient", description: "Viewed patient list" });
         if (ctx.user.role === "office_manager") {
           const [office] = await officeClinicIds(ctx.user.id);
           if (!office) return [];
           return getEnrichedPatients({ ...(input || {}), clinicId: office });
         }
+        // MAs: the patients at the clinic(s) they work at (floaters: every clinic).
+        if (ctx.user.role === "medical_assistant") {
+          const mine = await getMaClinicIds(ctx.user.id);
+          const rows = await getEnrichedPatients(input || {});
+          return mine ? rows.filter((r) => r.patient.clinicId != null && mine.includes(r.patient.clinicId)) : rows;
+        }
         return getEnrichedPatients(input || {});
       }),
 
     /** Map of normalized name -> { ids, sameDob } for duplicate flagging in the UI. */
     duplicates: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx, ["admin", "office_manager", "staff", "provider", "billing", "front_desk"]);
-      // Practice-wide name matching: not shown to an office manager (other offices' patients).
-      if (ctx.user.role === "office_manager") return {} as Awaited<ReturnType<typeof getDuplicateNameGroups>>;
+      requireRole(ctx, ["admin", "office_manager", "staff", "provider", "billing", "front_desk", "medical_assistant"]);
+      // Practice-wide name matching: not shown to staff limited to one office (other offices' patients).
+      if (ctx.user.role === "office_manager" || ctx.user.role === "medical_assistant") return {} as Awaited<ReturnType<typeof getDuplicateNameGroups>>;
       return getDuplicateNameGroups();
     }),
 
@@ -1379,8 +1385,12 @@ export const appRouter = router({
     list: protectedProcedure
       .input(z.object({ status: z.string().optional(), type: z.string().optional() }).optional())
       .query(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin", "front_desk", "staff"]);
-        return getEnrichedFollowUps(input || {});
+        requireRole(ctx, ["admin", "front_desk", "staff", "medical_assistant"]);
+        const rows = await getEnrichedFollowUps(input || {});
+        if (ctx.user.role !== "medical_assistant") return rows;
+        // MAs: follow-ups for patients at their clinic(s).
+        const mine = await getMaClinicIds(ctx.user.id);
+        return mine ? rows.filter((r) => r.patient?.clinicId != null && mine.includes(r.patient.clinicId)) : rows;
       }),
 
     updateStatus: protectedProcedure
@@ -1393,9 +1403,14 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin", "front_desk", "staff"]);
+        requireRole(ctx, ["admin", "front_desk", "staff", "medical_assistant"]);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        if (ctx.user.role === "medical_assistant") {
+          const mine = await getMaClinicIds(ctx.user.id);
+          const [row] = await db.select({ clinicId: patients.clinicId }).from(followUpItems).innerJoin(patients, eq(patients.id, followUpItems.patientId)).where(eq(followUpItems.id, input.id)).limit(1);
+          if (!row || (mine && (row.clinicId == null || !mine.includes(row.clinicId)))) throw new TRPCError({ code: "NOT_FOUND", message: "Follow-up not found." });
+        }
         const update: any = { status: input.status, updatedAt: new Date() };
         if (input.scheduledDate) update.scheduledDate = input.scheduledDate;
         if (input.notes !== undefined) update.notes = input.notes;

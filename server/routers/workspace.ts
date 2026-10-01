@@ -479,12 +479,12 @@ export const workspaceRouter = router({
       return run(() => gmail.importPatientEmails(actor, input.csv));
     }),
     list: protectedProcedure.input(z.object({ filter: z.enum(["needs_patient", "all"]).default("needs_patient") })).query(async ({ ctx, input }) => {
-      await actorFor(ctx, "emailTriage");
-      return gmail.listEmails(input.filter);
+      const actor = await actorFor(ctx, "emailTriage");
+      return gmail.listEmails(input.filter, actor.clinicIds);
     }),
     search: protectedProcedure.input(z.object({ q: z.string().trim().min(2).max(100) })).query(async ({ ctx, input }) => {
-      await actorFor(ctx, "emailTriage");
-      return gmail.searchSubjects(input.q);
+      const actor = await actorFor(ctx, "emailTriage");
+      return gmail.searchSubjects(input.q, 20, actor.clinicIds);
     }),
     link: protectedProcedure
       .input(z.object({ emailId: z.number().int().positive(), subjectKey: z.string().regex(/^(p:\d+|s:.{1,110})$/) }))
@@ -1030,8 +1030,8 @@ export const workspaceRouter = router({
     list: protectedProcedure
       .input(z.object({ filter: z.enum(["needs_patient", "to_file", "filed", "not_patient", "all"]).default("needs_patient") }))
       .query(async ({ ctx, input }) => {
-        await actorFor(ctx, "emailTriage");
-        return fax.listFaxes(input.filter);
+        const actor = await actorFor(ctx, "emailTriage");
+        return fax.listFaxes(input.filter, actor.clinicIds);
       }),
     open: protectedProcedure.input(z.number().int().positive()).mutation(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "emailTriage");
@@ -1244,9 +1244,7 @@ export const workspaceRouter = router({
     /** Operational Patient 360: demographics, appointments and tasks. CCM detail stays on patients.getById. */
     summary: protectedProcedure.input(z.number().int().positive()).query(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "flowView");
-      const res = await run(() => ws.patientOperational(actor, input));
-      if (ctx.user.role === "medical_assistant") return { ...res, patient: { ...res.patient, insurance: null } };
-      return res;
+      return run(() => ws.patientOperational(actor, input));
     }),
   }),
 

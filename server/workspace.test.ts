@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 import {
-  can,
+  WORKSPACE_CAPS, can,
   checkFlowTransition,
   clinicLocalToUtc,
   evaluateOpportunities,
@@ -55,13 +55,12 @@ function ctxFor(role: string): TrpcContext {
 }
 
 describe("workspace capabilities", () => {
-  it("keeps MAs out of Opportunity Finder, schedule import and full patient records", () => {
-    expect(can("medical_assistant", "flowView")).toBe(true);
-    expect(can("medical_assistant", "tasks")).toBe(true);
-    expect(can("medical_assistant", "opportunitiesView")).toBe(false);
-    expect(can("medical_assistant", "scheduleImport")).toBe(false);
-    expect(can("medical_assistant", "patientFull")).toBe(false);
-    expect(can("medical_assistant", "assignTasks")).toBe(false);
+  it("gives MAs exactly the front desk's abilities (each limited to their clinic elsewhere)", () => {
+    for (const cap of Object.keys(WORKSPACE_CAPS) as (keyof typeof WORKSPACE_CAPS)[]) {
+      expect([cap, can("medical_assistant", cap)]).toEqual([cap, can("front_desk", cap)]);
+    }
+    expect(can("medical_assistant", "chartFull")).toBe(false);
+    expect(can("medical_assistant", "playbooksEdit")).toBe(false);
   });
   it("only admins edit playbooks; everyone with a role reads them", () => {
     expect(can("admin", "playbooksEdit")).toBe(true);
@@ -342,9 +341,9 @@ describe("RingCentral phone", () => {
     expect(parseRingCentralCall(null)).toBeNull();
   });
 
-  it("only admins change the connection; MAs can't read a patient's call log", async () => {
+  it("only admins change the connection; billing can't read a patient's call log", async () => {
     await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.phone.saveConfig({ enabled: true, clientId: "", allowTexting: false })).rejects.toThrow(/admin/);
-    await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.phone.forPatient(1)).rejects.toThrow(/access/);
+    await expect(appRouter.createCaller(ctxFor("billing")).workspace.phone.forPatient(1)).rejects.toThrow(/access/);
     await expect(appRouter.createCaller(ctxFor("user")).workspace.phone.config()).rejects.toThrow(/access/);
   });
 
@@ -419,8 +418,8 @@ describe("practice mailbox matching", () => {
     expect(matchEmailSender({ email: "new@x.com", name: null, body: "no numbers here" }, idx)).toBeNull();
   });
 
-  it("keeps triage away from MAs and connection settings admin-only", async () => {
-    await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.email.list({ filter: "all" })).rejects.toThrow(/access/);
+  it("keeps triage away from providers and billing, and connection settings admin-only", async () => {
+    await expect(appRouter.createCaller(ctxFor("provider")).workspace.email.list({ filter: "all" })).rejects.toThrow(/access/);
     await expect(appRouter.createCaller(ctxFor("billing")).workspace.email.list({ filter: "all" })).rejects.toThrow(/access/);
     await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.email.status()).rejects.toThrow(/admin/);
     await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.email.connectUrl({ origin: "https://mypcpcare.com" })).rejects.toThrow(/admin/);
@@ -489,7 +488,7 @@ describe("testing & screenings rules", () => {
   });
 
   it("recording tests needs the full patient record; imports are admin-only", async () => {
-    await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.testing.person("p:1")).rejects.toThrow(/access/);
+    await expect(appRouter.createCaller(ctxFor("billing")).workspace.testing.person("p:1")).rejects.toThrow(/access/);
     await expect(appRouter.createCaller(ctxFor("billing")).workspace.testing.overview({ states: ["due"] })).rejects.toThrow(/access/);
     await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.testing.importResults({ csv: "a,b\n1,2" })).rejects.toThrow(/admin/);
   });
@@ -623,8 +622,9 @@ describe("Practice Fusion chart (FHIR)", () => {
       telecom: [{ system: "phone", value: "555-0100", use: "home" }, { system: "email", value: "Jane@Example.com" }], identifier: [{ type: { coding: [{ code: "MR" }] }, value: "MRN77" }] }))
       .toEqual({ fhirId: "p1", name: "Jane Q Testperson", dob: "1960-01-02", sex: "F", phone: "555-0100", email: "jane@example.com", address: null, mrn: "MRN77" });
   });
-  it("keeps the front desk to the limited chart and MAs out", async () => {
-    await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.chart.get("p:1")).rejects.toThrow(/access/);
+  it("keeps the front desk and MAs to the limited chart, and billing out", async () => {
+    await expect(appRouter.createCaller(ctxFor("billing")).workspace.chart.get("p:1")).rejects.toThrow(/access/);
+    await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.chart.note(1)).rejects.toThrow(/access/);
     await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.chart.note(1)).rejects.toThrow(/access/);
     await expect(appRouter.createCaller(ctxFor("staff")).workspace.pf.importNow("full")).rejects.toThrow(/admin/);
   });
@@ -651,8 +651,8 @@ describe("website bookings", () => {
     expect(parseBookingEmail(text)).toEqual({ name: "Pat Example", phone: "(281) 555-0101", location: "Cypress", provider: null, visitType: "New patient visit", preferred: "Wed, Sep 30 · 11:00 AM" });
     expect(parseBookingEmail("Name: X\nPhone: 123")).toBeNull();
   });
-  it("front desk can work bookings; MAs can't; loading old ones is admin-only", async () => {
-    await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.bookings.list({ filter: "open" })).rejects.toThrow(/access/);
+  it("front desk and MAs can work bookings; providers can't; loading old ones is admin-only", async () => {
+    await expect(appRouter.createCaller(ctxFor("provider")).workspace.bookings.list({ filter: "open" })).rejects.toThrow(/access/);
     await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.bookings.importEarlier({})).rejects.toThrow(/admin/);
   });
 });
@@ -706,10 +706,10 @@ describe("patient forms (intake)", () => {
     expect(answerText(f.find((x) => x.id === "conditions")!, ["diabetes"], "es")).toBe("Diabetes");
     expect(answerText(f.find((x) => x.id === "meds")!, [{ name: "Metformin", dose: "500 mg twice a day" }, { name: "", dose: "" }])).toBe("Metformin — 500 mg twice a day");
   });
-  it("staff roles can send forms; MAs and billing can't; only admins edit the library", async () => {
+  it("staff roles and MAs can send forms; billing can't; only admins edit the library", async () => {
     expect(can("front_desk", "intakeForms")).toBe(true);
     expect(can("provider", "intakeForms")).toBe(true);
-    expect(can("medical_assistant", "intakeForms")).toBe(false);
+    expect(can("medical_assistant", "intakeForms")).toBe(true);
     await expect(appRouter.createCaller(ctxFor("billing")).workspace.intake.list({ filter: "waiting" })).rejects.toThrow(/access/);
     await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.intake.saveDocument({ title: { en: "X" }, body: { en: "Y" }, active: true })).rejects.toThrow(/admin/);
   });
@@ -762,7 +762,7 @@ describe("patient forms (intake)", () => {
   });
   it("only staff with forms access can link forms to a patient", async () => {
     await expect(appRouter.createCaller(ctxFor("billing")).workspace.intake.link({ id: 1, subjectKey: "p:1" })).rejects.toThrow(/access/);
-    await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.intake.forSubject({ subjectKey: "p:1" })).rejects.toThrow(/access/);
+    await expect(appRouter.createCaller(ctxFor("billing")).workspace.intake.forSubject({ subjectKey: "p:1" })).rejects.toThrow(/access/);
   });
 });
 
@@ -796,14 +796,14 @@ describe("documents (PDF editor)", () => {
     expect(signerOf("preparer")).toBeNull();
     expect(usDate("2026-09-29")).toBe("09/29/2026");
   });
-  it("keeps MAs and billing out of Documents", async () => {
-    expect(can("medical_assistant", "documents")).toBe(false);
+  it("keeps billing out of Documents (MAs work them like the front desk)", async () => {
+    expect(can("medical_assistant", "documents")).toBe(true);
     expect(can("provider", "documents")).toBe(true);
     await expect(appRouter.createCaller(ctxFor("billing")).workspace.documents.list({ view: "in_progress" })).rejects.toThrow(/access/);
   });
-  it("keeps MAs away from providers' stored signatures, and needs how the provider approved", async () => {
-    await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.documents.signaturesICanApply()).rejects.toThrow(/access/);
-    await expect(appRouter.createCaller(ctxFor("medical_assistant")).workspace.documents.providerSignatures()).rejects.toThrow(/access/);
+  it("keeps billing away from providers' stored signatures, and needs how the provider approved", async () => {
+    await expect(appRouter.createCaller(ctxFor("billing")).workspace.documents.signaturesICanApply()).rejects.toThrow(/access/);
+    await expect(appRouter.createCaller(ctxFor("billing")).workspace.documents.providerSignatures()).rejects.toThrow(/access/);
     // An approval method outside the list is refused before anything is looked up.
     await expect(appRouter.createCaller(ctxFor("front_desk")).workspace.documents.signField({ id: 1, fieldId: "x", onBehalfOf: { providerUserId: 5, approval: "telepathy" as never } })).rejects.toThrow();
   });
@@ -884,9 +884,9 @@ describe("insurance eligibility (Availity)", () => {
     expect(pcpIsOurs("John Smith", ["Dr. Sarah Chen"])).toBe(false);
     expect(pcpIsOurs(null, ["Dr. Sarah Chen"])).toBeNull();
   });
-  it("MAs and billing can't run eligibility checks", () => {
+  it("the front desk and MAs run eligibility checks; billing can't", () => {
     expect(can("front_desk", "eligibility")).toBe(true);
-    expect(can("medical_assistant", "eligibility")).toBe(false);
+    expect(can("medical_assistant", "eligibility")).toBe(true);
     expect(can("billing", "eligibility")).toBe(false);
   });
 });

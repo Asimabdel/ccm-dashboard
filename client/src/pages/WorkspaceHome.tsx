@@ -1,18 +1,20 @@
+import { useState } from "react";
 import { Link } from "wouter";
 import {
   CalendarCheck, Users, Timer, ListTodo, UserX, AlertCircle, CalendarPlus, Radar, Upload, ArrowRight, ChevronRight, HeartPulse, Brain, Pill,
-  AlertTriangle, Building2, Info, Flame, CalendarClock, CalendarX2, UserPlus,
+  AlertTriangle, Building2, Info, Flame, CalendarClock, CalendarX2, UserPlus, CheckCircle2,
 } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { useWorkspace } from "@/components/workspace/useWorkspace";
 import { ClockStrip } from "@/components/workspace/ClockStrip";
+import { TaskDrawer } from "@/components/workspace/TaskDrawer";
 import {
-  Btn, EmptyState, ErrorNote, FLOW_DOT, Loading, MetricCard, Panel, SectionLabel, TONE_TEXT, ToneTile, cardCls, fmtMinutes, type Tone,
+  Btn, EmptyState, ErrorNote, FLOW_DOT, Loading, MetricCard, Panel, PriorityBadge, SectionLabel, TONE_TEXT, ToneTile, cardCls, fmtDue, fmtMinutes, type Tone,
 } from "@/components/workspace/ui";
 import { trpc } from "@/lib/trpc";
 import { FLOW_COLUMNS, FLOW_LABELS, type FlowStatus } from "@shared/workspace";
-import { CLINIC_TZ } from "@shared/workforce";
+import { CLINIC_TZ, localDateStr } from "@shared/workforce";
 import { cn } from "@/lib/utils";
 
 function greeting() {
@@ -55,10 +57,49 @@ function Priority({ href, icon, eyebrow, title, tone }: PriorityItem) {
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
+/** The first few things on my list: overdue and due today first (the list comes sorted by due date). */
+function MyTasks({ onOpen }: { onOpen: (id: number) => void }) {
+  const list = trpc.workspace.tasks.list.useQuery({ view: "mine" }, { refetchInterval: 60_000 });
+  const today = localDateStr();
+  const rows = list.data ?? [];
+  return (
+    <Panel
+      title="My tasks"
+      subtitle={rows.length ? `${plural(rows.length, "open task")}` : undefined}
+      action={<Link href="/my-work" className="inline-flex items-center gap-1 text-sm font-semibold text-slate-800 dark:text-slate-100 hover:underline">My Work <ArrowRight size={14} /></Link>}
+      bodyClassName="p-0"
+    >
+      {list.isLoading ? <Loading /> : rows.length === 0 ? (
+        <EmptyState icon={CheckCircle2} title="Nothing on your list" body="New tasks for you show up here." />
+      ) : (
+        <ul className="divide-y divide-slate-100 dark:divide-slate-700">
+          {rows.slice(0, 6).map((t) => {
+            const due = fmtDue(t.dueDate, today);
+            return (
+              <li key={t.id}>
+                <button onClick={() => onOpen(t.id)} className="flex w-full items-center gap-3 px-5 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800/60">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">{t.title}</p>
+                    <p className="truncate text-xs text-slate-500">{[t.patientName, t.queueLabel].filter(Boolean).join(" · ") || " "}</p>
+                  </div>
+                  {t.priority === "high" || t.priority === "urgent" ? <PriorityBadge priority={t.priority} /> : null}
+                  {due && <span className={cn("shrink-0 text-xs", due.overdue ? "font-semibold text-tone-danger" : due.today ? "font-semibold text-tone-warning" : "text-slate-500")}>{due.text}</span>}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {rows.length > 6 && <Link href="/my-work" className="block border-t border-slate-100 px-5 py-2.5 text-xs font-semibold text-slate-600 hover:underline dark:border-slate-700 dark:text-slate-300">See all {rows.length} in My Work</Link>}
+    </Panel>
+  );
+}
+
 export default function WorkspaceHome() {
   const { user } = useAuth({ redirectOnUnauthenticated: true });
   const ws = useWorkspace();
   const home = trpc.workspace.home.useQuery({ clinicId: ws.clinicId }, { enabled: !!user && !!ws.caps?.tasks, refetchInterval: 60_000 });
+  const [taskId, setTaskId] = useState<number | null>(null);
 
   if (!user) return null;
   const firstName = (user.name ?? "").replace(/\(.*?\)/g, "").trim().split(" ")[0];
@@ -84,19 +125,21 @@ export default function WorkspaceHome() {
   const statuses = [...FLOW_COLUMNS, "no_show"] as FlowStatus[];
   const flowTotal = d ? statuses.reduce((s, c) => s + (d.byStatus[c] ?? 0), 0) : 0;
   const showOpenings = !!caps?.opportunitiesView;
-  const hasRight = !!d && (showOpenings || !!d.care);
+  const hasRight = !!d && showOpenings;
 
   return (
     <CCMDashboardLayout title="Home" clinicPicker pageTitle={false}>
-      <div className="mb-6">
-        <p className="text-sm text-slate-500 dark:text-slate-400">{todayLabel}</p>
-        <h2 className="mt-0.5 text-2xl md:text-[28px] font-bold tracking-tight text-slate-900 dark:text-slate-50">
-          {greeting()}{firstName ? `, ${firstName}` : ""}.
-        </h2>
-        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Let's make today a good day for great care.</p>
+      {/* Hello + the time clock (hourly staff) side by side */}
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-sm text-slate-500 dark:text-slate-400">{todayLabel}</p>
+          <h2 className="mt-0.5 text-2xl md:text-[28px] font-bold tracking-tight text-slate-900 dark:text-slate-50">
+            {greeting()}{firstName ? `, ${firstName}` : ""}.
+          </h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Let's make today a good day for great care.</p>
+        </div>
+        <ClockStrip className="w-full sm:w-80" />
       </div>
-
-      <ClockStrip />
 
       {caps && !caps.tasks && (
         <Panel><EmptyState icon={Info} title="Your account doesn't have a Workspace role yet" body="Ask a practice manager to assign your role on the Team & Access page." /></Panel>
@@ -126,30 +169,24 @@ export default function WorkspaceHome() {
             </div>
           )}
 
-          <section>
-            <SectionLabel>Today</SectionLabel>
-            <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-              <MetricCard label="Appointments" value={d.flow.total} hint={`${d.byStatus.scheduled ?? 0} still to arrive`} icon={CalendarCheck} iconTone="info" href={caps?.flowView ? "/patient-flow" : undefined} />
-              <MetricCard label="Patients in clinic" value={d.flow.inClinic} hint={`${d.flow.waiting} waiting to be seen`} icon={Users} iconTone="brand" href={caps?.flowView ? "/patient-flow" : undefined} />
-              <MetricCard label="Average wait" value={fmtMinutes(d.flow.avgWait)} hint={`Longest now ${fmtMinutes(d.flow.longestWait)}`} tone={d.flow.longestWait >= 30 ? "bad" : d.flow.longestWait >= 20 ? "warn" : "neutral"} icon={Timer} iconTone="warning" />
-              <MetricCard label="My open tasks" value={d.tasks.mine} hint={d.tasks.overdue ? `${d.tasks.overdue} overdue` : "Nothing overdue"} tone={d.tasks.overdue ? "bad" : "neutral"} icon={ListTodo} iconTone="neutral" href="/my-work" />
-              <MetricCard label="No-shows" value={d.flow.noShows} hint={d.flow.total ? `${Math.round((d.flow.noShows / d.flow.total) * 100)}% of today's visits` : "No visits yet"} icon={UserX} iconTone="danger" />
-            </div>
-          </section>
+          {/* My day: my list, and what needs attention */}
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
+            <div className="min-w-0 lg:col-span-3"><MyTasks onOpen={setTaskId} /></div>
+            <section className="min-w-0 lg:col-span-2">
+              <SectionLabel>Needs attention</SectionLabel>
+              {priorities.length === 0 ? (
+                <Panel><EmptyState icon={CalendarCheck} title="You're all caught up" body="No overdue work, long waits or pending follow-ups right now." /></Panel>
+              ) : (
+                <div className="grid grid-cols-1 gap-3">
+                  {priorities.slice(0, 5).map((p) => <Priority key={p.title} {...p} />)}
+                </div>
+              )}
+            </section>
+          </div>
 
+          {/* The clinic today */}
           <div className={cn("grid grid-cols-1 gap-6", hasRight && "lg:grid-cols-3")}>
-            <div className={cn("space-y-6 min-w-0", hasRight && "lg:col-span-2")}>
-              <section>
-                <SectionLabel>Today's priorities</SectionLabel>
-                {priorities.length === 0 ? (
-                  <Panel><EmptyState icon={CalendarCheck} title="You're all caught up" body="No overdue work, long waits or pending follow-ups right now." /></Panel>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {priorities.slice(0, 8).map((p) => <Priority key={p.title} {...p} />)}
-                  </div>
-                )}
-              </section>
-
+            <div className={cn("min-w-0 space-y-6", hasRight && "lg:col-span-2")}>
               <Panel
                 title="Today's appointments"
                 subtitle={`${plural(d.flow.total, "appointment")} ${ws.clinicId ? "at this clinic" : "across your clinics"}`}
@@ -178,20 +215,30 @@ export default function WorkspaceHome() {
                     </dl>
                   </>
                 )}
-                <div className="mt-5 pt-4 border-t border-slate-100 dark:border-slate-700 grid grid-cols-2 sm:grid-cols-4 gap-4">
-                  {[
-                    { label: "Throughput", value: `${d.flow.completed}/${d.flow.total}` },
-                    { label: "Waiting now", value: d.flow.waiting },
-                    { label: "Tasks done today", value: d.tasks.completedToday },
-                    { label: "Tasks due today", value: d.tasks.dueToday },
-                  ].map((x) => (
-                    <div key={x.label}>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">{x.label}</p>
-                      <p className="mt-0.5 text-lg font-semibold tabular-nums text-slate-900 dark:text-slate-100">{x.value}</p>
-                    </div>
-                  ))}
-                </div>
               </Panel>
+
+              {d.care && (
+                <Panel title="Care management snapshot" bodyClassName="p-0">
+                  <ul className="grid grid-cols-1 sm:grid-cols-2">
+                    {[
+                      { icon: HeartPulse, tone: "brand" as Tone, label: "CCM calls completed", value: `${d.care.ccmDone} / ${d.care.ccmTotal}`, href: "/worklist" },
+                      { icon: Brain, tone: "violet" as Tone, label: "BHI check-ins completed", value: `${d.care.bhiDone} / ${d.care.bhiTotal}`, href: "/worklist" },
+                      { icon: Pill, tone: "info" as Tone, label: "Refill requests pending", value: d.care.pendingRefills, href: "/refill-requests" },
+                      { icon: AlertTriangle, tone: "danger" as Tone, label: "Provider escalations pending", value: d.care.pendingEscalations, href: "/escalations" },
+                    ].map((r) => (
+                      <li key={r.label} className="border-t border-slate-100 first:border-t-0 sm:[&:nth-child(2)]:border-t-0 sm:odd:border-r dark:border-slate-700">
+                        <Link href={r.href}>
+                          <div className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/40 cursor-pointer">
+                            <r.icon size={16} className={TONE_TEXT[r.tone]} />
+                            <span className="flex-1 text-sm text-slate-700 dark:text-slate-200">{r.label}</span>
+                            <span className="text-sm font-semibold tabular-nums text-slate-900 dark:text-slate-100">{r.value}</span>
+                          </div>
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </Panel>
+              )}
             </div>
 
             {hasRight && (
@@ -213,32 +260,21 @@ export default function WorkspaceHome() {
                     </Link>
                   </div>
                 )}
-
-                {d.care && (
-                  <Panel title="Care management snapshot" bodyClassName="p-0">
-                    <ul className="divide-y divide-slate-100 dark:divide-slate-700">
-                      {[
-                        { icon: HeartPulse, tone: "brand" as Tone, label: "CCM calls completed", value: `${d.care.ccmDone} / ${d.care.ccmTotal}`, href: "/worklist" },
-                        { icon: Brain, tone: "violet" as Tone, label: "BHI check-ins completed", value: `${d.care.bhiDone} / ${d.care.bhiTotal}`, href: "/worklist" },
-                        { icon: Pill, tone: "info" as Tone, label: "Refill requests pending", value: d.care.pendingRefills, href: "/refill-requests" },
-                        { icon: AlertTriangle, tone: "danger" as Tone, label: "Provider escalations pending", value: d.care.pendingEscalations, href: "/escalations" },
-                      ].map((r) => (
-                        <li key={r.label}>
-                          <Link href={r.href}>
-                            <div className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/40 cursor-pointer">
-                              <r.icon size={16} className={TONE_TEXT[r.tone]} />
-                              <span className="flex-1 text-sm text-slate-700 dark:text-slate-200">{r.label}</span>
-                              <span className="text-sm font-semibold tabular-nums text-slate-900 dark:text-slate-100">{r.value}</span>
-                            </div>
-                          </Link>
-                        </li>
-                      ))}
-                    </ul>
-                  </Panel>
-                )}
               </div>
             )}
           </div>
+
+          {/* The numbers */}
+          <section>
+            <SectionLabel>Today in numbers</SectionLabel>
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+              <MetricCard label="Appointments" value={d.flow.total} hint={`${d.byStatus.scheduled ?? 0} still to arrive`} icon={CalendarCheck} iconTone="info" href={caps?.flowView ? "/patient-flow" : undefined} />
+              <MetricCard label="Patients in clinic" value={d.flow.inClinic} hint={`${d.flow.waiting} waiting to be seen`} icon={Users} iconTone="brand" href={caps?.flowView ? "/patient-flow" : undefined} />
+              <MetricCard label="Average wait" value={fmtMinutes(d.flow.avgWait)} hint={`Longest now ${fmtMinutes(d.flow.longestWait)}`} tone={d.flow.longestWait >= 30 ? "bad" : d.flow.longestWait >= 20 ? "warn" : "neutral"} icon={Timer} iconTone="warning" />
+              <MetricCard label="My open tasks" value={d.tasks.mine} hint={d.tasks.overdue ? `${d.tasks.overdue} overdue` : `${d.tasks.completedToday} done today`} tone={d.tasks.overdue ? "bad" : "neutral"} icon={ListTodo} iconTone="neutral" href="/my-work" />
+              <MetricCard label="No-shows" value={d.flow.noShows} hint={d.flow.total ? `${Math.round((d.flow.noShows / d.flow.total) * 100)}% of today's visits · ${d.flow.completed}/${d.flow.total} seen` : "No visits yet"} icon={UserX} iconTone="danger" />
+            </div>
+          </section>
 
           {!ws.clinicId && d.perClinic.length > 1 && (
             <section>
@@ -260,6 +296,7 @@ export default function WorkspaceHome() {
           )}
         </div>
       )}
+      <TaskDrawer taskId={taskId} onClose={() => setTaskId(null)} />
     </CCMDashboardLayout>
   );
 }

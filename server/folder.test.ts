@@ -16,7 +16,7 @@ describe("patient folders", () => {
     expect(folderSectionsFor("front_desk")).toContain("payments");
     expect(folderSectionsFor("front_desk")).toContain("faxes");
     expect(folderSectionsFor("office_manager")).not.toContain("faxes");
-    expect(folderSectionsFor("medical_assistant")).toEqual(["visits", "tasks"]); // the operational view only
+    expect(folderSectionsFor("medical_assistant")).toEqual(folderSectionsFor("front_desk")); // same as the front desk (their clinic only)
     expect(folderSectionsFor("billing")).toEqual([]);
     expect(folderSectionsFor("user")).toEqual([]);
   });
