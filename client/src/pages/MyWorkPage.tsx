@@ -7,6 +7,7 @@ import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { useUrlParams, useWorkspace } from "@/components/workspace/useWorkspace";
 import { TaskDrawer } from "@/components/workspace/TaskDrawer";
 import { NewTaskDialog } from "@/components/workspace/NewTaskDialog";
+import { MyCalls } from "@/components/workspace/MyCalls";
 import { Btn, EmptyState, ErrorNote, Loading, MetricCard, PageHeader, PriorityBadge, TaskStatusBadge, fmtDue, inputCls } from "@/components/workspace/ui";
 import { trpc } from "@/lib/trpc";
 import { localDateStr } from "@shared/workforce";
@@ -87,6 +88,9 @@ export default function MyWorkPage() {
         <MetricCard label="Overdue" value={c?.overdue ?? "—"} hint={c?.overdue ? "Past their due date" : "All caught up"} tone={c?.overdue ? "bad" : "good"} icon={AlertCircle} iconTone="danger" />
         <MetricCard label="Completed today" value={c?.completedToday ?? "—"} icon={CheckCircle2} iconTone="success" />
       </div>
+
+      {/* Your own phone numbers (RingCentral): only you see these. */}
+      <MyCalls />
 
       <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-6">
         {/* Views rail (horizontal scroll on small screens) */}

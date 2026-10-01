@@ -1,7 +1,7 @@
 import { protectedProcedure, router } from "../_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { isValidDateStr } from "../../shared/workforce";
+import { isValidDateStr, localDateStr } from "../../shared/workforce";
 import {
   FLOW_COLUMNS,
   OPPORTUNITY_CATEGORY_LIST,
@@ -1123,6 +1123,13 @@ export const workspaceRouter = router({
     mine: protectedProcedure.query(async ({ ctx }) => {
       await actorFor(ctx, "tasks");
       return metrics.myMetrics({ id: ctx.user.id, name: ctx.user.name, role: ctx.user.role });
+    }),
+    /** My Work → My calls: the signed-in person's own phone numbers only (no one else's, any role). */
+    myCalls: protectedProcedure.input(z.object({ date: dateStr.nullish() })).query(async ({ ctx, input }) => {
+      await actorFor(ctx, "tasks");
+      const today = localDateStr();
+      const date = input.date && input.date <= today ? input.date : today;
+      return metrics.myCalls({ id: ctx.user.id, name: ctx.user.name, role: ctx.user.role }, date);
     }),
     team: protectedProcedure.input(z.object({ date: dateStr })).query(async ({ ctx, input }) => {
       if (ctx.user.role === "office_manager") {

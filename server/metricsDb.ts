@@ -97,26 +97,17 @@ async function loadContext(date: string): Promise<MetricsContext> {
   return { goals, extToUser, rcCursor: state?.cursor ? new Date(state.cursor) : null, rcActive: !!any, rcLastSuccessAt: state?.lastSuccessAt ?? null };
 }
 
-// ---- One person's day ----
+// ---- One person's phone (their own RingCentral line, plus calls placed in MyPCP) ----
 
 type Person = { id: number; name: string | null; role: string };
 
-async function metricsFor(user: Person, date: string, ctx: MetricsContext): Promise<MyMetrics> {
+/** A person's calls for a day, and per day over the 30 days before it. Counts only. */
+async function phoneStats(user: Person, date: string, ctx: MetricsContext) {
   const d = await db();
-  const isToday = date === localDateStr();
   const start = clinicLocalToUtc(date, "00:00");
   const end = clinicLocalToUtc(addDays(date, 1), "00:00");
   const since = clinicLocalToUtc(addDays(date, -30), "00:00");
   const from = addDays(date, -30);
-  const month = date.slice(0, 7);
-  // An office manager works the front desk: same numbers (calls, bookings, check-ins, tasks).
-  const role = user.role === "office_manager" ? "front_desk" : user.role;
-  const goals = ctx.goals[role] ?? {};
-  const out: Metric[] = [];
-  const add = (m: Metric) => out.push({ ...m, goal: m.goal ?? goals[m.key] ?? null });
-  const dayWord = isToday ? "today" : "that day";
-
-  // ---- Phone ----
   const myExts = Array.from(ctx.extToUser.entries()).filter(([, u]) => u === user.id).map(([e]) => e);
   const rc = myExts.length
     ? await d.select({ workDate: rcCallStats.workDate, direction: rcCallStats.direction, durationSec: rcCallStats.durationSec, answered: rcCallStats.answered, missed: rcCallStats.missed })
@@ -136,24 +127,56 @@ async function metricsFor(user: Person, date: string, ctx: MetricsContext): Prom
   const notYetSynced = ctx.rcActive
     ? app.filter((c) => c.source !== "ringcentral" && !c.rcSessionId && (!ctx.rcCursor || c.startedAt > ctx.rcCursor))
     : app;
-  if (PHONE_ROLES.includes(role) || rc.length || app.length) {
-    const perDay = new Map<string, number>();
-    for (const c of rc) if (madeOrTaken(c)) perDay.set(c.workDate, (perDay.get(c.workDate) ?? 0) + 1);
-    for (const c of notYetSynced) if (madeOrTaken(c)) { const k = localDateStr(c.startedAt); perDay.set(k, (perDay.get(k) ?? 0) + 1); }
-    const rcDay = rc.filter((c) => c.workDate === date);
-    const appDay = notYetSynced.filter((c) => c.startedAt >= start && c.startedAt < end);
-    const outN = rcDay.filter((c) => c.direction === "outbound").length + appDay.filter((c) => c.direction === "outbound").length;
-    const inN = rcDay.filter((c) => c.direction === "inbound" && c.answered).length + appDay.filter((c) => c.direction === "inbound" && c.durationSec > 0).length;
-    const missedN = rcDay.filter((c) => c.missed).length;
+  const perDay = new Map<string, number>();
+  const missedPerDay = new Map<string, number>();
+  for (const c of rc) {
+    if (madeOrTaken(c)) perDay.set(c.workDate, (perDay.get(c.workDate) ?? 0) + 1);
+    if (c.missed) missedPerDay.set(c.workDate, (missedPerDay.get(c.workDate) ?? 0) + 1);
+  }
+  for (const c of notYetSynced) if (madeOrTaken(c)) { const k = localDateStr(c.startedAt); perDay.set(k, (perDay.get(k) ?? 0) + 1); }
+  const rcDay = rc.filter((c) => c.workDate === date);
+  const appDay = notYetSynced.filter((c) => c.startedAt >= start && c.startedAt < end);
+  const booked = app.filter((c) => c.outcome === "booked");
+  return {
+    /** Has a RingCentral line linked to their login, or has made calls in MyPCP. */
+    hasPhone: myExts.length > 0 || app.length > 0,
+    linked: myExts.length > 0,
+    perDay,
+    missedPerDay,
+    made: rcDay.filter((c) => c.direction === "outbound").length + appDay.filter((c) => c.direction === "outbound").length,
+    answered: rcDay.filter((c) => c.direction === "inbound" && c.answered).length + appDay.filter((c) => c.direction === "inbound" && c.durationSec > 0).length,
+    missed: rcDay.filter((c) => c.missed).length,
+    talkMin: Math.round((rcDay.filter(madeOrTaken).reduce((s, c) => s + c.durationSec, 0) + appDay.reduce((s, c) => s + c.durationSec, 0)) / 60),
+    booked: booked.filter((c) => c.startedAt >= start && c.startedAt < end).length,
+    bookedPerDay: byDay(booked.map((c) => c.startedAt)),
+  };
+}
+
+// ---- One person's day ----
+
+async function metricsFor(user: Person, date: string, ctx: MetricsContext): Promise<MyMetrics> {
+  const d = await db();
+  const isToday = date === localDateStr();
+  const end = clinicLocalToUtc(addDays(date, 1), "00:00");
+  const since = clinicLocalToUtc(addDays(date, -30), "00:00");
+  const month = date.slice(0, 7);
+  // An office manager works the front desk: same numbers (calls, bookings, check-ins, tasks).
+  const role = user.role === "office_manager" ? "front_desk" : user.role;
+  const goals = ctx.goals[role] ?? {};
+  const out: Metric[] = [];
+  const add = (m: Metric) => out.push({ ...m, goal: m.goal ?? goals[m.key] ?? null });
+  const dayWord = isToday ? "today" : "that day";
+
+  // ---- Phone (anyone with a RingCentral line, and the phone roles) ----
+  const ph = await phoneStats(user, date, ctx);
+  if (PHONE_ROLES.includes(role) || ph.hasPhone || ph.perDay.size) {
     add({
-      key: "calls", label: `Calls ${dayWord}`, value: perDay.get(date) ?? 0, usual: usualPerDay(perDay, date),
-      hint: `${outN} made · ${inN} answered${ctx.rcActive ? ` · ${missedN} missed` : ""}`, href: "/opportunities?tab=fill",
+      key: "calls", label: `Calls ${dayWord}`, value: ph.perDay.get(date) ?? 0, usual: usualPerDay(ph.perDay, date),
+      hint: `${ph.made} made · ${ph.answered} answered${ctx.rcActive ? ` · ${ph.missed} missed` : ""}`, href: "/my-work",
     });
-    const booked = app.filter((c) => c.outcome === "booked");
-    add({ key: "booked", label: "Appointments booked", value: booked.filter((c) => c.startedAt >= start && c.startedAt < end).length, usual: usualPerDay(byDay(booked.map((c) => c.startedAt)), date) });
-    const talkMin = Math.round((rcDay.filter(madeOrTaken).reduce((s, c) => s + c.durationSec, 0) + appDay.reduce((s, c) => s + c.durationSec, 0)) / 60);
-    add({ key: "talk", label: "Time on the phone", value: talkMin, display: fmtMinutes(talkMin) });
-    if (ctx.rcActive) add({ key: "missed", label: "Missed calls", value: missedN, hint: "Rang this person's line and nobody picked up (includes voicemails)" });
+    add({ key: "booked", label: "Appointments booked", value: ph.booked, usual: usualPerDay(ph.bookedPerDay, date) });
+    add({ key: "talk", label: "Time on the phone", value: ph.talkMin, display: fmtMinutes(ph.talkMin) });
+    if (ctx.rcActive) add({ key: "missed", label: "Missed calls", value: ph.missed, hint: "Rang this person's line and nobody picked up (includes voicemails)" });
   }
 
   // ---- Care coordinators: care calls completed (the day, and the month vs goal) ----
@@ -275,6 +298,30 @@ async function practiceCalls(date: string, ctx: MetricsContext) {
 export async function myMetrics(user: Person): Promise<MyMetrics> {
   const today = localDateStr();
   return metricsFor(user, today, await loadContext(today));
+}
+
+/** My Work → My calls: one person's own phone numbers for a day, plus each of the 6 days before. Counts only. */
+export async function myCalls(user: Person, date: string) {
+  const ctx = await loadContext(date);
+  const ph = await phoneStats(user, date, ctx);
+  const days = Array.from({ length: 7 }, (_, i) => addDays(date, i - 6)).map((day) => ({
+    date: day, calls: ph.perDay.get(day) ?? 0, missed: ph.missedPerDay.get(day) ?? 0,
+  }));
+  return {
+    date,
+    show: PHONE_ROLES.includes(user.role === "office_manager" ? "front_desk" : user.role) || ph.hasPhone || ph.perDay.size > 0,
+    linked: ph.linked,
+    ringCentral: ctx.rcActive,
+    lastSyncAt: ctx.rcLastSuccessAt,
+    calls: ph.perDay.get(date) ?? 0,
+    made: ph.made,
+    answered: ph.answered,
+    missed: ph.missed,
+    talkMin: ph.talkMin,
+    booked: ph.booked,
+    usual: usualPerDay(ph.perDay, date),
+    days,
+  };
 }
 
 // ---- Team progress (admins): everyone's numbers for a day ----
