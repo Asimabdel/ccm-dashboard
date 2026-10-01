@@ -25,6 +25,8 @@ const ENUM_ADDITIONS: { table: string; column: string; values: string[] }[] = [
   { table: "auditLogs", column: "action", values: ["view_document", "manage_document"] },
   // Added 2026-09-30: Square payments.
   { table: "auditLogs", column: "action", values: ["view_payments", "manage_payment"] },
+  // Added 2026-10-01: in-office tests (Testing tab) can be marked scheduled.
+  { table: "patientTests", column: "status", values: ["scheduled"] },
 ];
 
 export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
@@ -665,6 +667,14 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     CONSTRAINT \`programSuggestions_patientId_fk\` FOREIGN KEY (\`patientId\`) REFERENCES \`patients\`(\`id\`),
     CONSTRAINT \`programSuggestions_clinicId_fk\` FOREIGN KEY (\`clinicId\`) REFERENCES \`clinics\`(\`id\`),
     CONSTRAINT \`programSuggestions_decidedByUserId_fk\` FOREIGN KEY (\`decidedByUserId\`) REFERENCES \`users\`(\`id\`))` },
+  // Latest smoking status and BMI per Practice Fusion chart (added 2026-10-01, Testing tab).
+  { label: "chartFacts", sql: `CREATE TABLE IF NOT EXISTS \`chartFacts\` (
+    \`patientFhirId\` varchar(128) NOT NULL PRIMARY KEY,
+    \`smokingValue\` varchar(160),
+    \`smokingDate\` varchar(10),
+    \`bmiValue\` varchar(60),
+    \`bmiDate\` varchar(10),
+    \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP)` },
   // Provider teams (added 2026-09-30): who gets a provider's patient emails.
   { label: "providerTeamMembers", sql: `CREATE TABLE IF NOT EXISTS \`providerTeamMembers\` (
     \`id\` int AUTO_INCREMENT PRIMARY KEY,

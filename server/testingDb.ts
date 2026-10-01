@@ -33,7 +33,7 @@ async function loadRecords(keys?: string[]) {
   for (const r of rows) {
     if (!(TEST_KEYS as string[]).includes(r.testKey)) continue;
     const list = by.get(r.subjectKey) ?? [];
-    list.push({ id: r.id, testKey: r.testKey as TestKey, performedOn: r.performedOn, status: r.status, method: r.method, result: r.result, source: r.source, note: r.note, createdAt: r.createdAt });
+    list.push({ id: r.id, testKey: r.testKey as TestKey, performedOn: r.performedOn, status: r.status as TestRecord["status"], method: r.method, result: r.result, source: r.source, note: r.note, createdAt: r.createdAt });
     by.set(r.subjectKey, list);
   }
   return by;

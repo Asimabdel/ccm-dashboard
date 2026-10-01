@@ -20,6 +20,7 @@ import { addDays, localDateStr } from "../shared/workforce";
 import { clearDirectoryCache, loadDirectory, type DirectoryEntry } from "./directoryDb";
 import { WorkspaceError, audit, buildNameDobIndex, clearScheduleCache, createTask, officeClinicIds, subjectKeyFor, type WorkspaceActor } from "./workspaceDb";
 import { checkEnrollmentsFor } from "./enrollDb";
+import { conditionFacts } from "./chartFacts";
 
 async function db() {
   const d = await getDb();
@@ -81,17 +82,12 @@ const standingOf = (r: RosterRow | undefined): ProgramStanding => r ? {
   apcm: r.apcmEnrollmentStatus, apcmConsent: r.apcmConsentStatus, rpm: r.rpmStatus, rpmEnrolled: !!r.rpmEnrolled, rpmConsent: r.rpmConsentStatus,
 } : NOT_ON_ROSTER;
 
-/** Every diagnosis on file for each person: the Practice Fusion problem list plus a roster record's conditions. */
-async function diagnosesByPerson(keys: Set<string>, roster: Map<string, RosterRow>): Promise<Map<string, MatchedDiagnosis[]>> {
-  const d = await db();
+/** Every diagnosis on file for each person (Practice Fusion problem list + roster conditions), sorted into program categories. */
+async function diagnosesByPerson(keys: Set<string>): Promise<Map<string, MatchedDiagnosis[]>> {
   const out = new Map<string, MatchedDiagnosis[]>();
-  const add = (key: string, m: MatchedDiagnosis | null) => { if (!m) return; const l = out.get(key); if (l) l.push(m); else out.set(key, [m]); };
-  const rows = await d.select({ key: fhirResources.subjectKey, title: fhirResources.title, code: fhirResources.code, status: fhirResources.status })
-    .from(fhirResources).where(and(eq(fhirResources.resourceType, "Condition"), isNotNull(fhirResources.subjectKey)));
-  for (const r of rows) if (r.key && keys.has(r.key)) add(r.key, classifyDiagnosis({ title: r.title, code: r.code, status: r.status }));
-  for (const [key, r] of Array.from(roster.entries())) {
-    if (!keys.has(key)) continue;
-    for (const t of [...(r.chronicConditions ?? []), ...(r.bhiConditions ?? [])]) add(key, classifyDiagnosis({ title: t }));
+  for (const [key, facts] of Array.from((await conditionFacts(keys)).entries())) {
+    const matches = facts.map((f) => classifyDiagnosis(f)).filter((m): m is MatchedDiagnosis => !!m);
+    if (matches.length) out.set(key, matches);
   }
   return out;
 }
@@ -105,7 +101,7 @@ export async function scanProgramSuggestions() {
   const people = Array.from(dir.values()).filter((e) => e.lastVisit && e.lastVisit >= since);
   const keys = new Set(people.map((p) => p.key));
   const roster = new Map((await d.select(rosterCols).from(patients)).map((r) => [`p:${r.id}`, r as RosterRow]));
-  const dx = await diagnosesByPerson(keys, roster);
+  const dx = await diagnosesByPerson(keys);
 
   const existing = await d.select({ id: programSuggestions.id, key: programSuggestions.subjectKey, program: programSuggestions.program, status: programSuggestions.status, fingerprint: programSuggestions.fingerprint, reason: programSuggestions.reason, clinicId: programSuggestions.clinicId, lastVisit: programSuggestions.lastVisit })
     .from(programSuggestions).where(inArray(programSuggestions.status, ["pending", "approved", "rejected"]));

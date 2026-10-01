@@ -51,6 +51,7 @@ import PaymentsPage from "./pages/PaymentsPage";
 import FolderPage from "./pages/FolderPage";
 import DirectoryPage from "./pages/DirectoryPage";
 import ProgramApprovalsPage from "./pages/ProgramApprovalsPage";
+import TestingPage from "./pages/TestingPage";
 import { RingCentralPhone } from "./components/phone/RingCentralPhone";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
 
@@ -77,6 +78,7 @@ function Router() {
       <Route path="/patients" component={DirectoryPage} />
       <Route path="/ccm-roster" component={PatientsPage} />
       <Route path="/program-approvals" component={ProgramApprovalsPage} />
+      <Route path="/testing" component={TestingPage} />
       <Route path="/inactive-patients" component={InactivePatientsPage} />
       <Route path="/declined-patients" component={DeclinedPatientsPage} />
       <Route path="/patients/import" component={BulkImportPage} />

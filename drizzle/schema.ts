@@ -923,7 +923,8 @@ export const patientTests = mysqlTable("patientTests", {
   testKey: varchar("testKey", { length: 40 }).notNull(),
   method: varchar("method", { length: 40 }),
   performedOn: varchar("performedOn", { length: 10 }).notNull(),
-  status: mysqlEnum("status", ["done", "not_applicable", "declined"]).default("done").notNull(),
+  /** "scheduled" is for the in-office tests (ABI-Q, PFT, RMR): performedOn is then the appointment date. */
+  status: mysqlEnum("status", ["done", "not_applicable", "declined", "scheduled"]).default("done").notNull(),
   result: varchar("result", { length: 120 }),
   note: text("note"),
   /** import | manual */
@@ -1131,6 +1132,19 @@ export const programSuggestions = mysqlTable("programSuggestions", {
   statusIdx: index("programSuggestions_status_idx").on(t.status, t.clinicId),
   subjectIdx: index("programSuggestions_subject_idx").on(t.subjectKey, t.program),
 }));
+
+/**
+ * The latest smoking status and BMI from each Practice Fusion chart (kept up to date as the chart
+ * copy loads), so testing rules don't have to search every observation.
+ */
+export const chartFacts = mysqlTable("chartFacts", {
+  patientFhirId: varchar("patientFhirId", { length: 128 }).primaryKey(),
+  smokingValue: varchar("smokingValue", { length: 160 }),
+  smokingDate: varchar("smokingDate", { length: 10 }),
+  bmiValue: varchar("bmiValue", { length: 60 }),
+  bmiDate: varchar("bmiDate", { length: 10 }),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
 
 /** Appointment requests from the mypcpdr.com booking wizard (the front desk calls to confirm). */
 export const bookingRequests = mysqlTable("bookingRequests", {

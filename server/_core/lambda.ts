@@ -110,6 +110,16 @@ export const handler = async (event: any, context: any) => {
     const { scanProgramSuggestions } = await import("../programsDb");
     return scanProgramSuggestions();
   }
+  // One-time fill of the latest smoking status / BMI per chart from the chart copy (IAM-only; re-run until done).
+  if (event && event.__job === "chart-facts-backfill" && !event.requestContext && !event.version) {
+    const { backfillChartFacts } = await import("../chartFacts");
+    return backfillChartFacts({ deadline: Date.now() + 24_000, restart: event.restart === true });
+  }
+  // Testing tab check: how many qualify for ABI-Q / PFT / RMR and how long the list takes (IAM-only, counts only).
+  if (event && event.__job === "office-testing-summary" && !event.requestContext && !event.version) {
+    const { officeTestingSummary } = await import("../officeTestingDb");
+    return officeTestingSummary();
+  }
   // Who approves program suggestions, by name (IAM-only; dry run unless apply).
   if (event && event.__job === "program-approvers" && !event.requestContext && !event.version) {
     const { programApproversJob } = await import("../programsDb");

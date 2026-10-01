@@ -32,6 +32,8 @@ import * as square from "../squareDb";
 import * as folders from "../folderDb";
 import * as directory from "../directoryDb";
 import * as programs from "../programsDb";
+import * as officeTests from "../officeTestingDb";
+import { OFFICE_TESTS } from "../../shared/officeTests";
 import { SUGGEST_PROGRAMS } from "../../shared/programRules";
 import { DIRECTORY_PROGRAMS, DIRECTORY_SORTS, DIRECTORY_STATUSES } from "../../shared/directory";
 import { FOLDER_SECTION_LIST, PATIENT_FILE_TYPE_LIST, type FolderSection, type PatientFileType } from "../../shared/folder";
@@ -1315,6 +1317,45 @@ export const workspaceRouter = router({
       await programActor(ctx);
       return run(() => programs.scanProgramSuggestions());
     }),
+  }),
+
+  /** The Testing tab: in-office tests (ABI-Q, PFT, RMR) by the practice's criteria. */
+  officeTests: router({
+    list: protectedProcedure
+      .input(z.object({
+        test: z.enum(OFFICE_TESTS).nullish(),
+        state: z.enum(["eligible", "scheduled", "done", "declined", "not_needed"]).default("eligible"),
+        clinicId,
+        providerId: z.number().int().positive().nullish(),
+        comingWithinDays: z.number().int().min(1).max(90).nullish(),
+        q: z.string().trim().max(100).nullish(),
+        page: z.number().int().min(1).max(10_000).default(1),
+      }))
+      .query(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "flowView");
+        return run(() => officeTests.listOfficeTesting(actor, input));
+      }),
+    forPatient: protectedProcedure.input(z.object({ key: patientKey })).query(async ({ ctx, input }) => {
+      await actorFor(ctx, "flowView");
+      return run(() => officeTests.officeTestingFor(input.key));
+    }),
+    record: protectedProcedure
+      .input(z.object({ subjectKey: patientKey, tests: z.array(z.enum(OFFICE_TESTS)).min(1).max(3), status: z.enum(["scheduled", "done", "declined", "not_applicable"]), date: dateStr, note: z.string().max(1000).nullish() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "flowView");
+        return run(() => officeTests.recordOfficeTest(actor, input));
+      }),
+    undo: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "flowView");
+      return run(() => officeTests.undoOfficeTest(actor, input.id));
+    }),
+    createTasks: protectedProcedure
+      .input(z.object({ items: z.array(z.object({ subjectKey: patientKey, tests: z.array(z.enum(OFFICE_TESTS)).min(1).max(3) })).min(1).max(50), assigneeId: z.number().int().positive().nullish() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "tasks");
+        if (input.assigneeId && input.assigneeId !== ctx.user.id && !can(ctx.user.role, "assignTasks")) throw new TRPCError({ code: "FORBIDDEN", message: "You can only create tasks for yourself." });
+        return run(() => officeTests.createOfficeTestTasks(actor, input));
+      }),
   }),
 
   /** The Patients tab: every patient of the practice (clinic-limited staff see their clinic's). */

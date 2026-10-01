@@ -17,6 +17,7 @@ import { relayFetch } from "./egress";
 import { clientAssertion, getPfConfig } from "./pfFhir";
 import { clearError, downloadStatus, readChunk, removeFile, startDownload } from "./exportStore";
 import { WorkspaceError, audit, buildNameDobIndex, type WorkspaceActor } from "./workspaceDb";
+import { factKindOf, saveChartFacts } from "./chartFacts";
 
 const STATE_KEY = "pf_fhir_sync";
 // PF approves read scopes one resource type at a time (the 24 ticked on MyPCP's app registration).
@@ -387,6 +388,7 @@ async function loadBatch(resources: FhirResource[], ctx: LoadCtx) {
   let rows: (typeof fhirResources.$inferInsert)[] = [];
   let bytes = 0;
   const tests: (typeof patientTests.$inferInsert)[] = [];
+  const facts: Parameters<typeof saveChartFacts>[0] = [];
   const flush = async () => {
     if (!rows.length) return;
     await d.insert(fhirResources).values(rows).onDuplicateKeyUpdate({
@@ -411,6 +413,11 @@ async function loadBatch(resources: FhirResource[], ctx: LoadCtx) {
     });
     bytes += raw?.length ?? 0;
     if (rows.length >= 200 || bytes > 8_000_000) await flush();
+    // Latest smoking status and BMI per chart (Testing tab rules).
+    if (pid && r.resourceType === "Observation") {
+      const kind = factKindOf({ section: sectionType(r), title: line.title, code: line.code });
+      if (kind) facts.push({ patientFhirId: pid.slice(0, 128), kind, value: cut(line.value, 160), date: line.date });
+    }
     // 3) Tests and screenings they've had → the testing tracker.
     const kind = sectionType(r);
     if (who && line.date && line.title && (kind === "Observation:laboratory" || r.resourceType === "Procedure" || r.resourceType === "DiagnosticReport" || r.resourceType === "Immunization")) {
@@ -420,5 +427,6 @@ async function loadBatch(resources: FhirResource[], ctx: LoadCtx) {
   }
   await flush();
   for (let i = 0; i < tests.length; i += 400) await d.insert(patientTests).ignore().values(tests.slice(i, i + 400));
+  await saveChartFacts(facts);
 }
 

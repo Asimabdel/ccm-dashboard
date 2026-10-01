@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { PhoneLink } from "@/components/phone/PhoneLink";
 import { CALL_OUTCOMES, type CallOutcome } from "@shared/phone";
 import { PatientTestingPanel } from "@/components/testing/PatientTestingPanel";
+import { OfficeTestsPanel } from "@/components/testing/OfficeTests";
 import { ClipboardSignature, Database, FlaskConical, ShieldCheck } from "lucide-react";
 import { InsurancePanel } from "@/components/insurance/InsurancePanel";
 import { PatientFormsPanel } from "@/components/intake/PatientFormsPanel";
@@ -176,7 +177,7 @@ function Patient360({ subjectKey, id }: { subjectKey: string; id: number | null 
           )}
 
           {tab === "care" && ccmRecord && id && <PatientDetailPage embedded patientId={id} />}
-          {tab === "testing" && caps?.patientFull && <Panel><PatientTestingPanel subjectKey={subjectKey} /></Panel>}
+          {tab === "testing" && caps?.patientFull && <Panel><OfficeTestsPanel subjectKey={subjectKey} name={p.name} /><PatientTestingPanel subjectKey={subjectKey} /></Panel>}
           {tab === "chart" && caps?.chartBasic && <PatientChartPanel subjectKey={subjectKey} />}
           {tab === "insurance" && caps?.eligibility && <InsurancePanel subjectKey={subjectKey} />}
           {tab === "forms" && caps?.intakeForms && <PatientFormsPanel subjectKey={subjectKey} />}
