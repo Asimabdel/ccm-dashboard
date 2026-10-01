@@ -71,6 +71,16 @@ export async function readChunk(key: string, offset: number, length: number): Pr
   } finally { await fh.close(); }
 }
 
+/** Forget an earlier failed attempt at this file (before trying it again). */
+export async function clearError(key: string) {
+  if (onAws()) {
+    const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
+    await (await s3Client()).send(new DeleteObjectCommand({ Bucket: process.env.PF_EXPORT_BUCKET!, Key: `${key}.error` })).catch(() => {});
+    return;
+  }
+  await rm(`${localPath(key)}.error`, { force: true });
+}
+
 export async function removeFile(key: string) {
   if (onAws()) {
     const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");

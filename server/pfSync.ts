@@ -15,7 +15,7 @@ import { recognizeTest } from "../shared/testing";
 import { localDateStr, localMinutes } from "../shared/workforce";
 import { relayFetch } from "./egress";
 import { clientAssertion, getPfConfig } from "./pfFhir";
-import { downloadStatus, readChunk, removeFile, startDownload } from "./exportStore";
+import { clearError, downloadStatus, readChunk, removeFile, startDownload } from "./exportStore";
 import { WorkspaceError, audit, buildNameDobIndex, type WorkspaceActor } from "./workspaceDb";
 
 const STATE_KEY = "pf_fhir_sync";
@@ -177,7 +177,7 @@ export async function runPfSync(opts: { deadline: number }) {
   try {
     if (s.phase === "idle" || s.phase === "error") { s.lastAttemptAt = new Date().toISOString(); s = await kickoff(s); }
     if (s.phase === "exporting") s = await poll(s);
-    if (s.phase === "downloading") s = await checkDownloads(s);
+    if (s.phase === "downloading") s = await checkDownloads(s, opts.deadline);
     if (s.phase === "loading") s = await load(s, opts.deadline);
   } catch (e) {
     s.phase = "error";
@@ -216,21 +216,40 @@ async function poll(s: PfSyncState): Promise<PfSyncState> {
   const run = (s.startedAt ?? new Date().toISOString()).replace(/[^0-9]/g, "").slice(0, 14);
   // Patients first: everything else is filed under the patient it belongs to.
   const out = [...(m.output ?? [])].sort((a, b) => (a.type === "Patient" ? -1 : b.type === "Patient" ? 1 : a.type.localeCompare(b.type)));
+  // Only note the files here (a full export can be 700+ of them); checkDownloads fetches them a few at a time.
   const files: ExportFile[] = out.map((o, i) => ({ type: o.type, url: o.url, key: `pf/${run}/${String(i).padStart(3, "0")}-${o.type}.ndjson`, size: 0, offset: 0, lines: 0, status: "pending" }));
-  const headers: Record<string, string> = { Accept: "application/fhir+ndjson" };
-  if (m.requiresAccessToken !== false) headers.Authorization = `Bearer ${token}`;
-  for (const f of files) { await startDownload(f.url, headers, f.key); f.status = "downloading"; }
   return { ...s, phase: files.length ? "downloading" : "loading", transactionTime: m.transactionTime ?? s.startedAt, requiresAccessToken: m.requiresAccessToken !== false, files, progress: null };
 }
 
-async function checkDownloads(s: PfSyncState): Promise<PfSyncState> {
+/** Downloads running at once: enough to move along, not so many that one run can't keep track of them. */
+const MAX_DOWNLOADING = 20;
+
+export async function checkDownloads(s: PfSyncState, deadline: number): Promise<PfSyncState> {
+  // Finished (or failed) since the last run?
   for (const f of s.files.filter((x) => x.status === "downloading")) {
+    if (Date.now() > deadline) return s;
     const st = await downloadStatus(f.key);
     if (st.ready) { f.status = "ready"; f.size = st.size; }
     else if (st.error) { f.status = "error"; f.error = st.error; }
   }
   if (s.files.some((f) => f.status === "error")) throw new Error(`A file didn't download: ${s.files.find((f) => f.status === "error")!.error}`);
-  return s.files.every((f) => f.status !== "downloading") ? { ...s, phase: "loading" } : s;
+  // Start more, a few at a time. A file already in the store (from an earlier attempt) isn't fetched again.
+  let inFlight = s.files.filter((f) => f.status === "downloading").length;
+  let headers: Record<string, string> | null = null;
+  for (const f of s.files.filter((x) => x.status === "pending")) {
+    if (inFlight >= MAX_DOWNLOADING || Date.now() > deadline) break;
+    const st = await downloadStatus(f.key);
+    if (st.ready) { f.status = "ready"; f.size = st.size; continue; }
+    if (!headers) {
+      headers = { Accept: "application/fhir+ndjson" };
+      if (s.requiresAccessToken !== false) headers.Authorization = `Bearer ${(await accessToken()).token}`;
+    }
+    await clearError(f.key);
+    await startDownload(f.url, headers, f.key);
+    f.status = "downloading";
+    inFlight++;
+  }
+  return s.files.every((f) => f.status === "ready" || f.status === "loaded") ? { ...s, phase: "loading" } : s;
 }
 
 // ---- Loading ----
