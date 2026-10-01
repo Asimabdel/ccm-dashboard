@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, ClipboardList, UserCog, AlertTriangle, Receipt,
   BarChart3, PhoneCall, CalendarClock, ShieldCheck, Building2, Stethoscope, Target,
   UserMinus, Ban, Pill, PhoneOutgoing, Activity, Sunrise, CalendarDays, BriefcaseBusiness,
-  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature, FileSignature, Wallet, HeartPulse, ClipboardCheck, FlaskConical,
+  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature, FileSignature, Wallet, HeartPulse, ClipboardCheck, FlaskConical, Link2,
 } from "lucide-react";
 
 export interface NavItem {
@@ -87,6 +87,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
         { label: "Workforce", path: "/workforce", icon: BriefcaseBusiness },
         { label: "Team & Access", path: "/team", icon: UserCog },
         { label: "Integrations", path: "/integrations", icon: PlugZap },
+        { label: "Record matching", path: "/record-matching", icon: Link2 },
         { label: "Audit Log", path: "/audit", icon: ShieldCheck },
       ],
     },

@@ -588,6 +588,13 @@ describe("fax inbox", () => {
     expect(matchFaxPatient("John Sample", "1980-06-06", people)).toMatchObject({ person: { key: "p:3" }, sure: true });
     expect(matchFaxPatient(null, "1960-01-02", people)).toBeNull();
   });
+  it("prefers the CCM-roster record when a schedule-only record has the same name and birthday (made-up people)", () => {
+    const people = [
+      { key: "p:9", patientId: 9, name: "Ab Testname", dob: "1950-03-04" },
+      { key: "s:ab q testname|1950-03-04", patientId: null, name: "Ab Q Testname", dob: "1950-03-04" },
+    ];
+    expect(matchFaxPatient("Ab Testname", "1950-03-04", people)).toMatchObject({ person: { key: "p:9" }, sure: true });
+  });
   it("matches thousands of imported patients quickly with one prepared index (made-up people)", () => {
     // Names are letters only (the name clean-up drops digits): person 7 → "Firsth Lasth".
     const word = (n: number) => { let s = ""; do { s = String.fromCharCode(97 + (n % 26)) + s; n = Math.floor(n / 26); } while (n > 0); return s; };

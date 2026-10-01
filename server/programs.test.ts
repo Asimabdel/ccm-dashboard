@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { NOT_ON_ROSTER, classifyDiagnosis, countChronicConditions, diagnosesFingerprint, icd10Of, suggestPrograms, type MatchedDiagnosis } from "../shared/programRules";
 import { computeApcmLevel } from "./db";
+import { firstClose } from "./rosterMatch";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 
@@ -75,6 +76,16 @@ describe("program suggestions from diagnoses", () => {
     expect(computeApcmLevel(1, true, false)).toBe("level_1");
     expect(computeApcmLevel(3, true, false)).toBe("level_3");
     expect(computeApcmLevel(0, false, true)).toBe("level_2");
+  });
+
+  it("record matching: close first names are nicknames / initials; only admins confirm pairs", async () => {
+    expect(firstClose("abdul", "abdulrahman")).toBe(true);
+    expect(firstClose("j", "john")).toBe(true);
+    expect(firstClose("jo", "john")).toBe(false); // two letters isn't enough
+    expect(firstClose("john", "john")).toBe(false); // an exact match is handled separately
+    expect(firstClose("maria", "mario")).toBe(false);
+    await expect(appRouter.createCaller(ctxFor("staff")).workspace.recordMatching.list()).rejects.toThrow(/admin/);
+    await expect(appRouter.createCaller(ctxFor("office_manager")).workspace.recordMatching.confirm({ rosterId: 1, pfId: "x" })).rejects.toThrow(/admin/);
   });
 
   it("only admins move the start date (patients seen since …)", async () => {

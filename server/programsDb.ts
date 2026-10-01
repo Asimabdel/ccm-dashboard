@@ -393,7 +393,7 @@ async function rosterPatientFor(s: Suggestion, dx: MatchedDiagnosis[]): Promise<
 }
 
 /** Everything filed under their old key now belongs to the roster record. */
-async function moveToRosterKey(oldKey: string, patientId: number, entry: DirectoryEntry | undefined) {
+export async function moveToRosterKey(oldKey: string, patientId: number, entry: DirectoryEntry | undefined) {
   const d = await db();
   const newKey = `p:${patientId}`;
   if (!keyedColumns) {

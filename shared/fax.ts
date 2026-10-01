@@ -137,6 +137,10 @@ export function makePersonMatcher(people: PersonRef[]): (name: string | null, do
     if (dob) {
       const hits = byDobName.get(`${dob}|${n.first}|${n.last}`) ?? [];
       if (hits.length === 1) return { person: hits[0]!, sure: true };
+      // The same name and birthday on a roster patient and a schedule-only record (e.g. a middle
+      // initial on one of them): one person, and the roster record is the one to use.
+      const onRoster = Array.from(new Map(hits.filter((h) => h.key.startsWith("p:")).map((h) => [h.key, h])).values());
+      if (hits.length > 1 && onRoster.length === 1) return { person: onRoster[0]!, sure: true };
       // First name as an initial or a nickname: same DOB + same last name, only one such person.
       const lastOnly = byDobLast.get(`${dob}|${n.last}`) ?? [];
       if (lastOnly.length === 1) return { person: lastOnly[0]!, sure: false };

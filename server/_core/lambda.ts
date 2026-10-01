@@ -115,6 +115,11 @@ export const handler = async (event: any, context: any) => {
     const { backfillChartFacts } = await import("../chartFacts");
     return backfillChartFacts({ deadline: Date.now() + 24_000, restart: event.restart === true });
   }
+  // Link CCM-roster patients to their Practice Fusion records (IAM-only; dry run unless apply; counts only).
+  if (event && event.__job === "roster-pf-match" && !event.requestContext && !event.version) {
+    const { matchRosterToPf } = await import("../rosterMatch");
+    return matchRosterToPf({ apply: event.apply === true, name: typeof event.name === "string" ? event.name : null, deadline: Date.now() + 22_000 });
+  }
   // Where recent "last visit" dates come from (IAM-only; counts and visit-type names only).
   if (event && event.__job === "seen-since-breakdown" && !event.requestContext && !event.version) {
     const { seenSinceBreakdown } = await import("../officeTestingDb");

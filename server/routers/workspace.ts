@@ -34,6 +34,7 @@ import * as directory from "../directoryDb";
 import * as programs from "../programsDb";
 import * as officeTests from "../officeTestingDb";
 import * as seenSince from "../seenSince";
+import * as rosterMatch from "../rosterMatch";
 import { OFFICE_TESTS } from "../../shared/officeTests";
 import { SUGGEST_PROGRAMS } from "../../shared/programRules";
 import { DIRECTORY_PROGRAMS, DIRECTORY_SORTS, DIRECTORY_STATUSES } from "../../shared/directory";
@@ -1317,6 +1318,24 @@ export const workspaceRouter = router({
     scan: protectedProcedure.mutation(async ({ ctx }) => {
       await programActor(ctx);
       return run(() => programs.scanProgramSuggestions());
+    }),
+  }),
+
+  /** Record matching (admins): CCM-roster patients and Practice Fusion records that need a person to confirm they're the same. */
+  recordMatching: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can match records." });
+      return rosterMatch.reviewCandidates();
+    }),
+    confirm: protectedProcedure.input(z.object({ rosterId: z.number().int().positive(), pfId: z.string().min(1).max(128) })).mutation(async ({ ctx, input }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can match records." });
+      const actor = await actorFor(ctx, "flowView");
+      return run(() => rosterMatch.confirmPair(actor, input.rosterId, input.pfId));
+    }),
+    reject: protectedProcedure.input(z.object({ rosterId: z.number().int().positive(), pfId: z.string().min(1).max(128) })).mutation(async ({ ctx, input }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can match records." });
+      const actor = await actorFor(ctx, "flowView");
+      return run(() => rosterMatch.rejectPair(actor, input.rosterId, input.pfId));
     }),
   }),
 
