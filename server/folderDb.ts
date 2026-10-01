@@ -65,7 +65,7 @@ async function assertFolder(actor: WorkspaceActor, key: string, section?: Folder
   if (!sections.length) throw new WorkspaceError("You don't have access to patient folders.", "FORBIDDEN");
   if (section && !sections.includes(section)) throw new WorkspaceError(`You don't have access to ${FOLDER_SECTIONS[section].toLowerCase()}.`, "FORBIDDEN");
   const care = await subjectCare(key);
-  if (actor.clinicIds && (!care?.clinicId || !actor.clinicIds.includes(care.clinicId))) throw new WorkspaceError("That patient isn't at your office.", "FORBIDDEN");
+  // Any staff member can open any patient's folder (2026-10-01); payments inside stay limited to their clinic.
   return { sections, care };
 }
 

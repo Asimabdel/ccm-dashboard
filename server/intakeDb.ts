@@ -171,7 +171,6 @@ export async function intakeContact(actor: WorkspaceActor, subjectKey: string) {
   const [ec] = await d.select({ email: emailContacts.email }).from(emailContacts)
     .where(and(eq(emailContacts.kind, "patient"), pid ? eq(emailContacts.patientId, pid) : eq(emailContacts.subjectKey, subjectKey))).limit(1);
   email = email ?? ec?.email ?? null;
-  if (actor.clinicIds && !inScope(actor, care?.clinicId ?? null)) throw new WorkspaceError("That patient isn't at your office.", "FORBIDDEN");
   const [open] = await d.select({ id: intakePackets.id }).from(intakePackets).where(and(eq(intakePackets.subjectKey, subjectKey), inArray(intakePackets.status, OPEN_PACKET))).limit(1);
   return { subjectKey, patientId: pid, name, dob, phone: normalizePhone(phone) ?? phone, email, language, clinicId: care?.clinicId ?? null, openPacketId: open?.id ?? null };
 }
@@ -197,12 +196,10 @@ export async function createPacket(actor: WorkspaceActor, input: CreatePacketInp
   if (!forms.length) throw new WorkspaceError("Pick at least one form.");
   const d = await db();
   const care = input.subjectKey ? await subjectCare(input.subjectKey) : null;
-  let clinicId = input.clinicId ?? care?.clinicId ?? null;
+  // Any staff member can send forms to any patient; the packet belongs to the patient's clinic.
+  let clinicId = care?.clinicId ?? input.clinicId ?? null;
   if (!clinicId && input.bookingRequestId) clinicId = (await d.select({ c: bookingRequests.clinicId }).from(bookingRequests).where(eq(bookingRequests.id, input.bookingRequestId)).limit(1))[0]?.c ?? null;
-  if (actor.clinicIds) {
-    clinicId = clinicId ?? actor.clinicIds[0] ?? null;
-    if (!inScope(actor, clinicId)) throw new WorkspaceError("You can only send forms for patients at your office.", "FORBIDDEN");
-  }
+  clinicId = clinicId ?? actor.clinicIds?.[0] ?? null;
   const token = randomBytes(24).toString("base64url");
   const email = input.email?.trim().toLowerCase() || null;
   if (email && !/^\S+@\S+\.\S+$/.test(email)) throw new WorkspaceError("That email address doesn't look right.");
@@ -220,12 +217,10 @@ export async function createPacket(actor: WorkspaceActor, input: CreatePacketInp
 /** The wording that was signed, as kept with the signature (plus any Yes/No questions and the answers given). */
 interface SignedText { title: string; body: string; language?: string; choices?: { kind: ConsentKind; title: string; body: string; answer: ChoiceAnswer }[] }
 
-/** Office managers only reach their office's packets. */
-const inScope = (actor: WorkspaceActor, clinicId: number | null) => !actor.clinicIds || (clinicId != null && actor.clinicIds.includes(clinicId));
-
-async function packetOr404(id: number, actor: WorkspaceActor) {
+/** Any staff member can open any patient's forms (2026-10-01); the inbox lists are scoped below. */
+async function packetOr404(id: number, _actor: WorkspaceActor) {
   const [p] = await (await db()).select().from(intakePackets).where(eq(intakePackets.id, id)).limit(1);
-  if (!p || !inScope(actor, p.clinicId)) throw new WorkspaceError("Those forms weren't found.", "NOT_FOUND");
+  if (!p) throw new WorkspaceError("Those forms weren't found.", "NOT_FOUND");
   return p;
 }
 const isExpired = (p: { expiresAt: Date }) => p.expiresAt.getTime() < Date.now();
@@ -361,7 +356,8 @@ export async function subjectForms(actor: WorkspaceActor, subjectKey: string) {
   const d = await db();
   const pid = /^p:(\d+)$/.exec(subjectKey)?.[1];
   const who = pid ? or(eq(intakePackets.subjectKey, subjectKey), eq(intakePackets.patientId, Number(pid))) : eq(intakePackets.subjectKey, subjectKey);
-  const packets = await packetRows(and(who, packetScope(actor)), 100);
+  // A patient's own Forms tab shows everything sent to them, whichever office sent it.
+  const packets = await packetRows(who, 100);
   const ids = packets.map((p) => p.id);
   const sigRows = ids.length ? await d.select({ packetId: intakeSignatures.packetId, kind: intakeSignatures.consentKind, decision: intakeSignatures.decision, choices: intakeSignatures.choices, at: intakeSignatures.signedAt, title: intakeSignatures.formTitle })
     .from(intakeSignatures).where(and(inArray(intakeSignatures.packetId, ids), sql`(${intakeSignatures.consentKind} IS NOT NULL OR ${intakeSignatures.choices} IS NOT NULL)`)).orderBy(desc(intakeSignatures.signedAt)) : [];
@@ -388,8 +384,9 @@ export async function subjectForms(actor: WorkspaceActor, subjectKey: string) {
   return { packets, consents };
 }
 
+/** The Patient forms inbox: clinic-limited staff see their office's forms, plus any they sent themselves. */
 const packetScope = (actor: WorkspaceActor) =>
-  actor.clinicIds ? (actor.clinicIds.length ? inArray(intakePackets.clinicId, actor.clinicIds) : sql`1 = 0`) : undefined;
+  actor.clinicIds ? or(actor.clinicIds.length ? inArray(intakePackets.clinicId, actor.clinicIds) : sql`1 = 0`, eq(intakePackets.createdByUserId, actor.id)) : undefined;
 
 export async function packetStats(actor: WorkspaceActor) {
   const d = await db();
@@ -488,7 +485,6 @@ export async function linkPacket(actor: WorkspaceActor, id: number, subjectKey: 
   const p = await packetOr404(id, actor);
   const care = await subjectCare(subjectKey);
   if (!care) throw new WorkspaceError("That patient wasn't found.", "NOT_FOUND");
-  if (actor.clinicIds && !inScope(actor, care.clinicId ?? p.clinicId)) throw new WorkspaceError("That patient isn't at your office.", "FORBIDDEN");
   const d = await db();
   await d.update(intakePackets).set({ subjectKey, patientId: care.patientId, clinicId: p.clinicId ?? care.clinicId }).where(eq(intakePackets.id, id));
   if (p.taskId) await d.update(workTasks).set({ patientId: care.patientId }).where(eq(workTasks.id, p.taskId));

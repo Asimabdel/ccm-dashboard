@@ -771,8 +771,8 @@ export const workspaceRouter = router({
       return docs.signerChoices();
     }),
     searchPatients: protectedProcedure.input(z.object({ q: z.string().trim().min(2).max(100) })).query(async ({ ctx, input }) => {
-      const actor = await actorFor(ctx, "documents");
-      return ws.searchSubjects(input.q, 20, actor.clinicIds);
+      await actorFor(ctx, "documents");
+      return ws.searchSubjects(input.q, 20, null); // any patient of the practice
     }),
     create: protectedProcedure.input(z.object({ title: z.string().max(255), fileName: z.string().min(1).max(255), size: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "documents");
@@ -897,8 +897,8 @@ export const workspaceRouter = router({
       return intake.formChoices();
     }),
     search: protectedProcedure.input(z.object({ q: z.string().trim().min(2).max(100) })).query(async ({ ctx, input }) => {
-      const actor = await actorFor(ctx, "intakeForms");
-      return ws.searchSubjects(input.q, 20, actor.clinicIds);
+      await actorFor(ctx, "intakeForms");
+      return ws.searchSubjects(input.q, 20, null); // any patient of the practice, whichever clinic
     }),
     contact: protectedProcedure.input(z.object({ subjectKey: z.string().min(3).max(120) })).query(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "intakeForms");

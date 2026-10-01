@@ -1149,32 +1149,10 @@ export async function clinicOfSubjects(keys: (string | null | undefined)[]): Pro
 /** Is a clinic within someone's reach (null = every clinic)? People with no known clinic are out of reach of clinic-limited staff. */
 export const inClinics = (clinicIds: number[] | null | undefined, clinicId: number | null | undefined) => !clinicIds || (clinicId != null && clinicIds.includes(clinicId));
 
-/** Find patients by name (roster + imported schedule), for linking an email to the right person. */
+/** Find patients (roster, schedule and Practice Fusion-only), the way the Patients tab searches. */
 export async function searchSubjects(q: string, limit = 20, clinicIds: number[] | null = null) {
-  const needle = nameKey(q);
-  if (needle.length < 2) return [];
-  const d = await db();
-  const clinicName = new Map((await d.select({ id: clinics.id, name: clinics.name }).from(clinics)).map((c) => [c.id, c.name]));
-  const out: { key: string; patientId: number | null; name: string; dob: string | null; clinicId: number | null; clinicName: string | null; phoneLast4: string | null }[] = [];
-  const roster = await d.select({ id: patients.id, name: patients.name, dob: patients.dateOfBirth, clinicId: patients.clinicId, phone: patients.phoneNumber }).from(patients);
-  for (const p of roster) {
-    if (!nameKey(p.name).includes(needle)) continue;
-    out.push({ key: `p:${p.id}`, patientId: p.id, name: p.name, dob: ymd(p.dob), clinicId: p.clinicId, clinicName: p.clinicId ? clinicName.get(p.clinicId) ?? null : null, phoneLast4: normalizePhone(p.phone)?.slice(-4) ?? null });
-  }
-  for (const s of Array.from((await loadScheduleSubjects()).values())) {
-    if (s.patientId || !nameKey(s.name).includes(needle)) continue;
-    out.push({ key: s.key, patientId: null, name: s.name, dob: ymd(s.dob), clinicId: s.clinicId, clinicName: s.clinicId ? clinicName.get(s.clinicId) ?? null : null, phoneLast4: normalizePhone(s.phone)?.slice(-4) ?? null });
-  }
-  // Patients who are only in Practice Fusion (chart copy), not on the roster or schedule.
-  const words = q.trim().split(/\s+/).filter((w) => w.length >= 2).slice(0, 3);
-  if (words.length) {
-    const pf = await d.select({ key: fhirPatients.subjectKey, name: fhirPatients.name, dob: fhirPatients.dob, phone: fhirPatients.phone }).from(fhirPatients)
-      .where(and(like(fhirPatients.subjectKey, "f:%"), ...words.map((w) => like(fhirPatients.name, `%${w.replace(/[%_]/g, "")}%`)))).limit(limit);
-    for (const p of pf) if (p.name && nameKey(p.name).includes(needle)) out.push({ key: p.key, patientId: null, name: p.name, dob: p.dob, clinicId: null, clinicName: null, phoneLast4: normalizePhone(p.phone)?.slice(-4) ?? null });
-  }
-  // Limited to some clinics (office manager): people with no known clinic are left out too.
-  const kept = clinicIds ? out.filter((o) => o.clinicId != null && clinicIds.includes(o.clinicId)) : out;
-  return kept.sort((a, b) => a.name.localeCompare(b.name)).slice(0, limit);
+  const { searchPatients } = await import("./directoryDb");
+  return searchPatients(q, limit, clinicIds);
 }
 
 /** Who a phone number belongs to: a CCM-roster patient first, then anyone on the imported schedule. */

@@ -238,7 +238,6 @@ export async function newFromTemplate(a: WorkspaceActor, templateId: number, sub
   if (!t) throw new WorkspaceError("Template not found.", "NOT_FOUND");
   const care = subjectKey ? await subjectCare(subjectKey) : null;
   if (subjectKey && !care) throw new WorkspaceError("That patient wasn't found.", "NOT_FOUND");
-  if (care && a.clinicIds && !(care.clinicId && a.clinicIds.includes(care.clinicId))) throw new WorkspaceError("That patient isn't at your office.", "FORBIDDEN");
   const values = await prefillValues(a, subjectKey);
   const fields = fieldsOf(t).map((f) => ({ ...f, value: f.prefill && values[f.prefill] != null ? values[f.prefill]! : f.value ?? null }));
   const res = await (await db()).insert(documents).values({

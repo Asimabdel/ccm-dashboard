@@ -217,8 +217,8 @@ export async function listDirectory(actor: WorkspaceActor, f: DirectoryFilters) 
   const today = localDateStr();
   const d = await db();
   const clinicName = new Map((await d.select({ id: clinics.id, name: clinics.name }).from(clinics)).map((c) => [c.id, c.name]));
-  // Clinic-limited staff (MAs, office managers) see their clinic's patients only.
-  const scoped = actor.clinicIds ? all.filter((e) => e.clinicId != null && actor.clinicIds!.includes(e.clinicId)) : all;
+  // Every staff member can look up any patient of the practice (2026-10-01: forms and charts for anyone).
+  const scoped = all;
   const q = parseDirectoryQuery(f.q ?? "");
   const searching = !isEmptyQuery(q);
   const base = scoped.filter((e) =>
@@ -268,6 +268,27 @@ export async function listDirectory(actor: WorkspaceActor, f: DirectoryFilters) 
   };
 }
 
+/**
+ * Find patients for a picker (sending forms, attaching a document, linking an email…): every patient
+ * the practice has, matched like the Patients tab (any name order, date of birth, phone or MRN).
+ * clinicIds limits it to some clinics (null = everyone); people with no clinic on file are then left out.
+ */
+export async function searchPatients(q: string, limit = 20, clinicIds: number[] | null = null) {
+  const query = parseDirectoryQuery(q);
+  if (isEmptyQuery(query) || (!query.dob && !query.digits && query.words.join("").length < 2)) return [];
+  const all = Array.from((await loadDirectory()).values());
+  const d = await db();
+  const clinicName = new Map((await d.select({ id: clinics.id, name: clinics.name }).from(clinics)).map((c) => [c.id, c.name]));
+  return all
+    .filter((e) => matchesQuery(e, query) && (!clinicIds || (e.clinicId != null && clinicIds.includes(e.clinicId))))
+    .sort((a, b) => a.sortName.localeCompare(b.sortName) || (a.dob ?? "").localeCompare(b.dob ?? ""))
+    .slice(0, limit)
+    .map((e) => ({
+      key: e.key, patientId: e.patientId, name: e.name, dob: e.dob, clinicId: e.clinicId,
+      clinicName: e.clinicId ? clinicName.get(e.clinicId) ?? null : null, phoneLast4: e.phoneDigits ? e.phoneDigits.slice(-4) : null,
+    }));
+}
+
 // ---------------------------------------------------------------------------
 // Patient 360 for anyone (roster patients keep their CCM record as an extra tab)
 // ---------------------------------------------------------------------------
@@ -305,12 +326,7 @@ export async function patient360(actor: WorkspaceActor, key: string) {
     appts = rows.filter((r) => subjectKeyFor(null, r.patientName, r.dateOfBirth) === key).slice(0, 50).map(({ patientName: _n, dateOfBirth: _d, ...r }) => r);
   }
 
-  // Clinic-limited staff: patients at their clinic, or anyone on their clinic's schedule today.
-  if (actor.clinicIds) {
-    const inClinic = e.clinicId != null && actor.clinicIds.includes(e.clinicId);
-    const onScheduleToday = appts.some((a) => a.date === today && a.clinicId != null && actor.clinicIds!.includes(a.clinicId));
-    if (!inClinic && !onScheduleToday) throw new WorkspaceError("Patient not found.", "NOT_FOUND");
-  }
+  // Any staff member can open any patient (forms and charts for patients at every clinic).
 
   // Tasks: about this patient, or made from their emails, faxes and Opportunity Finder.
   const linked = [

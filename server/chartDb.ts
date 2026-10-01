@@ -26,11 +26,9 @@ function access(actor: WorkspaceActor): "full" | "basic" {
   throw new WorkspaceError("You don't have access to patient charts.", "FORBIDDEN");
 }
 
-/** Office managers: only patients at their office (people with no known clinic are out of reach). */
-async function assertInScope(actor: WorkspaceActor, subjectKey: string) {
-  if (!actor.clinicIds) return;
-  const care = await subjectCare(subjectKey);
-  if (!care?.clinicId || !actor.clinicIds.includes(care.clinicId)) throw new WorkspaceError("That patient isn't at your office.", "FORBIDDEN");
+/** Any staff member with chart access can open any patient's chart, whichever clinic they belong to (2026-10-01). */
+async function assertInScope(_actor: WorkspaceActor, _subjectKey: string) {
+  return;
 }
 
 /** How many of each section to send (labs/vitals can run to thousands). */
@@ -107,7 +105,7 @@ export async function chartNote(actor: WorkspaceActor, id: number) {
 /** Find any patient — roster, schedule, or only in Practice Fusion. */
 export async function chartSearch(actor: WorkspaceActor, q: string) {
   access(actor);
-  return searchSubjects(q, 25, actor.clinicIds);
+  return searchSubjects(q, 25, null);
 }
 
 /** Name and DOB for a chart page header (any subject key). */
