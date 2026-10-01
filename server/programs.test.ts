@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { NOT_ON_ROSTER, classifyDiagnosis, countChronicConditions, diagnosesFingerprint, icd10Of, suggestPrograms, type MatchedDiagnosis } from "../shared/programRules";
 import { computeApcmLevel } from "./db";
-import { firstClose } from "./rosterMatch";
+import { firstClose, similarSpelling, tok } from "./rosterMatch";
 import { conditionsToAdd } from "./conditionSync";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
@@ -95,6 +95,18 @@ describe("program suggestions from diagnoses", () => {
     });
     // Not in BHI: nothing goes on the BHI list. Everything already there: nothing added.
     expect(conditionsToAdd({ chronic: ["Diabetes", "Hypertension", "Depression"], bhi: [], bhiActive: false }, problems)).toEqual({ chronic: [], bhi: [] });
+  });
+
+  it("record matching: accents, hyphens, suffixes and compound surnames don't stop a name match (made-up names)", () => {
+    expect(tok("José Hernández")).toMatchObject({ first: "jose", last: "hernandez" });
+    expect(tok("HERNANDEZ, JOSE")).toMatchObject({ first: "jose", last: "hernandez" });
+    expect(tok("John Testman Jr")).toMatchObject({ first: "john", last: "testman" });
+    expect(tok("Maria Garcia-Lopez").lasts.sort()).toEqual(["garcia", "garcialopez", "lopez"]);
+    expect(tok("Maria Garcia").lasts).toEqual(["garcia"]);
+    expect(similarSpelling("mohamed", "mohammed")).toBe(true);
+    expect(similarSpelling("smith", "smyth")).toBe(true);
+    expect(similarSpelling("lee", "lea")).toBe(false); // too short to call a typo
+    expect(similarSpelling("garcia", "gomez")).toBe(false);
   });
 
   it("record matching: close first names are nicknames / initials; only admins confirm pairs", async () => {

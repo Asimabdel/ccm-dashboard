@@ -120,6 +120,11 @@ export const handler = async (event: any, context: any) => {
     const { syncRosterConditions } = await import("../conditionSync");
     return syncRosterConditions({ apply: event.apply !== false, deadline: Date.now() + 24_000 });
   }
+  // Duplicate roster records (same name as an already-linked roster patient): counts only.
+  if (event && event.__job === "duplicate-roster-report" && !event.requestContext && !event.version) {
+    const { duplicateRosterReport } = await import("../rosterMatch");
+    return duplicateRosterReport();
+  }
   // Link CCM-roster patients to their Practice Fusion records (IAM-only; dry run unless apply; counts only).
   if (event && event.__job === "roster-pf-match" && !event.requestContext && !event.version) {
     const { matchRosterToPf } = await import("../rosterMatch");

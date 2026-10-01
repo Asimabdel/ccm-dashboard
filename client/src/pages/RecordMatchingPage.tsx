@@ -12,7 +12,7 @@ import { nameKey } from "@shared/workspace";
 
 type Overview = RouterOutputs["workspace"]["recordMatching"]["list"];
 type Pair = Overview["confirm"][number];
-type Roster = Overview["none"][number];
+type Roster = Omit<Overview["none"][number], "duplicateOfRosterId"> & { duplicateOfRosterId?: number | null };
 type PfInfo = Overview["several"][number]["candidates"][number];
 type Tab = "confirm" | "several" | "none";
 
@@ -212,6 +212,11 @@ function NoMatchRow({ r, busy, onLink }: { r: Roster; busy: boolean; onLink: (pf
     <section className={cn(cardCls, "px-4 py-3")}>
       <div className="flex flex-wrap items-center gap-3">
         <RosterSide r={r} />
+        {r.duplicateOfRosterId && (
+          <p className="w-full text-xs font-medium text-amber-700 dark:text-amber-300 sm:w-auto sm:max-w-xs">
+            Probably a duplicate: <a className="underline" href={`/patients/${r.duplicateOfRosterId}`} target="_blank" rel="noreferrer">another CCM record with this name</a> is already linked to Practice Fusion.
+          </p>
+        )}
         {!open && <Btn size="sm" variant="secondary" onClick={() => { setOpen(true); setQ(r.rosterName.split(/[\s,]+/).filter(Boolean).pop() ?? ""); }}><Search size={14} /> Find in Practice Fusion</Btn>}
       </div>
       {open && (
