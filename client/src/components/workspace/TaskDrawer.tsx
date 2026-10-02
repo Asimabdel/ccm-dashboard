@@ -58,6 +58,42 @@ function TimeOffDecision({ requestId, onDone }: { requestId: number; onDone: () 
   );
 }
 
+/** Approve / Deny a staff member's change to their usual week (shown on its task). */
+function ScheduleChangeDecision({ requestId, onDone }: { requestId: number; onDone: () => void }) {
+  const utils = trpc.useUtils();
+  const q = trpc.workforce.scheduleRequests.get.useQuery(requestId, { retry: false });
+  const [note, setNote] = useState("");
+  const decide = trpc.workforce.scheduleRequests.decide.useMutation({
+    onSuccess: (res) => {
+      void utils.workforce.invalidate();
+      onDone();
+      toast.success(res.approved ? `Approved. Their shifts are updated${"added" in res && res.added != null ? ` (${res.added} shifts)` : ""}, and they've been told.` : "Denied. They've been told.");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  if (q.isLoading) return <Loading />;
+  if (q.error) return <p className="text-xs text-slate-500">{q.error.message}</p>;
+  const r = q.data;
+  if (!r) return null;
+  if (r.status !== "pending") return <p className="rounded-xl bg-slate-50 dark:bg-slate-800 p-3 text-sm text-slate-600 dark:text-slate-300">This request was {r.status}.</p>;
+  return (
+    <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
+      <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">{r.userName}: new usual week from {r.effectiveFrom}</p>
+      <div className="grid gap-3 sm:grid-cols-2 text-xs">
+        <div><p className="font-semibold text-slate-500">Requested</p><ul className="mt-1 space-y-0.5 text-slate-800 dark:text-slate-100">{r.requested.map((l, i) => <li key={i}>{l}</li>)}</ul></div>
+        <div><p className="font-semibold text-slate-500">Current</p><ul className="mt-1 space-y-0.5 text-slate-600 dark:text-slate-300">{(r.current ?? ["No usual week on file"]).map((l, i) => <li key={i}>{l}</li>)}</ul></div>
+      </div>
+      {r.note && <p className="text-xs text-slate-600 dark:text-slate-300">Note: {r.note}</p>}
+      <input className={inputCls} placeholder="Note back to them (optional)" value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
+      <div className="grid grid-cols-2 gap-2">
+        <Btn disabled={decide.isPending} onClick={() => decide.mutate({ id: r.id, approve: true, managerNote: note.trim() || null })}><ThumbsUp size={14} /> Approve</Btn>
+        <Btn variant="secondary" disabled={decide.isPending} onClick={() => decide.mutate({ id: r.id, approve: false, managerNote: note.trim() || null })}><ThumbsDown size={14} /> Deny</Btn>
+      </div>
+      <p className="text-[11px] text-slate-500">Approving replaces their scheduled shifts from that date (called-out and coverage shifts stay).</p>
+    </div>
+  );
+}
+
 export function TaskDrawer({ taskId, onClose }: { taskId: number | null; onClose: () => void }) {
   const { caps, user } = useWorkspace();
   const utils = trpc.useUtils();
@@ -88,6 +124,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: number | null; onClose
   const due = t ? fmtDue(t.dueDate, today) : null;
   const closed = t?.status === "completed" || t?.status === "cancelled";
   const timeOff = t?.sourceType === "time_off" && !!t.sourceRef;
+  const scheduleChange = t?.sourceType === "schedule_change" && !!t.sourceRef;
   const inQueue = !!t && !t.assignedUserId && !!t.assignedRole;
   const queueName = t ? t.queueLabel ?? (t.assignedRole ? `${WORKSPACE_ROLE_LABELS[t.assignedRole] ?? t.assignedRole} queue` : null) : null;
 
@@ -114,6 +151,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: number | null; onClose
 
             <div className="shrink-0 px-6 py-5 space-y-5">
               {!closed && timeOff && <TimeOffDecision requestId={Number(t.sourceRef)} onDone={refresh} />}
+              {!closed && scheduleChange && <ScheduleChangeDecision requestId={Number(t.sourceRef)} onDone={refresh} />}
               {!closed && inQueue && user && (
                 <Btn variant="secondary" className="w-full" onClick={() => update.mutate({ id: t.id, assignedUserId: user.id })} disabled={update.isPending}>
                   <Hand size={15} /> Take it (sent to {queueName})

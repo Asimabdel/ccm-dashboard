@@ -1804,3 +1804,30 @@ export const educationSends = mysqlTable("educationSends", {
 }, (t) => ({
   subjectIdx: index("educationSends_subject_idx").on(t.subjectKey, t.createdAt),
 }));
+
+/**
+ * Staff "usual week" submissions. The first one (kind "first") applies right away; after that each
+ * change (kind "change") is pending until the office manager / time-off approver approves it.
+ */
+export const scheduleRequests = mysqlTable("scheduleRequests", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").references(() => users.id).notNull(),
+  pattern: json("pattern").notNull(),
+  effectiveFrom: varchar("effectiveFrom", { length: 10 }).notNull(),
+  /** first | change */
+  kind: varchar("kind", { length: 8 }).notNull(),
+  /** applied (first) | pending | approved | denied | cancelled */
+  status: varchar("status", { length: 10 }).notNull(),
+  note: varchar("note", { length: 500 }),
+  approverUserId: int("approverUserId").references(() => users.id),
+  managerNote: varchar("managerNote", { length: 500 }),
+  decidedByUserId: int("decidedByUserId").references(() => users.id),
+  decidedAt: datetime("decidedAt"),
+  shiftsRemoved: int("shiftsRemoved"),
+  shiftsAdded: int("shiftsAdded"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  userIdx: index("scheduleRequests_user_idx").on(t.userId, t.createdAt),
+  statusIdx: index("scheduleRequests_status_idx").on(t.status),
+}));

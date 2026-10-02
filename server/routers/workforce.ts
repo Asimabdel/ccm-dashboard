@@ -4,6 +4,7 @@ import { z } from "zod";
 import { isValidDateStr, isValidTimeStr, localDateStr, addDays } from "../../shared/workforce";
 import * as wf from "../workforceDb";
 import { officeClinicIds, officeStaff } from "../workspaceDb";
+import * as sched from "../scheduleRequestsDb";
 
 // Managing the workforce (schedules, approvals, time clock, scorecards) is for admins (everyone)
 // and office managers (the staff whose home clinic is their office, at that clinic). Job-role
@@ -48,6 +49,16 @@ function unwrap<T extends object>(res: T | { error: string }): T {
 const dateStr = z.string().refine(isValidDateStr, "Expected a YYYY-MM-DD date");
 const timeStr = z.string().refine(isValidTimeStr, "Expected an HH:MM time");
 const range = z.object({ from: dateStr, to: dateStr });
+const dayPlan = z.object({ work: z.boolean(), start: timeStr, end: timeStr, clinicId: z.number().int().positive().nullable() });
+const weekPattern = z.object({ mon: dayPlan, tue: dayPlan, wed: dayPlan, thu: dayPlan, fri: dayPlan, sat: dayPlan, sun: dayPlan });
+
+/** Schedule-request errors are the user's to fix. */
+async function schedRun<T>(fn: () => Promise<T>): Promise<T> {
+  try { return await fn(); } catch (e) {
+    if (e instanceof sched.ScheduleError) throw new TRPCError({ code: "BAD_REQUEST", message: e.message });
+    throw e;
+  }
+}
 
 export const workforceRouter = router({
   // ---- Job roles & duties (practice-wide: admins edit; managers read) ----
@@ -313,5 +324,32 @@ export const workforceRouter = router({
         return wf.requestTimeOff({ ...input, userId: ctx.user.id, userName: ctx.user.name ?? null });
       }),
     cancelTimeOff: protectedProcedure.input(z.number()).mutation(async ({ input, ctx }) => { await wf.cancelTimeOff(input, ctx.user.id); return { success: true }; }),
+    /** My usual week: set it once; after that changes go to the manager. */
+    week: protectedProcedure.query(async ({ ctx }) => sched.myWeek(ctx.user.id, ctx.user.role)),
+    submitWeek: protectedProcedure
+      .input(z.object({ pattern: weekPattern, effectiveFrom: dateStr, note: z.string().max(500).nullish() }))
+      .mutation(async ({ input, ctx }) => schedRun(() => sched.submitWeek({ id: ctx.user.id, name: ctx.user.name ?? null, role: ctx.user.role }, input))),
+    cancelWeekRequest: protectedProcedure.input(z.number().int().positive()).mutation(async ({ input, ctx }) => schedRun(async () => { await sched.cancelRequest(ctx.user.id, input); return { success: true }; })),
+  }),
+
+  // ---- Staff schedule change requests (manager side) ----
+  scheduleRequests: router({
+    /** One request (for the Approve / Deny box on its task in My Work). */
+    get: protectedProcedure.input(z.number().int().positive()).query(async ({ input, ctx }) => {
+      const m = await requireManager(ctx);
+      const r = await sched.getRequest(input);
+      if (!r) throw new TRPCError({ code: "NOT_FOUND", message: "Request not found." });
+      needPerson(m, r.userId);
+      return r;
+    }),
+    decide: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), approve: z.boolean(), managerNote: z.string().max(500).nullish() }))
+      .mutation(async ({ input, ctx }) => {
+        const m = await requireManager(ctx);
+        const r = await sched.getRequest(input.id);
+        if (!r) throw new TRPCError({ code: "NOT_FOUND", message: "Request not found." });
+        needPerson(m, r.userId);
+        return schedRun(() => sched.decideRequest({ ...input, decidedBy: { id: ctx.user.id, name: (ctx.user as { name?: string | null }).name ?? null } }));
+      }),
   }),
 });

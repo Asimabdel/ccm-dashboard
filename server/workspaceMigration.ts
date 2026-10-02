@@ -866,6 +866,28 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     CONSTRAINT \`educationSends_patientId_fk\` FOREIGN KEY (\`patientId\`) REFERENCES \`patients\`(\`id\`),
     CONSTRAINT \`educationSends_ccmTaskId_fk\` FOREIGN KEY (\`ccmTaskId\`) REFERENCES \`ccmTasks\`(\`id\`),
     CONSTRAINT \`educationSends_sentByUserId_fk\` FOREIGN KEY (\`sentByUserId\`) REFERENCES \`users\`(\`id\`))` },
+  // Staff set their usual week; later changes are requests (added 2026-10-02).
+  { label: "scheduleRequests", sql: `CREATE TABLE IF NOT EXISTS \`scheduleRequests\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`userId\` int NOT NULL,
+    \`pattern\` json NOT NULL,
+    \`effectiveFrom\` varchar(10) NOT NULL,
+    \`kind\` varchar(8) NOT NULL,
+    \`status\` varchar(10) NOT NULL,
+    \`note\` varchar(500),
+    \`approverUserId\` int,
+    \`managerNote\` varchar(500),
+    \`decidedByUserId\` int,
+    \`decidedAt\` datetime,
+    \`shiftsRemoved\` int,
+    \`shiftsAdded\` int,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+    INDEX \`scheduleRequests_user_idx\` (\`userId\`, \`createdAt\`),
+    INDEX \`scheduleRequests_status_idx\` (\`status\`),
+    CONSTRAINT \`scheduleRequests_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`),
+    CONSTRAINT \`scheduleRequests_approverUserId_fk\` FOREIGN KEY (\`approverUserId\`) REFERENCES \`users\`(\`id\`),
+    CONSTRAINT \`scheduleRequests_decidedByUserId_fk\` FOREIGN KEY (\`decidedByUserId\`) REFERENCES \`users\`(\`id\`))` },
 ];
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;

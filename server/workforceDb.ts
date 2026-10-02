@@ -31,14 +31,14 @@ async function requireDb() {
 
 // ---- Notifications ----
 
-async function notify(userIds: number[], title: string, content?: string) {
+export async function notify(userIds: number[], title: string, content?: string) {
   const db = await getDb();
   const ids = Array.from(new Set(userIds)).filter(Boolean);
   if (!db || !ids.length) return;
   await db.insert(notifications).values(ids.map((userId) => ({ userId, type: "workforce" as const, title, content })));
 }
 
-async function adminIds(): Promise<number[]> {
+export async function adminIds(): Promise<number[]> {
   const db = await requireDb();
   const rows = await db.select({ id: users.id }).from(users).where(eq(users.role, "admin"));
   return rows.map((r) => r.id);
