@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, ClipboardList, UserCog, AlertTriangle, Receipt,
   BarChart3, PhoneCall, CalendarClock, ShieldCheck, Building2, Stethoscope, Target,
   UserMinus, Ban, Pill, PhoneOutgoing, Activity, Sunrise, CalendarDays, BriefcaseBusiness,
-  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature, FileSignature, Wallet, HeartPulse, ClipboardCheck, FlaskConical, Link2, NotebookPen,
+  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature, FileSignature, Wallet, HeartPulse, ClipboardCheck, FlaskConical, Link2, NotebookPen, MessagesSquare,
 } from "lucide-react";
 
 export interface NavItem {
@@ -21,6 +21,8 @@ export type Role = "admin" | "office_manager" | "staff" | "provider" | "billing"
 
 const HOME: NavItem = { label: "Home", path: "/home", icon: Home };
 const MY_WORK: NavItem = { label: "My Work", path: "/my-work", icon: ListTodo };
+/** Internal messages between staff (the sidebar shows how many are unread). */
+export const MESSAGES: NavItem = { label: "Messages", path: "/messages", icon: MessagesSquare };
 const FLOW: NavItem = { label: "Patient Flow", path: "/patient-flow", icon: Waypoints };
 const OPPORTUNITIES: NavItem = { label: "Opportunities", path: "/opportunities", icon: Radar };
 /** In-office tests (ABI-Q, PFT, RMR) by the practice's criteria. */
@@ -54,7 +56,7 @@ const ME: NavGroup = {
 /** Role-based, grouped navigation for the Workspace sidebar. */
 export const NAV_GROUPS: Record<Role, NavGroup[]> = {
   admin: [
-    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, DOCUMENTS, EMAILS, FAXES, FLOW, OPPORTUNITIES, TESTING, PATIENTS, INSURANCE, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, MESSAGES, BOOKINGS, FORMS, DOCUMENTS, EMAILS, FAXES, FLOW, OPPORTUNITIES, TESTING, PATIENTS, INSURANCE, PLAYBOOKS] },
     {
       label: "Care Management",
       items: [
@@ -98,7 +100,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
   ],
   // Admin for one office (their home clinic): everything here is limited to that office. No CCM pages.
   office_manager: [
-    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, DOCUMENTS, FLOW, OPPORTUNITIES, TESTING, PATIENTS, INSURANCE, PAYMENTS, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, MESSAGES, BOOKINGS, FORMS, DOCUMENTS, FLOW, OPPORTUNITIES, TESTING, PATIENTS, INSURANCE, PAYMENTS, PLAYBOOKS] },
     {
       label: "My office",
       items: [
@@ -110,7 +112,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
     ME,
   ],
   staff: [
-    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, DOCUMENTS, EMAILS, FAXES, FLOW, OPPORTUNITIES, TESTING, PATIENTS, INSURANCE, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, MESSAGES, BOOKINGS, FORMS, DOCUMENTS, EMAILS, FAXES, FLOW, OPPORTUNITIES, TESTING, PATIENTS, INSURANCE, PLAYBOOKS] },
     {
       label: "Care Management",
       items: [
@@ -128,7 +130,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
     ME,
   ],
   provider: [
-    { label: "Workspace", items: [HOME, MY_WORK, FORMS, DOCUMENTS, FLOW, OPPORTUNITIES, TESTING, PATIENTS, INSURANCE, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, MESSAGES, FORMS, DOCUMENTS, FLOW, OPPORTUNITIES, TESTING, PATIENTS, INSURANCE, PLAYBOOKS] },
     {
       label: "Care Management",
       items: [
@@ -141,7 +143,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
     ME,
   ],
   billing: [
-    { label: "Workspace", items: [HOME, MY_WORK, INSURANCE, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, MESSAGES, INSURANCE, PLAYBOOKS] },
     {
       label: "Revenue",
       items: [
@@ -152,14 +154,14 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
     ME,
   ],
   front_desk: [
-    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, DOCUMENTS, EMAILS, FAXES, FLOW, OPPORTUNITIES, TESTING, PATIENTS, INSURANCE, PAYMENTS, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, MESSAGES, BOOKINGS, FORMS, DOCUMENTS, EMAILS, FAXES, FLOW, OPPORTUNITIES, TESTING, PATIENTS, INSURANCE, PAYMENTS, PLAYBOOKS] },
     { label: "Care Management", items: [CCM_ROSTER, { label: "Follow-ups", path: "/follow-ups", icon: CalendarClock }] },
     ME,
   ],
   // MAs get operational pages only; the server fences CCM/billing data away from them.
   // Since 2026-10-01: the front desk's pages (each limited to the clinic they work at).
   medical_assistant: [
-    { label: "Workspace", items: [HOME, MY_WORK, BOOKINGS, FORMS, DOCUMENTS, EMAILS, FAXES, FLOW, OPPORTUNITIES, TESTING, PATIENTS, INSURANCE, PAYMENTS, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, MESSAGES, BOOKINGS, FORMS, DOCUMENTS, EMAILS, FAXES, FLOW, OPPORTUNITIES, TESTING, PATIENTS, INSURANCE, PAYMENTS, PLAYBOOKS] },
     { label: "Care Management", items: [CCM_ROSTER, { label: "Follow-ups", path: "/follow-ups", icon: CalendarClock }] },
     ME,
   ],

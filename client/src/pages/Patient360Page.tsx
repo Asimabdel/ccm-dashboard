@@ -21,7 +21,8 @@ import { InsurancePanel } from "@/components/insurance/InsurancePanel";
 import { PatientFormsPanel } from "@/components/intake/PatientFormsPanel";
 import { PatientChartPanel } from "@/components/chart/PatientChartPanel";
 import { PatientPaymentsPanel } from "@/components/payments/PatientPaymentsPanel";
-import { BookOpen, ClipboardCheck, FolderOpen, Wallet } from "lucide-react";
+import { BookOpen, ClipboardCheck, FolderOpen, MessagesSquare, Wallet } from "lucide-react";
+import { PatientMessagesPanel } from "@/components/messages/PatientMessagesPanel";
 import { CarePlanPanel } from "@/components/careplan/CarePlanPanel";
 import { EducationPanel } from "@/components/education/EducationPanel";
 import { PatientFolder } from "@/components/folder/PatientFolder";
@@ -29,7 +30,7 @@ import { FOLDER_SECTION_LIST, isPatientKey, type FolderSection } from "@shared/f
 import { fmtDay } from "@shared/workforce";
 import { DIRECTORY_PROGRAM_LABELS, type DirectoryProgram } from "@shared/directory";
 
-type Tab = "overview" | "folder" | "appointments" | "tasks" | "care" | "careplan" | "education" | "testing" | "chart" | "insurance" | "forms" | "payments";
+type Tab = "overview" | "folder" | "appointments" | "tasks" | "messages" | "care" | "careplan" | "education" | "testing" | "chart" | "insurance" | "forms" | "payments";
 
 /**
  * Patient 360, for every patient: CCM-roster patients by their number (/patients/123), everyone
@@ -71,6 +72,7 @@ function Patient360({ subjectKey, id }: { subjectKey: string; id: number | null 
     ...(caps?.chartBasic || caps?.flowView ? [{ key: "folder" as Tab, label: "Folder", icon: FolderOpen }] : []),
     { key: "appointments", label: "Appointments", icon: CalendarDays, count: q.data?.appointments.length },
     { key: "tasks", label: "Tasks", icon: ClipboardList, count: q.data?.openTasks.length },
+    ...(caps?.messages ? [{ key: "messages" as Tab, label: "Messages", icon: MessagesSquare }] : []),
   ];
   if (ccmRecord) tabs.unshift({ key: "care", label: "Care Management", icon: HeartPulse });
   if (id && caps?.carePlans) tabs.push({ key: "careplan", label: "Care plan", icon: ClipboardCheck });
@@ -180,6 +182,7 @@ function Patient360({ subjectKey, id }: { subjectKey: string; id: number | null 
             </Panel>
           )}
 
+          {tab === "messages" && caps?.messages && <PatientMessagesPanel subjectKey={subjectKey} name={p.name} />}
           {tab === "care" && ccmRecord && id && <PatientDetailPage embedded patientId={id} />}
           {tab === "careplan" && id && caps?.carePlans && <CarePlanPanel patientId={id} />}
           {tab === "education" && caps?.education && <EducationPanel subjectKey={subjectKey} />}

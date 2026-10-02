@@ -3,9 +3,10 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import {
-  LogOut, Menu, Bell, ChevronDown, Check, Clock, Search, Sun, Moon, PanelLeftClose, PanelLeftOpen, X, Building2, KeyRound,
+  LogOut, Menu, Bell, ChevronDown, Check, Clock, Search, Sun, Moon, PanelLeftClose, PanelLeftOpen, X, Building2, KeyRound, MessagesSquare,
 } from "lucide-react";
-import { NAV_GROUPS, PROGRAM_APPROVALS, ROLES, ROLE_HOME, type Role } from "@/lib/nav";
+import { MESSAGES, NAV_GROUPS, PROGRAM_APPROVALS, ROLES, ROLE_HOME, type Role } from "@/lib/nav";
+import { useUnreadMessages } from "@/components/messages/useUnreadMessages";
 import { useTheme } from "@/contexts/ThemeContext";
 import { CommandPalette } from "@/components/CommandPalette";
 import { useIdleLogout } from "@/hooks/useIdleLogout";
@@ -19,7 +20,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { fmtDate } from "@/lib/ccm";
-import { WORKSPACE_ROLE_LABELS } from "@shared/workspace";
+import { WORKSPACE_ROLE_LABELS, can } from "@shared/workspace";
 
 // Keyboard hint for the ⌘K command palette (Mac shows ⌘, others Ctrl).
 const KBD_HINT =
@@ -87,6 +88,8 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
   // Program approvals: only the named approvers get the tab (with how many patients are waiting).
   const { programApprover } = useWorkspace();
   const approvals = trpc.workspace.programs.count.useQuery(undefined, { enabled: !!user && programApprover, refetchInterval: 5 * 60_000 });
+  // Internal messages: unread count (top bar + sidebar) and the browser pop-up.
+  const unreadMessages = useUnreadMessages(!!user && can(user.role, "messages"));
   const markRead = trpc.notifications.markRead.useMutation({
     onSuccess: () => utils.notifications.list.invalidate(),
   });
@@ -185,6 +188,9 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
                     {active && <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r bg-brand" />}
                     <Icon size={17} className={cn("shrink-0", active && "text-white")} />
                     {!rail && <span className="truncate">{item.label}</span>}
+                    {item.path === MESSAGES.path && unreadMessages > 0 && (
+                      <span className={cn("rounded-full bg-brand px-1.5 text-[11px] font-bold tabular-nums text-white", rail ? "absolute right-1 top-1" : "ml-auto")}>{unreadMessages > 99 ? "99+" : unreadMessages}</span>
+                    )}
                     {item.path === PROGRAM_APPROVALS.path && waitingApprovals > 0 && (
                       <span className={cn("rounded-full bg-brand px-1.5 text-[11px] font-bold tabular-nums text-white", rail ? "absolute right-1 top-1" : "ml-auto")}>{waitingApprovals > 999 ? "999+" : waitingApprovals}</span>
                     )}
@@ -299,6 +305,23 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
                 className="hidden sm:inline-flex p-2 rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors"
               >
                 {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+              </button>
+            )}
+
+            {/* Internal messages */}
+            {can(user.role, "messages") && (
+              <button
+                onClick={() => setLocation("/messages")}
+                className="relative p-2 rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+                aria-label={unreadMessages ? `Messages, ${unreadMessages} unread` : "Messages"}
+                title="Messages"
+              >
+                <MessagesSquare size={18} />
+                {unreadMessages > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[17px] h-[17px] px-1 bg-brand text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+                    {unreadMessages > 99 ? "99+" : unreadMessages}
+                  </span>
+                )}
               </button>
             )}
 

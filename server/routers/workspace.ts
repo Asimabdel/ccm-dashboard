@@ -37,6 +37,7 @@ import * as seenSince from "../seenSince";
 import * as rosterMatch from "../rosterMatch";
 import * as rosterMerge from "../rosterMerge";
 import * as carePlans from "../carePlansDb";
+import * as chat from "../chatDb";
 import { libraryEntrySchema, planSchema } from "../carePlanSchemas";
 import { LIBRARY_LANGS } from "../../shared/conditionLibrary/types";
 import { OFFICE_TESTS } from "../../shared/officeTests";
@@ -1405,6 +1406,58 @@ export const workspaceRouter = router({
     printed: protectedProcedure.input(z.object({ subjectKey: patientKey, keys: z.array(z.string().max(40)).min(1).max(30), language: z.enum(LIBRARY_LANGS) })).mutation(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "education");
       return run(() => carePlans.recordEducation(actor, { ...input, channel: "print" }));
+    }),
+  }),
+
+  /** Internal messages between staff. Each person only ever sees conversations they're in. */
+  chat: router({
+    conversations: protectedProcedure.query(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "messages");
+      return chat.myConversations(actor);
+    }),
+    unread: protectedProcedure.query(async ({ ctx }) => {
+      if (!can(ctx.user.role, "messages")) return { total: 0, newest: null };
+      return chat.unreadSummary(ctx.user);
+    }),
+    people: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "messages");
+      return (await chat.staffDirectory()).map((u) => ({ id: u.id, name: u.name, role: u.role, clinicId: u.clinicId }));
+    }),
+    get: protectedProcedure.input(z.object({ id: z.number().int().positive(), afterId: z.number().int().positive().optional() })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.conversationDetail(actor, input.id, input.afterId));
+    }),
+    send: protectedProcedure.input(z.object({ conversationId: z.number().int().positive(), body: z.string().max(4000), subjectKey: patientKey.nullish() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.sendMessage(actor, input));
+    }),
+    direct: protectedProcedure.input(z.object({ userId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.openDirect(actor, input.userId));
+    }),
+    createGroup: protectedProcedure.input(z.object({ title: z.string().trim().max(160).nullish(), memberIds: z.array(z.number().int().positive()).min(1).max(100), subjectKey: patientKey.nullish() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.createGroup(actor, input));
+    }),
+    addPeople: protectedProcedure.input(z.object({ conversationId: z.number().int().positive(), userIds: z.array(z.number().int().positive()).min(1).max(100) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.addPeople(actor, input.conversationId, input.userIds));
+    }),
+    leave: protectedProcedure.input(z.object({ conversationId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.leave(actor, input.conversationId));
+    }),
+    remove: protectedProcedure.input(z.object({ messageId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.removeMessage(actor, input.messageId));
+    }),
+    linkTask: protectedProcedure.input(z.object({ messageId: z.number().int().positive(), taskId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.linkTask(actor, input.messageId, input.taskId));
+    }),
+    forPatient: protectedProcedure.input(z.object({ subjectKey: patientKey })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return chat.patientConversations(actor, input.subjectKey);
     }),
   }),
 

@@ -16,9 +16,11 @@ export interface NewTaskDefaults {
   clinicId?: number | null;
   title?: string;
   category?: string;
+  /** Prefilled details (e.g. the message a task is made from). */
+  description?: string;
 }
 
-export function NewTaskDialog({ open, onOpenChange, defaults }: { open: boolean; onOpenChange: (o: boolean) => void; defaults?: NewTaskDefaults }) {
+export function NewTaskDialog({ open, onOpenChange, defaults, onCreated }: { open: boolean; onOpenChange: (o: boolean) => void; defaults?: NewTaskDefaults; onCreated?: (taskId: number) => void }) {
   const { caps, clinics, clinicId: selectedClinic, user } = useWorkspace();
   const utils = trpc.useUtils();
   const [title, setTitle] = useState("");
@@ -36,7 +38,7 @@ export function NewTaskDialog({ open, onOpenChange, defaults }: { open: boolean;
   useEffect(() => {
     if (!open) return;
     setTitle(defaults?.title ?? "");
-    setDescription("");
+    setDescription(defaults?.description ?? "");
     setCategory(defaults?.category ?? "other");
     setPriority("normal");
     setDueDate(localDateStr());
@@ -60,8 +62,9 @@ export function NewTaskDialog({ open, onOpenChange, defaults }: { open: boolean;
   const assignees = trpc.workspace.tasks.assignees.useQuery(undefined, { enabled: open && !!caps?.assignTasks, staleTime: 5 * 60_000 });
 
   const create = trpc.workspace.tasks.create.useMutation({
-    onSuccess: () => {
+    onSuccess: (r) => {
       toast.success("Task created.");
+      onCreated?.(r.id);
       void utils.workspace.tasks.invalidate();
       void utils.workspace.home.invalidate();
       void utils.workspace.patients.summary.invalidate();

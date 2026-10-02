@@ -1838,3 +1838,59 @@ export const scheduleRequests = mysqlTable("scheduleRequests", {
   userIdx: index("scheduleRequests_user_idx").on(t.userId, t.createdAt),
   statusIdx: index("scheduleRequests_status_idx").on(t.status),
 }));
+
+/**
+ * Internal messaging (2026-10-02). A conversation is a direct message (dm), a group, a conversation
+ * about a patient (patient), or a built-in channel: everyone, a clinic's staff (clinic), or a
+ * provider's team (team). Built-in channels' members are worked out from Workforce / provider teams;
+ * chatMembers then only keeps each person's read position there.
+ */
+export const chatConversations = mysqlTable("chatConversations", {
+  id: int("id").autoincrement().primaryKey(),
+  /** dm | group | patient | everyone | clinic | team */
+  kind: varchar("kind", { length: 10 }).notNull(),
+  title: varchar("title", { length: 160 }),
+  /** One conversation per key: "dm:<smaller user id>:<larger user id>", "everyone", "clinic:<id>", "team:<providerId>".
+   *  Null for groups and conversations about a patient. */
+  uniqueKey: varchar("uniqueKey", { length: 40 }).unique(),
+  clinicId: int("clinicId").references(() => clinics.id),
+  providerId: int("providerId").references(() => providers.id),
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  patientId: int("patientId").references(() => patients.id),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  lastMessageAt: datetime("lastMessageAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  kindIdx: index("chatConversations_kind_idx").on(t.kind),
+  subjectIdx: index("chatConversations_subject_idx").on(t.subjectKey),
+}));
+
+export const chatMembers = mysqlTable("chatMembers", {
+  id: int("id").autoincrement().primaryKey(),
+  conversationId: int("conversationId").references(() => chatConversations.id).notNull(),
+  userId: int("userId").references(() => users.id).notNull(),
+  lastReadAt: datetime("lastReadAt"),
+  /** Left a group / patient conversation (kept for history). */
+  leftAt: datetime("leftAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  pairIdx: uniqueIndex("chatMembers_pair_unique").on(t.conversationId, t.userId),
+  userIdx: index("chatMembers_user_idx").on(t.userId),
+}));
+
+export const chatMessages = mysqlTable("chatMessages", {
+  id: int("id").autoincrement().primaryKey(),
+  conversationId: int("conversationId").references(() => chatConversations.id).notNull(),
+  userId: int("userId").references(() => users.id).notNull(),
+  body: text("body").notNull(),
+  /** A patient the message is about (shown as a link to their Patient 360). */
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  patientId: int("patientId").references(() => patients.id),
+  patientName: varchar("patientName", { length: 255 }),
+  /** The task made from this message. */
+  taskId: int("taskId"),
+  deletedAt: datetime("deletedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  convIdx: index("chatMessages_conv_idx").on(t.conversationId, t.id),
+}));

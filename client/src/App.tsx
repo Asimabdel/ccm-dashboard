@@ -38,6 +38,7 @@ import MySchedulePage from "./pages/MySchedulePage";
 import TeamSchedulePage from "./pages/TeamSchedulePage";
 import IntegrationsPage from "./pages/IntegrationsPage";
 import PatientEmailsPage from "./pages/PatientEmailsPage";
+import MessagesPage from "./pages/MessagesPage";
 import InsuranceCheckerPage from "./pages/InsuranceCheckerPage";
 import TeamProgressPage from "./pages/TeamProgressPage";
 import FaxInboxPage from "./pages/FaxInboxPage";
@@ -110,6 +111,7 @@ function Router() {
       <Route path="/team-schedule" component={TeamSchedulePage} />
       <Route path="/integrations" component={IntegrationsPage} />
       <Route path="/patient-emails" component={PatientEmailsPage} />
+      <Route path="/messages" component={MessagesPage} />
       <Route path="/insurance" component={InsuranceCheckerPage} />
       <Route path="/team-progress" component={TeamProgressPage} />
       <Route path="/faxes" component={FaxInboxPage} />
