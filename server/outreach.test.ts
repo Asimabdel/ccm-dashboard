@@ -75,3 +75,35 @@ describe("what to say", () => {
     expect(callScript("ccm_eligible", "en", fill)).toBeNull();
   });
 });
+
+describe("list order", async () => {
+  const { filterByStatus } = await import("./outreachDb");
+  const row = (name: string, score: number, o: { label: string; tries: number; lastAt?: string }, lastVisit: string | null = null, clinicName: string | null = "Katy") => ({
+    name, score, clinicName, lastVisit: lastVisit ? new Date(lastVisit) : null,
+    outreach: { status: "to_call" as const, tries: o.tries, next: null, label: o.label, calls: o.tries, last: o.lastAt ? { at: new Date(o.lastAt), outcome: "voicemail", by: null, manual: false } : null, lockedBy: null },
+  });
+  // Made-up patients.
+  const rows = [
+    row("Retry Recent", 90, { label: "Try #2", tries: 1, lastAt: "2026-10-01T15:00:00Z" }, "2026-05-01"),
+    row("Retry Older", 10, { label: "Try #2", tries: 1, lastAt: "2026-09-25T15:00:00Z" }),
+    row("Third Try", 99, { label: "Try #3", tries: 2, lastAt: "2026-09-20T15:00:00Z" }, "2026-01-01"),
+    row("New Low", 20, { label: "Not called yet", tries: 0 }, "2026-03-01", "Cypress"),
+    row("New High", 80, { label: "Not called yet", tries: 0 }, null),
+    row("Asked Today", 5, { label: "Call back today", tries: 0 }),
+  ];
+
+  it("to call: call-backs due, then never called (priority), then retries — just-called patients last", () => {
+    expect(filterByStatus(rows, "to_call").rows.map((r) => r.name)).toEqual(["Asked Today", "New High", "New Low", "Retry Older", "Retry Recent", "Third Try"]);
+  });
+
+  it("column sorts, with missing values last", () => {
+    const by = (sortBy: "name" | "lastVisit" | "clinic" | "lastCall", dir: "asc" | "desc") => filterByStatus(rows, "to_call", { by: sortBy, dir }, (r) => r.lastVisit).rows.map((r) => r.name);
+    expect(by("name", "asc")[0]).toBe("Asked Today");
+    expect(by("name", "desc")[0]).toBe("Third Try");
+    expect(by("lastVisit", "asc").slice(0, 3)).toEqual(["Third Try", "New Low", "Retry Recent"]);
+    expect(by("lastVisit", "desc")[0]).toBe("Retry Recent");
+    expect(by("clinic", "asc")[0]).toBe("New Low");
+    expect(by("lastCall", "desc")[0]).toBe("Retry Recent");
+    expect(by("lastCall", "asc").slice(-3).sort()).toEqual(["Asked Today", "New High", "New Low"]);
+  });
+});

@@ -30,7 +30,7 @@ import {
   timeOffRequests,
 } from "../drizzle/schema";
 import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
-import type { OutreachStatus } from "../shared/outreach";
+import type { ListSort, OutreachStatus, SortDir } from "../shared/outreach";
 import { getDb } from "./db";
 import { currentMonth } from "./seed";
 import { localDateStr, addDays } from "../shared/workforce";
@@ -1331,7 +1331,7 @@ export async function opportunitySummary(actor: WorkspaceActor, clinicId?: numbe
 
 const OPPORTUNITY_LIST_LIMIT = 1000;
 
-export async function opportunityList(actor: WorkspaceActor, input: { category: OpportunityCategory; clinicId?: number | null; providerId?: number | null; status: OutreachStatus }) {
+export async function opportunityList(actor: WorkspaceActor, input: { category: OpportunityCategory; clinicId?: number | null; providerId?: number | null; status: OutreachStatus; sort?: ListSort; dir?: SortDir }) {
   const data = await loadOpportunityData(actor, input.clinicId);
   const { loadOutreach, filterByStatus } = await import("./outreachDb");
   const outreach = await loadOutreach();
@@ -1358,7 +1358,7 @@ export async function opportunityList(actor: WorkspaceActor, input: { category: 
     });
   }
   // Each status tab, sorted for calling (call-backs due, then retries due, then the highest priority).
-  const { counts, rows } = filterByStatus(out, input.status);
+  const { counts, rows } = filterByStatus(out, input.status, { by: input.sort ?? "suggested", dir: input.dir ?? "asc" }, (r) => r.lastOfficeVisit);
   return { total: rows.length, counts, rows: rows.slice(0, OPPORTUNITY_LIST_LIMIT) };
 }
 
@@ -1467,7 +1467,7 @@ async function loadScheduleFill(actor: WorkspaceActor, input: { providerId: numb
   return { prov, candidates, stopped, clinicName };
 }
 
-export async function scheduleFill(actor: WorkspaceActor, input: { providerId: number; includeOtherClinics: boolean; status: OutreachStatus }) {
+export async function scheduleFill(actor: WorkspaceActor, input: { providerId: number; includeOtherClinics: boolean; status: OutreachStatus; sort?: ListSort; dir?: SortDir }) {
   const d = await db();
   const { prov, candidates, stopped, clinicName } = await loadScheduleFill(actor, input);
   const acted = await d
@@ -1484,7 +1484,7 @@ export async function scheduleFill(actor: WorkspaceActor, input: { providerId: n
   const all = candidates.map((c) => ({ ...c, outreach: outreach.stateFor(c.key, actedBy.get(c.key) ?? null, actor.id) }));
   // Ties: most recently seen first, then the most visits.
   all.sort((a, b) => b.score - a.score || (b.lastSeen?.getTime() ?? 0) - (a.lastSeen?.getTime() ?? 0) || b.seenCount - a.seenCount);
-  const { counts: statusCounts, rows } = filterByStatus(all, input.status);
+  const { counts: statusCounts, rows } = filterByStatus(all, input.status, { by: input.sort ?? "suggested", dir: input.dir ?? "asc" }, (r) => r.lastSeen);
   const counts: Record<FillGroup, number> = { own_due: 0, orphaned: 0, never_seen: 0 };
   for (const r of rows) counts[r.group]++;
   const [range] = await d.select({ last: sql<string | null>`MAX(${appointments.date})` }).from(appointments);

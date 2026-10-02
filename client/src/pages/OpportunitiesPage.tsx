@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { BarChart3, CalendarPlus, CheckSquare, EyeOff, Info, ListPlus, Loader2, PhoneCall, Radar, Square, CalendarClock, Clock, UserSearch } from "lucide-react";
-import { LogCallDialog, OutreachCell, StatusTabs } from "@/components/outreach/Outreach";
+import { LogCallDialog, OutreachCell, SUGGESTED_SORT, SortHeader, SortNote, StatusTabs, type ListSortState } from "@/components/outreach/Outreach";
 import { CallingMode } from "@/components/outreach/CallingMode";
 import { CallResults } from "@/components/outreach/CallResults";
 import { OUTREACH_TABS, type OutreachStatus } from "@shared/outreach";
@@ -104,12 +104,13 @@ function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: nu
   const { caps } = useWorkspace();
   const summary = trpc.workspace.opportunities.summary.useQuery({ clinicId });
   const [status, setStatus] = useState<OutreachStatus>("to_call");
-  const list = trpc.workspace.opportunities.list.useQuery({ category: category ?? "missed_appointment", clinicId, status }, { enabled: !!category });
+  const [sort, setSort] = useState<ListSortState>(SUGGESTED_SORT);
+  const list = trpc.workspace.opportunities.list.useQuery({ category: category ?? "missed_appointment", clinicId, status, sort: sort.by, dir: sort.dir }, { enabled: !!category, placeholderData: (prev) => prev });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [taskOpen, setTaskOpen] = useState(false);
   const [logFor, setLogFor] = useState<{ key: string; name: string } | null>(null);
   const [calling, setCalling] = useState(false);
-  useEffect(() => { setStatus("to_call"); setSelected(new Set()); }, [category]);
+  useEffect(() => { setStatus("to_call"); setSort(SUGGESTED_SORT); setSelected(new Set()); }, [category]);
   const utils = trpc.useUtils();
 
   const act = trpc.workspace.opportunities.act.useMutation({
@@ -191,7 +192,10 @@ function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: nu
           bodyClassName="p-0"
         >
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-2.5 dark:border-slate-700">
-            <StatusTabs value={status} counts={list.data?.counts} onChange={(s) => { setStatus(s); setSelected(new Set()); }} />
+            <div className="space-y-1.5">
+              <StatusTabs value={status} counts={list.data?.counts} onChange={(s) => { setStatus(s); setSelected(new Set()); }} />
+              <SortNote sort={sort} status={status} onReset={() => setSort(SUGGESTED_SORT)} />
+            </div>
             {status === "to_call" && rows.length > 0 && (
               <Btn size="sm" onClick={() => setCalling(true)}><PhoneCall size={14} /> Start calling</Btn>
             )}
@@ -220,12 +224,12 @@ function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: nu
                         </button>
                       </th>
                     )}
-                    <th className="text-left font-medium px-3 py-2">Patient</th>
-                    <th className="text-left font-medium px-3 py-2">Why</th>
-                    <th className="text-left font-medium px-3 py-2 hidden md:table-cell">Clinic · Provider</th>
-                    <th className="text-left font-medium px-3 py-2 hidden lg:table-cell">Last visit</th>
+                    <SortHeader label="Patient" by="name" sort={sort} onSort={setSort} />
+                    <SortHeader label="Why" by="priority" sort={sort} onSort={setSort} />
+                    <SortHeader label="Clinic · Provider" by="clinic" sort={sort} onSort={setSort} className="hidden md:table-cell" />
+                    <SortHeader label="Last visit" by="lastVisit" sort={sort} onSort={setSort} className="hidden lg:table-cell" />
                     <th className="text-left font-medium px-3 py-2 hidden lg:table-cell">Phone</th>
-                    <th className="text-left font-medium px-3 py-2">Calls</th>
+                    <SortHeader label="Calls" by="lastCall" sort={sort} onSort={setSort} />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-700">

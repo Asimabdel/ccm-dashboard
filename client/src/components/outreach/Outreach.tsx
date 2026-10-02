@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, PhoneCall, PhoneForwarded } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Loader2, PhoneCall, PhoneForwarded, X } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Btn, fmtShortDate, inputCls } from "@/components/workspace/ui";
 import { trpc } from "@/lib/trpc";
 import { CALL_OUTCOMES, CALL_OUTCOME_LIST, type CallOutcome } from "@shared/phone";
-import { OUTREACH_TABS, addBusinessDays, outcomeLabel, type OutreachStatus } from "@shared/outreach";
+import { OUTREACH_TABS, addBusinessDays, outcomeLabel, type ListSort, type OutreachStatus, type SortDir } from "@shared/outreach";
 import { localDateStr } from "@shared/workforce";
 import { cn } from "@/lib/utils";
 
@@ -33,6 +33,47 @@ const fmtWhen = (d: Date | string) => {
   const today = localDateStr();
   return localDateStr(dt) === today ? dt.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" }) : fmtShortDate(dt).replace(/, \d{4}$/, "");
 };
+
+export interface ListSortState { by: ListSort; dir: SortDir }
+export const SUGGESTED_SORT: ListSortState = { by: "suggested", dir: "asc" };
+
+const SORT_WORDS: Record<ListSort, [string, string]> = {
+  suggested: ["", ""],
+  name: ["A to Z", "Z to A"],
+  priority: ["highest priority first", "lowest priority first"],
+  clinic: ["clinic A to Z", "clinic Z to A"],
+  lastVisit: ["longest since last visit first", "most recent visit first"],
+  lastCall: ["longest since last call first", "most recently called first"],
+};
+
+/** A column header you can click to sort by it (again to reverse). */
+export function SortHeader({ label, by, sort, onSort, className }: { label: string; by: ListSort; sort: ListSortState; onSort: (s: ListSortState) => void; className?: string }) {
+  const active = sort.by === by;
+  return (
+    <th className={cn("text-left font-medium px-3 py-2", className)} aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
+      <button onClick={() => onSort(active ? { by, dir: sort.dir === "asc" ? "desc" : "asc" } : { by, dir: "asc" })}
+        className={cn("inline-flex items-center gap-1 hover:text-slate-800 dark:hover:text-slate-200", active && "font-semibold text-slate-800 dark:text-slate-100")}
+        title={`Sort: ${SORT_WORDS[by][active && sort.dir === "asc" ? 1 : 0]}`}>
+        {label}
+        {active ? (sort.dir === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />) : <ArrowUpDown size={12} className="opacity-40" />}
+      </button>
+    </th>
+  );
+}
+
+/** "Sorted by name, A to Z · Back to calling order", or how the suggested order works. */
+export function SortNote({ sort, status, onReset }: { sort: ListSortState; status: OutreachStatus; onReset: () => void }) {
+  if (sort.by === "suggested") {
+    return status === "to_call"
+      ? <p className="text-[11px] text-slate-500">Calling order: call-backs due today, then people nobody has called yet, then retries (the most recently called go last).</p>
+      : null;
+  }
+  return (
+    <button onClick={onReset} className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200">
+      Sorted: {SORT_WORDS[sort.by][sort.dir === "asc" ? 0 : 1]} <X size={11} /> <span className="font-normal">back to calling order</span>
+    </button>
+  );
+}
 
 /** To call · Waiting · Booked · Unreachable · Closed, with counts. */
 export function StatusTabs({ value, counts, onChange }: { value: OutreachStatus; counts?: Record<string, number>; onChange: (s: OutreachStatus) => void }) {

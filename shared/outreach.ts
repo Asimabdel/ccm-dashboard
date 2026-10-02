@@ -23,6 +23,11 @@ export const OUTREACH_TABS: { key: OutreachStatus; label: string; hint: string }
 ];
 export const OUTREACH_STATUS_LIST = OUTREACH_TABS.map((t) => t.key);
 
+/** How a call list can be sorted (column headers). "suggested" = the calling order for that tab. */
+export const LIST_SORTS = ["suggested", "name", "priority", "clinic", "lastVisit", "lastCall"] as const;
+export type ListSort = (typeof LIST_SORTS)[number];
+export type SortDir = "asc" | "desc";
+
 /** Outcomes where nobody was reached (they count as a try). Unrecorded ones (null) count too. */
 const NO_CONTACT = new Set<string>(["no_answer", "voicemail", "other"]);
 

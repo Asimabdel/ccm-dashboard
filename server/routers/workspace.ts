@@ -39,7 +39,9 @@ import * as rosterMerge from "../rosterMerge";
 import * as carePlans from "../carePlansDb";
 import * as chat from "../chatDb";
 import * as outreach from "../outreachDb";
-import { OUTREACH_STATUS_LIST } from "../../shared/outreach";
+import { LIST_SORTS, OUTREACH_STATUS_LIST } from "../../shared/outreach";
+
+const listSort = { sort: z.enum(LIST_SORTS).default("suggested"), dir: z.enum(["asc", "desc"]).default("asc") };
 import { libraryEntrySchema, planSchema } from "../carePlanSchemas";
 import { LIBRARY_LANGS } from "../../shared/conditionLibrary/types";
 import { OFFICE_TESTS } from "../../shared/officeTests";
@@ -1233,7 +1235,7 @@ export const workspaceRouter = router({
       return run(() => ws.opportunitySummary(actor, input.clinicId));
     }),
     list: protectedProcedure
-      .input(z.object({ category: z.enum(OPPORTUNITY_CATEGORY_LIST as [string, ...string[]]), clinicId, providerId: z.number().int().positive().nullish(), status: z.enum(OUTREACH_STATUS_LIST as [string, ...string[]]).default("to_call") }))
+      .input(z.object({ category: z.enum(OPPORTUNITY_CATEGORY_LIST as [string, ...string[]]), clinicId, providerId: z.number().int().positive().nullish(), status: z.enum(OUTREACH_STATUS_LIST as [string, ...string[]]).default("to_call"), ...listSort }))
       .query(async ({ ctx, input }) => {
         const actor = await oppActor(ctx, "opportunitiesView");
         return run(() => ws.opportunityList(actor, input as Parameters<typeof ws.opportunityList>[1]));
@@ -1244,7 +1246,7 @@ export const workspaceRouter = router({
       return run(() => ws.fillProviders(actor));
     }),
     fill: protectedProcedure
-      .input(z.object({ providerId: z.number().int().positive(), includeOtherClinics: z.boolean().default(false), status: z.enum(OUTREACH_STATUS_LIST as [string, ...string[]]).default("to_call") }))
+      .input(z.object({ providerId: z.number().int().positive(), includeOtherClinics: z.boolean().default(false), status: z.enum(OUTREACH_STATUS_LIST as [string, ...string[]]).default("to_call"), ...listSort }))
       .query(async ({ ctx, input }) => {
         const actor = await oppActor(ctx, "opportunitiesView");
         return run(() => ws.scheduleFill(actor, input as Parameters<typeof ws.scheduleFill>[1]));

@@ -79,6 +79,8 @@ export function RingCentralPhone() {
       const context = call.direction === "outbound" ? takeDialContext(call.otherNumber) : null;
       try {
         const res = await logRef.current({ sessionId: call.sessionId, direction: call.direction, phoneNumber: call.otherNumber, startedAt: call.startedAt, durationSec: call.durationSec, result: call.result, context });
+        // Any call moves the patient on the call lists (a try), even before a result is picked.
+        void utils.workspace.opportunities.invalidate();
         // In calling mode the calling screen asks how it went, so skip the box here.
         if (call.direction === "outbound" && !res.duplicate && !isCallingMode()) {
           setEnded({ callId: res.id, name: res.contactName ?? formatPhone(call.otherNumber), durationSec: call.durationSec, suggestion: suggestOutcome(call.result, call.durationSec) });

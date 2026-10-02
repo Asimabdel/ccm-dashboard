@@ -6,7 +6,7 @@ import { getDb } from "./db";
 import { appointments, clinics, opportunityActions, outreachLocks, phoneCalls, staffProfiles, users } from "../drizzle/schema";
 import { WorkspaceError, audit, subjectKeyFor, type WorkspaceActor } from "./workspaceDb";
 import { CLOSING_OUTCOMES, normalizePhone, type CallOutcome } from "../shared/phone";
-import { LOCK_MINUTES, OUTREACH_STATUS_LIST, OUTREACH_WINDOW_DAYS, outreachState, type OutreachCall, type OutreachState, type OutreachStatus } from "../shared/outreach";
+import { LOCK_MINUTES, OUTREACH_STATUS_LIST, OUTREACH_WINDOW_DAYS, outreachState, type ListSort, type OutreachCall, type OutreachState, type OutreachStatus, type SortDir } from "../shared/outreach";
 import { OPPORTUNITY_CATEGORY_LIST, OPPORTUNITY_INFO, type OpportunityCategory } from "../shared/workspace";
 import { isValidDateStr, localDateStr } from "../shared/workforce";
 
@@ -61,15 +61,42 @@ export async function loadOutreach() {
 
 export type RowOutreach = ReturnType<Awaited<ReturnType<typeof loadOutreach>>["stateFor"]>;
 
-/** Count per status, keep one status, and sort it the useful way. */
-export function filterByStatus<T extends { outreach: RowOutreach; score: number }>(rows: T[], status: OutreachStatus) {
+type Sortable = { outreach: RowOutreach; score: number; name: string; clinicName: string | null };
+const lastCallAt = (r: Sortable) => r.outreach.last ? new Date(r.outreach.last.at).getTime() : 0;
+
+/**
+ * Count per status, keep one status, and sort it. The suggested order for "To call": call-backs that
+ * are due (the patient asked for that day), then people nobody has called yet (highest priority first),
+ * then retries — fewest tries first, longest since the last call first — so patients who were just
+ * called move down and everyone else gets a turn. Column sorts (name, clinic, last visit…) override it.
+ */
+export function filterByStatus<T extends Sortable>(rows: T[], status: OutreachStatus, sort: { by: ListSort; dir: SortDir } = { by: "suggested", dir: "asc" }, lastVisitOf: (r: T) => Date | null = () => null) {
   const counts = Object.fromEntries(OUTREACH_STATUS_LIST.map((s) => [s, 0])) as Record<OutreachStatus, number>;
   for (const r of rows) counts[r.outreach.status]++;
   const kept = rows.filter((r) => r.outreach.status === status);
-  const rank = (r: T) => (r.outreach.label.startsWith("Call back") ? 0 : r.outreach.tries > 0 ? 1 : 2);
-  if (status === "to_call") kept.sort((a, b) => rank(a) - rank(b) || b.score - a.score);
-  else if (status === "waiting") kept.sort((a, b) => (a.outreach.next ?? "").localeCompare(b.outreach.next ?? "") || b.score - a.score);
-  else kept.sort((a, b) => (b.outreach.last?.at.getTime() ?? 0) - (a.outreach.last?.at.getTime() ?? 0));
+  if (sort.by === "suggested") {
+    const rank = (r: T) => (r.outreach.label.startsWith("Call back") ? 0 : r.outreach.tries === 0 ? 1 : 2);
+    if (status === "to_call") kept.sort((a, b) => rank(a) - rank(b) || a.outreach.tries - b.outreach.tries || (rank(a) === 2 ? lastCallAt(a) - lastCallAt(b) : 0) || b.score - a.score);
+    else if (status === "waiting") kept.sort((a, b) => (a.outreach.next ?? "").localeCompare(b.outreach.next ?? "") || b.score - a.score);
+    else kept.sort((a, b) => lastCallAt(b) - lastCallAt(a));
+    return { counts, rows: kept };
+  }
+  // A column sort. Missing values (no visit, never called) always go last.
+  const sign = sort.dir === "desc" ? -1 : 1;
+  const nameOf = (r: T) => r.name.toLowerCase();
+  const cmp: (a: T, b: T) => number =
+    sort.by === "name" ? (a, b) => sign * nameOf(a).localeCompare(nameOf(b))
+    : sort.by === "priority" ? (a, b) => sign * (b.score - a.score)
+    : sort.by === "clinic" ? (a, b) => sign * (a.clinicName ?? "~").localeCompare(b.clinicName ?? "~")
+    : sort.by === "lastVisit" ? (a, b) => {
+        const x = lastVisitOf(a)?.getTime() ?? null, y = lastVisitOf(b)?.getTime() ?? null;
+        return x === null ? (y === null ? 0 : 1) : y === null ? -1 : sign * (x - y);
+      }
+    : (a, b) => {
+        const x = lastCallAt(a) || null, y = lastCallAt(b) || null;
+        return x === null ? (y === null ? 0 : 1) : y === null ? -1 : sign * (x - y);
+      };
+  kept.sort((a, b) => cmp(a, b) || b.score - a.score || nameOf(a).localeCompare(nameOf(b)));
   return { counts, rows: kept };
 }
 

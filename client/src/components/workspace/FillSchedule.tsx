@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { CalendarPlus, CheckSquare, Download, EyeOff, Info, ListPlus, Loader2, PhoneCall, Square, UserSearch } from "lucide-react";
-import { LogCallDialog, OutreachCell, StatusTabs } from "@/components/outreach/Outreach";
+import { LogCallDialog, OutreachCell, SUGGESTED_SORT, SortHeader, SortNote, StatusTabs, type ListSortState } from "@/components/outreach/Outreach";
 import { CallingMode } from "@/components/outreach/CallingMode";
 import { OUTREACH_TABS, type OutreachStatus } from "@shared/outreach";
 import { useWorkspace } from "@/components/workspace/useWorkspace";
@@ -33,17 +33,18 @@ export function FillSchedule({ providerParam, onProvider }: { providerParam: num
   const providers = trpc.workspace.opportunities.fillProviders.useQuery();
   const [includeOtherClinics, setIncludeOtherClinics] = useState(false);
   const [status, setStatus] = useState<OutreachStatus>("to_call");
+  const [sort, setSort] = useState<ListSortState>(SUGGESTED_SORT);
   const [logFor, setLogFor] = useState<{ key: string; name: string } | null>(null);
   const [calling, setCalling] = useState(false);
   const [group, setGroup] = useState<FillGroup | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [taskOpen, setTaskOpen] = useState(false);
   const providerId = providerParam;
-  const fill = trpc.workspace.opportunities.fill.useQuery({ providerId: providerId ?? 0, includeOtherClinics, status }, { enabled: !!providerId });
+  const fill = trpc.workspace.opportunities.fill.useQuery({ providerId: providerId ?? 0, includeOtherClinics, status, sort: sort.by, dir: sort.dir }, { enabled: !!providerId, placeholderData: (prev) => prev });
   const utils = trpc.useUtils();
   const canAct = !!caps?.opportunitiesAct;
 
-  useEffect(() => { setSelected(new Set()); setGroup(null); setStatus("to_call"); }, [providerId, includeOtherClinics]);
+  useEffect(() => { setSelected(new Set()); setGroup(null); setStatus("to_call"); setSort(SUGGESTED_SORT); }, [providerId, includeOtherClinics]);
 
   const act = trpc.workspace.opportunities.fillAct.useMutation({
     onSuccess: (r, v) => {
@@ -148,7 +149,10 @@ export function FillSchedule({ providerParam, onProvider }: { providerParam: num
             bodyClassName="p-0"
           >
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-2.5 dark:border-slate-700">
-              <StatusTabs value={status} counts={data.statusCounts} onChange={(s) => { setStatus(s); setSelected(new Set()); }} />
+              <div className="space-y-1.5">
+                <StatusTabs value={status} counts={data.statusCounts} onChange={(s) => { setStatus(s); setSelected(new Set()); }} />
+                <SortNote sort={sort} status={status} onReset={() => setSort(SUGGESTED_SORT)} />
+              </div>
               {status === "to_call" && rows.length > 0 && <Btn size="sm" onClick={() => setCalling(true)}><PhoneCall size={14} /> Start calling</Btn>}
             </div>
             {canAct && selected.size > 0 && (
@@ -173,13 +177,13 @@ export function FillSchedule({ providerParam, onProvider }: { providerParam: num
                           </button>
                         </th>
                       )}
-                      <th className="text-left font-medium px-3 py-2">Patient</th>
-                      <th className="text-left font-medium px-3 py-2">Likelihood</th>
+                      <SortHeader label="Patient" by="name" sort={sort} onSort={setSort} />
+                      <SortHeader label="Likelihood" by="priority" sort={sort} onSort={setSort} />
                       <th className="text-left font-medium px-3 py-2">Why</th>
-                      <th className="text-left font-medium px-3 py-2 hidden md:table-cell">Last seen</th>
+                      <SortHeader label="Last seen" by="lastVisit" sort={sort} onSort={setSort} className="hidden md:table-cell" />
                       <th className="text-left font-medium px-3 py-2 hidden lg:table-cell">History</th>
                       <th className="text-left font-medium px-3 py-2 hidden lg:table-cell">Phone</th>
-                      <th className="text-left font-medium px-3 py-2">Calls</th>
+                      <SortHeader label="Calls" by="lastCall" sort={sort} onSort={setSort} />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
