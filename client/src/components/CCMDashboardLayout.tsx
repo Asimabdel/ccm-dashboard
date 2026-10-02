@@ -264,7 +264,7 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
             {clinicPicker && <ClinicPicker />}
 
             {/* Role switcher (admin-only preview) */}
-            {user.role === "admin" && (
+            {((user as { realRole?: string }).realRole ?? user.role) === "admin" && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button className="hidden md:flex items-center gap-2 h-9 px-3 rounded-lg text-sm font-medium border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700">

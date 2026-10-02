@@ -1,5 +1,6 @@
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
+import { VIEW_AS_COOKIE } from "./_core/context";
 import { sdk } from "./_core/sdk";
 import { hashPassword, verifyPassword, validatePasswordStrength } from "./password";
 import { systemRouter } from "./_core/systemRouter";
@@ -226,6 +227,7 @@ export const appRouter = router({
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, cookieOptions);
+      ctx.res.clearCookie(VIEW_AS_COOKIE, cookieOptions);
       return { success: true } as const;
     }),
     // Admin-only role switcher so the owner/admin can preview every role-based
@@ -234,9 +236,13 @@ export const appRouter = router({
     setRole: protectedProcedure
       .input(z.object({ role: z.enum(["admin", "staff", "provider", "billing", "front_desk"]) }))
       .mutation(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin"]);
-        await setUserRole(ctx.user.id, input.role);
-        void logAudit(ctx, "manage_access", { description: `Admin previewed role: ${input.role}` });
+        // A preview only: kept in a cookie for this browser; the admin's stored role never changes
+        // (changing it used to demote the admin, and the owner's login snapped back to admin).
+        if ((ctx.user.realRole ?? ctx.user.role) !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can preview other roles." });
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        if (input.role === "admin") ctx.res.clearCookie(VIEW_AS_COOKIE, cookieOptions);
+        else ctx.res.cookie(VIEW_AS_COOKIE, input.role, { ...cookieOptions, maxAge: 12 * 60 * 60 * 1000 });
+        void logAudit(ctx, "manage_access", { description: input.role === "admin" ? "Admin stopped previewing a role" : `Admin previewed role: ${input.role}` });
         return { success: true, role: input.role };
       }),
 

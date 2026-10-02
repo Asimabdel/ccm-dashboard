@@ -49,8 +49,8 @@ describe("auth.logout", () => {
     const result = await caller.auth.logout();
 
     expect(result).toEqual({ success: true });
-    expect(clearedCookies).toHaveLength(1);
-    expect(clearedCookies[0]?.name).toBe(COOKIE_NAME);
+    // The session cookie, and any "View as" role preview.
+    expect(clearedCookies.map((c) => c.name)).toEqual([COOKIE_NAME, "mypcp_view_as"]);
     expect(clearedCookies[0]?.options).toMatchObject({
       secure: true,
       sameSite: "lax",
