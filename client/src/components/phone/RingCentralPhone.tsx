@@ -6,6 +6,9 @@ import { trpc } from "@/lib/trpc";
 import { CALL_OUTCOMES, CALL_OUTCOME_LIST, formatPhone, parseRingCentralCall, type CallOutcome } from "@shared/phone";
 import { cn } from "@/lib/utils";
 import { RC_ORIGIN, setRcState, takeDialContext } from "./ringcentralStore";
+import { isCallingMode } from "@/components/outreach/callingState";
+import { addBusinessDays } from "@shared/outreach";
+import { localDateStr } from "@shared/workforce";
 
 const ADAPTER = `${RC_ORIGIN}/integration/ringcentral-embeddable/latest/adapter.js`;
 
@@ -76,7 +79,8 @@ export function RingCentralPhone() {
       const context = call.direction === "outbound" ? takeDialContext(call.otherNumber) : null;
       try {
         const res = await logRef.current({ sessionId: call.sessionId, direction: call.direction, phoneNumber: call.otherNumber, startedAt: call.startedAt, durationSec: call.durationSec, result: call.result, context });
-        if (call.direction === "outbound" && !res.duplicate) {
+        // In calling mode the calling screen asks how it went, so skip the box here.
+        if (call.direction === "outbound" && !res.duplicate && !isCallingMode()) {
           setEnded({ callId: res.id, name: res.contactName ?? formatPhone(call.otherNumber), durationSec: call.durationSec, suggestion: suggestOutcome(call.result, call.durationSec) });
         }
       } catch {
@@ -94,6 +98,7 @@ export function RingCentralPhone() {
 function OutcomePrompt({ call, onDone }: { call: EndedCall; onDone: (closed: boolean) => void }) {
   const [outcome, setOutcome] = useState<CallOutcome | null>(call.suggestion);
   const [note, setNote] = useState("");
+  const [callBackOn, setCallBackOn] = useState(() => addBusinessDays(localDateStr(), 1));
   const save = trpc.workspace.phone.outcome.useMutation({
     onSuccess: (r) => onDone(r.closed),
     onError: (e) => toast.error(e.message),
@@ -115,11 +120,17 @@ function OutcomePrompt({ call, onDone }: { call: EndedCall; onDone: (closed: boo
           </button>
         ))}
       </div>
+      {outcome === "call_back" && (
+        <label className="mt-3 flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-slate-300">
+          Call back on
+          <input type="date" value={callBackOn} min={localDateStr()} onChange={(e) => setCallBackOn(e.target.value)} className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm dark:border-slate-700 dark:bg-slate-800" />
+        </label>
+      )}
       <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={1000} placeholder="Note (optional) — e.g. booked Tue 10:40 with Dr. Narang"
         className="mt-3 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800" />
       <div className="mt-3 flex justify-end gap-2">
         <button onClick={() => onDone(false)} className="px-3 py-1.5 rounded-lg text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-300">Skip</button>
-        <button disabled={!outcome || save.isPending} onClick={() => outcome && save.mutate({ callId: call.callId, outcome, note: note || null })}
+        <button disabled={!outcome || save.isPending} onClick={() => outcome && save.mutate({ callId: call.callId, outcome, note: note || null, callBackOn: outcome === "call_back" ? callBackOn || null : null })}
           className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-sm font-semibold disabled:opacity-50 dark:bg-brand">Save</button>
       </div>
     </div>

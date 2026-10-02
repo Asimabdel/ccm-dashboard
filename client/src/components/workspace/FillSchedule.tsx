@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
-import { CalendarPlus, CheckSquare, Download, EyeOff, Info, ListPlus, Loader2, Square, UserSearch } from "lucide-react";
+import { CalendarPlus, CheckSquare, Download, EyeOff, Info, ListPlus, Loader2, PhoneCall, Square, UserSearch } from "lucide-react";
+import { LogCallDialog, OutreachCell, StatusTabs } from "@/components/outreach/Outreach";
+import { CallingMode } from "@/components/outreach/CallingMode";
+import { OUTREACH_TABS, type OutreachStatus } from "@shared/outreach";
 import { useWorkspace } from "@/components/workspace/useWorkspace";
 import { Btn, EmptyState, ErrorNote, Loading, Panel, SectionLabel, fmtDob, fmtShortDate, inputCls } from "@/components/workspace/ui";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -9,7 +12,6 @@ import { trpc } from "@/lib/trpc";
 import { addDays, fmtDay, localDateStr } from "@shared/workforce";
 import { FILL_GROUPS, FILL_GROUP_LIST, FILL_LIKELIHOOD_LABELS, WORKSPACE_ROLE_LABELS, type FillGroup, type FillLikelihood } from "@shared/workspace";
 import { cn } from "@/lib/utils";
-import { CALL_OUTCOMES, type CallOutcome } from "@shared/phone";
 import { PhoneLink } from "@/components/phone/PhoneLink";
 
 const MAX_SELECT = 500;
@@ -30,16 +32,18 @@ export function FillSchedule({ providerParam, onProvider }: { providerParam: num
   const { caps } = useWorkspace();
   const providers = trpc.workspace.opportunities.fillProviders.useQuery();
   const [includeOtherClinics, setIncludeOtherClinics] = useState(false);
-  const [includeActioned, setIncludeActioned] = useState(false);
+  const [status, setStatus] = useState<OutreachStatus>("to_call");
+  const [logFor, setLogFor] = useState<{ key: string; name: string } | null>(null);
+  const [calling, setCalling] = useState(false);
   const [group, setGroup] = useState<FillGroup | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [taskOpen, setTaskOpen] = useState(false);
   const providerId = providerParam;
-  const fill = trpc.workspace.opportunities.fill.useQuery({ providerId: providerId ?? 0, includeOtherClinics, includeActioned }, { enabled: !!providerId });
+  const fill = trpc.workspace.opportunities.fill.useQuery({ providerId: providerId ?? 0, includeOtherClinics, status }, { enabled: !!providerId });
   const utils = trpc.useUtils();
   const canAct = !!caps?.opportunitiesAct;
 
-  useEffect(() => { setSelected(new Set()); setGroup(null); }, [providerId, includeOtherClinics]);
+  useEffect(() => { setSelected(new Set()); setGroup(null); setStatus("to_call"); }, [providerId, includeOtherClinics]);
 
   const act = trpc.workspace.opportunities.fillAct.useMutation({
     onSuccess: (r, v) => {
@@ -87,7 +91,6 @@ export function FillSchedule({ providerParam, onProvider }: { providerParam: num
           </select>
         </div>
         <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 pb-2.5"><input type="checkbox" checked={includeOtherClinics} onChange={(e) => setIncludeOtherClinics(e.target.checked)} /> Include patients from other clinics</label>
-        <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 pb-2.5"><input type="checkbox" checked={includeActioned} onChange={(e) => setIncludeActioned(e.target.checked)} /> Show already handled (30 days)</label>
       </div>
 
       {!providerId && (
@@ -144,6 +147,10 @@ export function FillSchedule({ providerParam, onProvider }: { providerParam: num
             }
             bodyClassName="p-0"
           >
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-2.5 dark:border-slate-700">
+              <StatusTabs value={status} counts={data.statusCounts} onChange={(s) => { setStatus(s); setSelected(new Set()); }} />
+              {status === "to_call" && rows.length > 0 && <Btn size="sm" onClick={() => setCalling(true)}><PhoneCall size={14} /> Start calling</Btn>}
+            </div>
             {canAct && selected.size > 0 && (
               <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border-b border-slate-100 dark:border-slate-700 text-sm">
                 <span className="font-semibold">{selected.size} selected</span>
@@ -152,7 +159,7 @@ export function FillSchedule({ providerParam, onProvider }: { providerParam: num
                 <Btn size="sm" variant="ghost" disabled={act.isPending} onClick={() => act.mutate({ providerId: providerId!, keys: Array.from(selected), action: "dismissed" })}><EyeOff size={14} /> Dismiss</Btn>
               </div>
             )}
-            {rows.length === 0 && <EmptyState icon={CalendarPlus} title="Nobody to suggest right now" body="Everyone who fits is already booked, was handled in the last 30 days, or belongs to a provider who's still seeing patients." />}
+            {rows.length === 0 && <EmptyState icon={CalendarPlus} title={status === "to_call" ? "Nobody to call right now" : "Nobody here right now"} body={status === "to_call" ? "Everyone who fits is already booked, being worked (see the other tabs), or belongs to a provider who's still seeing patients." : OUTREACH_TABS.find((x) => x.key === status)?.hint} />}
             {data.total > data.rows.length && <p className="px-4 py-2 text-xs text-slate-500 border-b border-slate-100 dark:border-slate-700">Showing the top {data.rows.length.toLocaleString()} of {data.total.toLocaleString()}.</p>}
             {rows.length > 0 && (
               <div className="overflow-x-auto">
@@ -172,7 +179,7 @@ export function FillSchedule({ providerParam, onProvider }: { providerParam: num
                       <th className="text-left font-medium px-3 py-2 hidden md:table-cell">Last seen</th>
                       <th className="text-left font-medium px-3 py-2 hidden lg:table-cell">History</th>
                       <th className="text-left font-medium px-3 py-2 hidden lg:table-cell">Phone</th>
-                      <th className="text-left font-medium px-3 py-2">Handled</th>
+                      <th className="text-left font-medium px-3 py-2">Calls</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
@@ -198,9 +205,8 @@ export function FillSchedule({ providerParam, onProvider }: { providerParam: num
                         <td className="px-3 py-2.5 text-slate-600 dark:text-slate-300">{r.reason}</td>
                         <td className="px-3 py-2.5 text-slate-500 hidden md:table-cell whitespace-nowrap">{r.lastSeen ? <>{fmtShortDate(r.lastSeen)}<span className="block text-xs">{r.lastSeenBy}</span></> : "Never seen"}</td>
                         <td className="px-3 py-2.5 text-xs text-slate-500 hidden lg:table-cell whitespace-nowrap">{r.seenCount} visit{r.seenCount === 1 ? "" : "s"}{r.noShows ? ` · ${r.noShows} no-show${r.noShows === 1 ? "" : "s"}` : ""}{r.cancellations ? ` · ${r.cancellations} cancelled` : ""}</td>
-                        <td className="px-3 py-2.5 text-slate-500 hidden lg:table-cell whitespace-nowrap">{r.phoneNumber ? <PhoneLink phone={r.phoneNumber} context={{ patientId: r.patientId, subjectKey: r.key, name: r.name, source: "schedule_fill" }} className="font-medium text-slate-700 dark:text-slate-200" icon /> : <span className="text-amber-600">No phone</span>}
-                          {r.calls && <span className="block text-[11px] text-slate-400">{r.calls.count} call{r.calls.count === 1 ? "" : "s"} · last {fmtShortDate(r.calls.lastAt)}{r.calls.lastOutcome ? ` · ${CALL_OUTCOMES[r.calls.lastOutcome as CallOutcome] ?? r.calls.lastOutcome}` : ""}</span>}</td>
-                        <td className="px-3 py-2.5 text-xs text-slate-500 whitespace-nowrap">{r.lastAction ? `${r.lastAction.replace("_", " ")} ${fmtShortDate(r.lastActionAt)}` : "—"}</td>
+                        <td className="px-3 py-2.5 text-slate-500 hidden lg:table-cell whitespace-nowrap">{r.phoneNumber ? <PhoneLink phone={r.phoneNumber} context={{ patientId: r.patientId, subjectKey: r.key, name: r.name, source: "schedule_fill" }} className="font-medium text-slate-700 dark:text-slate-200" icon /> : <span className="text-amber-600">No phone</span>}</td>
+                        <td className="px-3 py-2.5"><OutreachCell o={r.outreach} onLog={() => setLogFor({ key: r.key, name: r.name })} /></td>
                       </tr>
                     ))}
                   </tbody>
@@ -215,6 +221,9 @@ export function FillSchedule({ providerParam, onProvider }: { providerParam: num
             </p>
           </Panel>
 
+          <LogCallDialog target={logFor} category="schedule_fill" onClose={() => setLogFor(null)} />
+          <CallingMode open={calling} category="schedule_fill" listLabel={`Fill ${provName}'s schedule`} onClose={() => setCalling(false)}
+            rows={rows.map((r) => ({ ...r, providerName: provName, lastVisit: r.lastSeen }))} />
           <FillTasksDialog
             open={taskOpen}
             onOpenChange={setTaskOpen}

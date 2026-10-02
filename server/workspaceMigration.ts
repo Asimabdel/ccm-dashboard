@@ -934,6 +934,15 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     CONSTRAINT \`chatMessages_conversationId_fk\` FOREIGN KEY (\`conversationId\`) REFERENCES \`chatConversations\`(\`id\`),
     CONSTRAINT \`chatMessages_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`),
     CONSTRAINT \`chatMessages_patientId_fk\` FOREIGN KEY (\`patientId\`) REFERENCES \`patients\`(\`id\`))` },
+  // Call lists: who is calling a patient right now (added 2026-10-02).
+  { label: "outreachLocks", sql: `CREATE TABLE IF NOT EXISTS \`outreachLocks\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`subjectKey\` varchar(120) NOT NULL,
+    \`userId\` int NOT NULL,
+    \`lockedUntil\` datetime NOT NULL,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    UNIQUE KEY \`outreachLocks_subjectKey_unique\` (\`subjectKey\`),
+    CONSTRAINT \`outreachLocks_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`))` },
   // Messages: @mentions and reactions (added 2026-10-02).
   { label: "chatMentions", sql: `CREATE TABLE IF NOT EXISTS \`chatMentions\` (
     \`id\` int AUTO_INCREMENT PRIMARY KEY,
@@ -1083,6 +1092,8 @@ const INTAKE_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: "chatMembers", column: "muted", ddl: "`muted` boolean NOT NULL DEFAULT false AFTER `leftAt`" },
   { table: "chatMessages", column: "kind", ddl: "`kind` varchar(10) NOT NULL DEFAULT 'text' AFTER `body`" },
   { table: "chatMembers", column: "lastReadMessageId", ddl: "`lastReadMessageId` int NULL AFTER `lastReadAt`" },
+  // Added 2026-10-02: call lists — the day a patient asked to be called back.
+  { table: "phoneCalls", column: "callBackOn", ddl: "`callBackOn` varchar(10) NULL AFTER `outcome`" },
 ];
 async function upgradeIntake(db: Db): Promise<string[]> {
   const applied: string[] = [];

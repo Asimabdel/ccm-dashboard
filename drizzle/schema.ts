@@ -985,6 +985,8 @@ export const phoneCalls = mysqlTable("phoneCalls", {
   /** RingCentral's result, e.g. "Call connected", "Voicemail", "Missed". */
   result: varchar("result", { length: 60 }),
   outcome: varchar("outcome", { length: 30 }),
+  /** "Asked to call back": the day they asked for (YYYY-MM-DD, clinic-local). */
+  callBackOn: varchar("callBackOn", { length: 10 }),
   note: text("note"),
   /** Where the call was started from, e.g. "schedule_fill", "reach_out", "patient". */
   source: varchar("source", { length: 40 }),
@@ -1901,6 +1903,15 @@ export const chatMessages = mysqlTable("chatMessages", {
 }, (t) => ({
   convIdx: index("chatMessages_conv_idx").on(t.conversationId, t.id),
 }));
+
+/** Call lists: a patient someone is calling right now is held for them (15 minutes) so nobody else calls. */
+export const outreachLocks = mysqlTable("outreachLocks", {
+  id: int("id").autoincrement().primaryKey(),
+  subjectKey: varchar("subjectKey", { length: 120 }).notNull().unique(),
+  userId: int("userId").references(() => users.id).notNull(),
+  lockedUntil: datetime("lockedUntil").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
 
 /** Who a message @mentions (counted as unread for them even in a muted conversation). */
 export const chatMentions = mysqlTable("chatMentions", {

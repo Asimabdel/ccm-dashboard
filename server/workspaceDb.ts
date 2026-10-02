@@ -30,6 +30,7 @@ import {
   timeOffRequests,
 } from "../drizzle/schema";
 import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
+import type { OutreachStatus } from "../shared/outreach";
 import { getDb } from "./db";
 import { currentMonth } from "./seed";
 import { localDateStr, addDays } from "../shared/workforce";
@@ -1311,11 +1312,14 @@ async function loadOpportunityData(actor: WorkspaceActor, clinicId?: number | nu
 
 export async function opportunitySummary(actor: WorkspaceActor, clinicId?: number | null) {
   const data = await loadOpportunityData(actor, clinicId);
+  const { loadOutreach } = await import("./outreachDb");
+  const outreach = await loadOutreach();
   const counts: Record<string, number> = {};
   const unique = new Set<string>();
   for (const c of data) {
     for (const m of c.matches) {
-      if (c.acted(m.category)) continue;
+      // Count who is to be called now (not waiting for a retry, booked, unreachable or closed).
+      if (outreach.stateFor(c.key, c.acted(m.category), actor.id).status !== "to_call") continue;
       counts[m.category] = (counts[m.category] ?? 0) + 1;
       unique.add(c.key);
     }
@@ -1327,15 +1331,16 @@ export async function opportunitySummary(actor: WorkspaceActor, clinicId?: numbe
 
 const OPPORTUNITY_LIST_LIMIT = 1000;
 
-export async function opportunityList(actor: WorkspaceActor, input: { category: OpportunityCategory; clinicId?: number | null; providerId?: number | null; includeActioned: boolean }) {
+export async function opportunityList(actor: WorkspaceActor, input: { category: OpportunityCategory; clinicId?: number | null; providerId?: number | null; status: OutreachStatus }) {
   const data = await loadOpportunityData(actor, input.clinicId);
+  const { loadOutreach, filterByStatus } = await import("./outreachDb");
+  const outreach = await loadOutreach();
   const out = [];
   for (const c of data) {
     const m = c.matches.find((x) => x.category === input.category);
     if (!m) continue;
     if (input.providerId && c.providerId !== input.providerId) continue;
     const a = c.acted(input.category);
-    if (a && !input.includeActioned) continue;
     out.push({
       key: c.key,
       patientId: c.patientId,
@@ -1349,12 +1354,12 @@ export async function opportunityList(actor: WorkspaceActor, input: { category: 
       nextVisit: c.nextVisit,
       reason: m.reason,
       score: m.score,
-      lastAction: a?.action ?? null,
-      lastActionAt: a?.createdAt ?? null,
+      outreach: outreach.stateFor(c.key, a, actor.id),
     });
   }
-  out.sort((a, b) => b.score - a.score);
-  return { total: out.length, rows: out.slice(0, OPPORTUNITY_LIST_LIMIT) };
+  // Each status tab, sorted for calling (call-backs due, then retries due, then the highest priority).
+  const { counts, rows } = filterByStatus(out, input.status);
+  return { total: rows.length, counts, rows: rows.slice(0, OPPORTUNITY_LIST_LIMIT) };
 }
 
 export async function actOnOpportunities(
@@ -1462,7 +1467,7 @@ async function loadScheduleFill(actor: WorkspaceActor, input: { providerId: numb
   return { prov, candidates, stopped, clinicName };
 }
 
-export async function scheduleFill(actor: WorkspaceActor, input: { providerId: number; includeOtherClinics: boolean; includeActioned: boolean }) {
+export async function scheduleFill(actor: WorkspaceActor, input: { providerId: number; includeOtherClinics: boolean; status: OutreachStatus }) {
   const d = await db();
   const { prov, candidates, stopped, clinicName } = await loadScheduleFill(actor, input);
   const acted = await d
@@ -1473,25 +1478,21 @@ export async function scheduleFill(actor: WorkspaceActor, input: { providerId: n
   const actedBy = new Map<string, (typeof acted)[number]>();
   for (const a of acted) if (a.subjectKey && !actedBy.has(a.subjectKey)) actedBy.set(a.subjectKey, a);
 
-  const counts: Record<FillGroup, number> = { own_due: 0, orphaned: 0, never_seen: 0 };
-  const rows = [];
-  for (const c of candidates) {
-    const a = actedBy.get(c.key);
-    if (a && !input.includeActioned) continue;
-    counts[c.group]++;
-    rows.push({ ...c, lastAction: a?.action ?? null, lastActionAt: a?.createdAt ?? null, calls: null as { count: number; lastAt: Date; lastOutcome: string | null } | null });
-  }
-  // Calls made through RingCentral in the last 90 days.
-  const { recentCallsBySubject } = await import("./phoneDb");
-  const calls = await recentCallsBySubject(rows.map((r) => r.key));
-  for (const r of rows) r.calls = calls.get(r.key) ?? null;
+  // Every call to the patient counts (any list, the RingCentral phone, desk phones, logged by hand).
+  const { loadOutreach, filterByStatus } = await import("./outreachDb");
+  const outreach = await loadOutreach();
+  const all = candidates.map((c) => ({ ...c, outreach: outreach.stateFor(c.key, actedBy.get(c.key) ?? null, actor.id) }));
   // Ties: most recently seen first, then the most visits.
-  rows.sort((a, b) => b.score - a.score || (b.lastSeen?.getTime() ?? 0) - (a.lastSeen?.getTime() ?? 0) || b.seenCount - a.seenCount);
+  all.sort((a, b) => b.score - a.score || (b.lastSeen?.getTime() ?? 0) - (a.lastSeen?.getTime() ?? 0) || b.seenCount - a.seenCount);
+  const { counts: statusCounts, rows } = filterByStatus(all, input.status);
+  const counts: Record<FillGroup, number> = { own_due: 0, orphaned: 0, never_seen: 0 };
+  for (const r of rows) counts[r.group]++;
   const [range] = await d.select({ last: sql<string | null>`MAX(${appointments.date})` }).from(appointments);
   return {
     provider: { id: prov.id, name: prov.name, clinicId: prov.clinicId, clinicName: prov.clinicId ? clinicName.get(prov.clinicId) ?? null : null },
     stoppedProviders: stopped,
     counts,
+    statusCounts,
     total: rows.length,
     rows: rows.slice(0, FILL_LIST_LIMIT),
     scheduleThrough: range?.last ?? null,

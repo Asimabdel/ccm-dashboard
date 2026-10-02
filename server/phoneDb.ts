@@ -78,11 +78,11 @@ export async function logCall(
 }
 
 /** Staff record how the call went. Closing outcomes take the person off the call lists for 30 days. */
-export async function setCallOutcome(actor: WorkspaceActor, input: { callId: number; outcome: CallOutcome; note?: string | null }) {
+export async function setCallOutcome(actor: WorkspaceActor, input: { callId: number; outcome: CallOutcome; note?: string | null; callBackOn?: string | null }) {
   const d = await db();
   const [call] = await d.select().from(phoneCalls).where(eq(phoneCalls.id, input.callId)).limit(1);
   if (!call || (call.userId !== actor.id && actor.role !== "admin")) throw new WorkspaceError("Call not found.", "NOT_FOUND");
-  await d.update(phoneCalls).set({ outcome: input.outcome, note: input.note?.trim() || null }).where(eq(phoneCalls.id, call.id));
+  await d.update(phoneCalls).set({ outcome: input.outcome, note: input.note?.trim() || null, callBackOn: input.outcome === "call_back" ? input.callBackOn ?? null : null }).where(eq(phoneCalls.id, call.id));
   let closed = false;
   if (call.subjectKey && CLOSING_OUTCOMES.includes(input.outcome)) {
     // Close it on the list the call came from (the Fill-a-schedule list by default).
@@ -107,26 +107,3 @@ export async function callsForPatient(patientId: number) {
     .limit(100);
 }
 
-/** Recent calls per person (by Opportunity Finder key), for the call lists. */
-export async function recentCallsBySubject(keys: string[], days = 90) {
-  const out = new Map<string, { count: number; lastAt: Date; lastOutcome: string | null }>();
-  if (!keys.length) return out;
-  const d = await db();
-  const since = new Date(Date.now() - days * 86_400_000);
-  for (let i = 0; i < keys.length; i += 500) {
-    const rows = await d
-      .select({ subjectKey: phoneCalls.subjectKey, startedAt: phoneCalls.startedAt, outcome: phoneCalls.outcome })
-      .from(phoneCalls)
-      .where(and(inArray(phoneCalls.subjectKey, keys.slice(i, i + 500)), gte(phoneCalls.startedAt, since), eq(phoneCalls.direction, "outbound")));
-    for (const r of rows) {
-      if (!r.subjectKey) continue;
-      const cur = out.get(r.subjectKey);
-      if (!cur) out.set(r.subjectKey, { count: 1, lastAt: r.startedAt, lastOutcome: r.outcome });
-      else {
-        cur.count++;
-        if (r.startedAt > cur.lastAt) { cur.lastAt = r.startedAt; cur.lastOutcome = r.outcome; }
-      }
-    }
-  }
-  return out;
-}

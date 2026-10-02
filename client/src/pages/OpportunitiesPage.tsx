@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
-import { CalendarPlus, CheckSquare, EyeOff, Info, ListPlus, Loader2, Radar, Square, CalendarClock, Clock, UserSearch } from "lucide-react";
+import { BarChart3, CalendarPlus, CheckSquare, EyeOff, Info, ListPlus, Loader2, PhoneCall, Radar, Square, CalendarClock, Clock, UserSearch } from "lucide-react";
+import { LogCallDialog, OutreachCell, StatusTabs } from "@/components/outreach/Outreach";
+import { CallingMode } from "@/components/outreach/CallingMode";
+import { CallResults } from "@/components/outreach/CallResults";
+import { OUTREACH_TABS, type OutreachStatus } from "@shared/outreach";
 import { FillSchedule } from "@/components/workspace/FillSchedule";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
@@ -54,7 +58,7 @@ export default function OpportunitiesPage() {
   const ws = useWorkspace();
   const [params, setParams] = useUrlParams();
   const t = params.get("tab");
-  const tab = t === "openings" || t === "fill" || t === "testing" ? t : "patients";
+  const tab = t === "openings" || t === "fill" || t === "testing" || t === "results" ? t : "patients";
   const fillProvider = Number(params.get("provider")) || null;
   const category = (params.get("category") as OpportunityCategory) || null;
 
@@ -71,6 +75,7 @@ export default function OpportunitiesPage() {
           { key: "fill", label: "Fill a schedule", icon: UserSearch },
           { key: "testing", label: "Testing due", icon: FlaskConical },
           { key: "openings", label: "Open slots", icon: CalendarPlus },
+          { key: "results", label: "Call results", icon: BarChart3 },
         ].map((t) => (
           <button
             key={t.key}
@@ -88,6 +93,7 @@ export default function OpportunitiesPage() {
         tab === "openings" ? <Openings clinicId={ws.clinicId} />
           : tab === "fill" ? <FillSchedule providerParam={fillProvider} onProvider={(id) => setParams({ provider: id })} />
           : tab === "testing" ? <TestingDue clinicId={ws.clinicId} />
+          : tab === "results" ? <CallResults />
           : <PatientOpportunities clinicId={ws.clinicId} category={category} onCategory={(c) => setParams({ category: c })} />
       )}
     </CCMDashboardLayout>
@@ -97,10 +103,13 @@ export default function OpportunitiesPage() {
 function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: number | null; category: OpportunityCategory | null; onCategory: (c: string | null) => void }) {
   const { caps } = useWorkspace();
   const summary = trpc.workspace.opportunities.summary.useQuery({ clinicId });
-  const [includeActioned, setIncludeActioned] = useState(false);
-  const list = trpc.workspace.opportunities.list.useQuery({ category: category ?? "missed_appointment", clinicId, includeActioned }, { enabled: !!category });
+  const [status, setStatus] = useState<OutreachStatus>("to_call");
+  const list = trpc.workspace.opportunities.list.useQuery({ category: category ?? "missed_appointment", clinicId, status }, { enabled: !!category });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [taskOpen, setTaskOpen] = useState(false);
+  const [logFor, setLogFor] = useState<{ key: string; name: string } | null>(null);
+  const [calling, setCalling] = useState(false);
+  useEffect(() => { setStatus("to_call"); setSelected(new Set()); }, [category]);
   const utils = trpc.useUtils();
 
   const act = trpc.workspace.opportunities.act.useMutation({
@@ -150,7 +159,7 @@ function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: nu
           return (
             <button
               key={c}
-              onClick={() => { setSelected(new Set()); onCategory(active ? null : c); }}
+              onClick={() => onCategory(active ? null : c)}
               className={cn("text-left rounded-xl border bg-white p-4 shadow-[0_1px_2px_rgba(20,21,25,0.04)] transition-colors", active ? "border-brand ring-1 ring-brand/40" : "border-slate-200 dark:border-slate-700 hover:border-slate-300")}
             >
               <div className="flex items-center justify-between">
@@ -179,13 +188,14 @@ function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: nu
               <span className="text-xs font-normal text-slate-500">Suggested next step: {OPPORTUNITY_INFO[category].action.toLowerCase()}</span>
             </span>
           }
-          action={
-            <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
-              <input type="checkbox" checked={includeActioned} onChange={(e) => setIncludeActioned(e.target.checked)} /> Show already handled (30 days)
-            </label>
-          }
           bodyClassName="p-0"
         >
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-2.5 dark:border-slate-700">
+            <StatusTabs value={status} counts={list.data?.counts} onChange={(s) => { setStatus(s); setSelected(new Set()); }} />
+            {status === "to_call" && rows.length > 0 && (
+              <Btn size="sm" onClick={() => setCalling(true)}><PhoneCall size={14} /> Start calling</Btn>
+            )}
+          </div>
           {canAct && selected.size > 0 && (
             <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border-b border-slate-100 dark:border-slate-700 text-sm">
               <span className="font-semibold">{selected.size} selected</span>
@@ -196,7 +206,7 @@ function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: nu
           )}
           {list.isLoading && <Loading />}
           {list.error && <div className="p-4"><ErrorNote message={list.error.message} /></div>}
-          {list.data && rows.length === 0 && <EmptyState icon={CheckSquare} title="Nobody here right now" body="Handled patients are hidden for 30 days." />}
+          {list.data && rows.length === 0 && <EmptyState icon={CheckSquare} title="Nobody here right now" body={OUTREACH_TABS.find((x) => x.key === status)?.hint} />}
           {total > rows.length && <p className="px-4 py-2 text-xs text-slate-500 border-b border-slate-100 dark:border-slate-700">Showing the top {rows.length.toLocaleString()} of {total.toLocaleString()} by priority. Handle these first, or pick a clinic to narrow the list.</p>}
           {rows.length > 0 && (
             <div className="overflow-x-auto">
@@ -215,7 +225,7 @@ function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: nu
                     <th className="text-left font-medium px-3 py-2 hidden md:table-cell">Clinic · Provider</th>
                     <th className="text-left font-medium px-3 py-2 hidden lg:table-cell">Last visit</th>
                     <th className="text-left font-medium px-3 py-2 hidden lg:table-cell">Phone</th>
-                    <th className="text-left font-medium px-3 py-2">Handled</th>
+                    <th className="text-left font-medium px-3 py-2">Calls</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
@@ -242,7 +252,7 @@ function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: nu
                       <td className="px-3 py-2.5 text-slate-500 hidden md:table-cell">{r.clinicName ?? "—"}{r.providerName ? ` · ${r.providerName}` : ""}</td>
                       <td className="px-3 py-2.5 text-slate-500 hidden lg:table-cell whitespace-nowrap">{fmtShortDate(r.lastOfficeVisit)}</td>
                       <td className="px-3 py-2.5 text-slate-500 hidden lg:table-cell whitespace-nowrap">{r.phoneNumber ? <PhoneLink phone={r.phoneNumber} context={{ patientId: r.patientId, subjectKey: r.key, name: r.name, source: category }} /> : "—"}</td>
-                      <td className="px-3 py-2.5 text-xs text-slate-500 whitespace-nowrap">{r.lastAction ? `${r.lastAction.replace("_", " ")} ${fmtShortDate(r.lastActionAt)}` : "—"}</td>
+                      <td className="px-3 py-2.5"><OutreachCell o={r.outreach} onLog={() => setLogFor({ key: r.key, name: r.name })} /></td>
                     </tr>
                   ))}
                 </tbody>
@@ -253,6 +263,13 @@ function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: nu
             <Info size={13} className="mt-0.5 shrink-0" /> Schedule rules use every appointment imported from Practice Fusion (last 13 months); roster rules use the CCM roster. Check the chart before calling.
           </p>
         </Panel>
+      )}
+
+      {category && (
+        <>
+          <LogCallDialog target={logFor} category={category} onClose={() => setLogFor(null)} />
+          <CallingMode open={calling} rows={rows.map((r) => ({ ...r, lastVisit: r.lastOfficeVisit }))} category={category} listLabel={OPPORTUNITY_INFO[category].label} onClose={() => setCalling(false)} />
+        </>
       )}
 
       {category && (

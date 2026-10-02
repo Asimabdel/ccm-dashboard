@@ -38,6 +38,8 @@ import * as rosterMatch from "../rosterMatch";
 import * as rosterMerge from "../rosterMerge";
 import * as carePlans from "../carePlansDb";
 import * as chat from "../chatDb";
+import * as outreach from "../outreachDb";
+import { OUTREACH_STATUS_LIST } from "../../shared/outreach";
 import { libraryEntrySchema, planSchema } from "../carePlanSchemas";
 import { LIBRARY_LANGS } from "../../shared/conditionLibrary/types";
 import { OFFICE_TESTS } from "../../shared/officeTests";
@@ -430,7 +432,7 @@ export const workspaceRouter = router({
         return run(() => phone.logCall(actor, input));
       }),
     outcome: protectedProcedure
-      .input(z.object({ callId: z.number().int().positive(), outcome: z.enum(CALL_OUTCOME_LIST as [string, ...string[]]), note: z.string().max(1000).nullish() }))
+      .input(z.object({ callId: z.number().int().positive(), outcome: z.enum(CALL_OUTCOME_LIST as [string, ...string[]]), note: z.string().max(1000).nullish(), callBackOn: dateStr.nullish() }))
       .mutation(async ({ ctx, input }) => {
         const actor = await actorFor(ctx, "tasks");
         return run(() => phone.setCallOutcome(actor, input as Parameters<typeof phone.setCallOutcome>[1]));
@@ -1231,7 +1233,7 @@ export const workspaceRouter = router({
       return run(() => ws.opportunitySummary(actor, input.clinicId));
     }),
     list: protectedProcedure
-      .input(z.object({ category: z.enum(OPPORTUNITY_CATEGORY_LIST as [string, ...string[]]), clinicId, providerId: z.number().int().positive().nullish(), includeActioned: z.boolean().default(false) }))
+      .input(z.object({ category: z.enum(OPPORTUNITY_CATEGORY_LIST as [string, ...string[]]), clinicId, providerId: z.number().int().positive().nullish(), status: z.enum(OUTREACH_STATUS_LIST as [string, ...string[]]).default("to_call") }))
       .query(async ({ ctx, input }) => {
         const actor = await oppActor(ctx, "opportunitiesView");
         return run(() => ws.opportunityList(actor, input as Parameters<typeof ws.opportunityList>[1]));
@@ -1242,10 +1244,10 @@ export const workspaceRouter = router({
       return run(() => ws.fillProviders(actor));
     }),
     fill: protectedProcedure
-      .input(z.object({ providerId: z.number().int().positive(), includeOtherClinics: z.boolean().default(false), includeActioned: z.boolean().default(false) }))
+      .input(z.object({ providerId: z.number().int().positive(), includeOtherClinics: z.boolean().default(false), status: z.enum(OUTREACH_STATUS_LIST as [string, ...string[]]).default("to_call") }))
       .query(async ({ ctx, input }) => {
         const actor = await oppActor(ctx, "opportunitiesView");
-        return run(() => ws.scheduleFill(actor, input));
+        return run(() => ws.scheduleFill(actor, input as Parameters<typeof ws.scheduleFill>[1]));
       }),
     fillAct: protectedProcedure
       .input(
@@ -1276,6 +1278,43 @@ export const workspaceRouter = router({
         const actor = await oppActor(ctx, "opportunitiesAct");
         return run(() => ws.actOnOpportunities(actor, input as Parameters<typeof ws.actOnOpportunities>[1]));
       }),
+  }),
+
+  /** Call lists: log a call's result, hold a patient while calling, their call history, results. */
+  outreach: router({
+    record: protectedProcedure
+      .input(z.object({
+        subjectKey: z.string().regex(/^(p:\d+|s:.{1,110})$/),
+        category: z.string().max(40).nullish(),
+        outcome: z.enum(CALL_OUTCOME_LIST as [string, ...string[]]),
+        note: z.string().max(1000).nullish(),
+        callBackOn: dateStr.nullish(),
+        callId: z.number().int().positive().nullish(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "opportunitiesView");
+        return run(() => outreach.recordCall(actor, input as Parameters<typeof outreach.recordCall>[1]));
+      }),
+    claim: protectedProcedure.input(z.object({ subjectKey: z.string().regex(/^(p:\d+|s:.{1,110})$/) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "opportunitiesView");
+      return outreach.claim(actor, input.subjectKey);
+    }),
+    release: protectedProcedure.input(z.object({ subjectKey: z.string().regex(/^(p:\d+|s:.{1,110})$/) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "opportunitiesView");
+      return outreach.release(actor, input.subjectKey);
+    }),
+    history: protectedProcedure.input(z.object({ subjectKey: z.string().regex(/^(p:\d+|s:.{1,110})$/) })).query(async ({ ctx, input }) => {
+      await actorFor(ctx, "opportunitiesView");
+      return outreach.callHistory(input.subjectKey);
+    }),
+    results: protectedProcedure.input(z.object({ days: z.number().int().min(1).max(90).default(7) })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "opportunitiesView");
+      return outreach.callResults(actor, input);
+    }),
+    clinicPhones: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "opportunitiesView");
+      return outreach.clinicPhones();
+    }),
   }),
 
   patients: router({
