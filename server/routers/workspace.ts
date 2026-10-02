@@ -39,6 +39,7 @@ import * as rosterMerge from "../rosterMerge";
 import * as carePlans from "../carePlansDb";
 import * as chat from "../chatDb";
 import * as outreach from "../outreachDb";
+import * as faxOut from "../faxSendDb";
 import { LIST_SORTS, OUTREACH_STATUS_LIST } from "../../shared/outreach";
 
 const listSort = { sort: z.enum(LIST_SORTS).default("suggested"), dir: z.enum(["asc", "desc"]).default("asc") };
@@ -1280,6 +1281,85 @@ export const workspaceRouter = router({
         const actor = await oppActor(ctx, "opportunitiesAct");
         return run(() => ws.actOnOpportunities(actor, input as Parameters<typeof ws.actOnOpportunities>[1]));
       }),
+  }),
+
+  /** Sending faxes through RingCentral, from each clinic's fax number. */
+  faxOut: router({
+    setup: protectedProcedure.query(async ({ ctx }) => {
+      adminOnly(ctx, "set up fax sending");
+      return faxOut.faxSetup();
+    }),
+    numbers: protectedProcedure.query(async ({ ctx }) => {
+      adminOnly(ctx, "set up fax sending");
+      return run(() => faxOut.faxNumbers());
+    }),
+    saveClinic: protectedProcedure
+      .input(z.object({ clinicId: z.number().int().positive(), extensionId: z.string().max(40).nullish(), extensionName: z.string().max(160).nullish(), fromNumber: z.string().max(20).nullish(), jwt: z.string().max(4000).nullish(), clearKey: z.boolean().optional() }))
+      .mutation(async ({ ctx, input }) => {
+        adminOnly(ctx, "set up fax sending");
+        const actor = await actorFor(ctx, "sendFax");
+        return run(() => faxOut.saveClinicFax(actor, input));
+      }),
+    /** Which clinics this person can send from, and their fax numbers. */
+    from: protectedProcedure.query(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "sendFax");
+      return (await faxOut.sendFrom()).map((c) => ({ ...c, allowed: !actor.clinicIds || actor.clinicIds.includes(c.id) }));
+    }),
+    contacts: protectedProcedure.input(z.object({ q: z.string().max(100).nullish() })).query(async ({ ctx, input }) => {
+      await actorFor(ctx, "sendFax");
+      return faxOut.listContacts(input.q);
+    }),
+    saveContact: protectedProcedure.input(z.object({ id: z.number().int().positive().nullish(), name: z.string().max(160), faxNumber: z.string().max(30), note: z.string().max(255).nullish() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "sendFax");
+      return run(() => faxOut.saveContact(actor, input));
+    }),
+    removeContact: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "sendFax");
+      return run(() => faxOut.removeContact(actor, input.id));
+    }),
+    startUpload: protectedProcedure.input(z.object({ fileName: z.string().min(1).max(255), mimeType: z.string().max(120), size: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "sendFax");
+      return run(() => faxOut.startUpload(actor, input));
+    }),
+    uploadLocal: protectedProcedure.input(z.object({ key: z.string().max(200), base64: z.string().max(6_000_000) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "sendFax");
+      return run(() => faxOut.uploadLocal(actor, input.key, input.base64));
+    }),
+    attachables: protectedProcedure.input(z.object({ subjectKey: patientKey })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "sendFax");
+      return faxOut.attachables(actor, input.subjectKey);
+    }),
+    signedDocs: protectedProcedure.input(z.object({ q: z.string().max(100).nullish() })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "sendFax");
+      return (await docs.listDocuments(actor, "completed", input.q)).map((d) => ({ id: d.id, title: d.title, patientName: d.patientName, completedAt: d.completedAt }));
+    }),
+    send: protectedProcedure
+      .input(z.object({
+        clinicId: z.number().int().positive(),
+        toNumber: z.string().max(30),
+        toName: z.string().max(160),
+        saveContact: z.boolean().optional(),
+        subjectKey: patientKey.nullish(),
+        coverNote: z.string().max(2000).nullish(),
+        attachments: z.array(z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("upload"), key: z.string().max(200), name: z.string().max(255), mimeType: z.string().max(120) }),
+          z.object({ kind: z.literal("file"), id: z.number().int().positive() }),
+          z.object({ kind: z.literal("document"), id: z.number().int().positive() }),
+          z.object({ kind: z.literal("fax"), id: z.number().int().positive() }),
+        ])).min(1).max(10),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "sendFax");
+        return run(() => faxOut.sendFax(actor, input));
+      }),
+    resend: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "sendFax");
+      return run(() => faxOut.resendFax(actor, input.id));
+    }),
+    sent: protectedProcedure.input(z.object({ subjectKey: patientKey.nullish() })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "sendFax");
+      return faxOut.listSent(actor, input);
+    }),
   }),
 
   /** Call lists: log a call's result, hold a patient while calling, their call history, results. */

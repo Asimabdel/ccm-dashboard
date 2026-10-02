@@ -10,8 +10,9 @@ import { and, desc, eq, inArray, isNull, ne, or, sql, type SQL } from "drizzle-o
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import { getDb } from "./db";
 import {
-  clinics, documents, eligibilityChecks, emailMessages, faxes, fhirPatients, fhirResources, intakePackets, patientFiles, patients, phoneCalls, squarePayments, users, workTasks,
+  clinics, documents, eligibilityChecks, emailMessages, faxes, fhirPatients, fhirResources, intakePackets, outboundFaxes, patientFiles, patients, phoneCalls, squarePayments, users, workTasks,
 } from "../drizzle/schema";
+import { OUTBOUND_FAX_STATUS } from "../shared/faxSend";
 import { can, FLOW_LABELS, TASK_CATEGORY_LABELS, TASK_STATUS_LABELS, type FlowStatus, type TaskCategory, type TaskStatus, type WorkspaceCap } from "../shared/workspace";
 import {
   FOLDER_SECTIONS, FOLDER_SECTION_LIST, MAX_PATIENT_FILE_BYTES, PATIENT_FILE_MIME, PATIENT_FILE_TYPES, snippetAround, sortItems,
@@ -182,6 +183,16 @@ async function collect(actor: WorkspaceActor, key: string, sections: FolderSecti
   }
 
   if (want("faxes")) {
+    const sent = await d.select({ f: outboundFaxes, by: users.name }).from(outboundFaxes).leftJoin(users, eq(users.id, outboundFaxes.sentByUserId))
+      .where(whose(outboundFaxes.subjectKey, outboundFaxes.patientId, key)).orderBy(desc(outboundFaxes.createdAt)).limit(200);
+    for (const { f, by } of sent) {
+      out.push({
+        key: `sentfax:${f.id}`, section: "faxes", kind: "sent_fax",
+        title: `Faxed to ${f.toName}`,
+        detail: [(f.attachments ?? []).map((a) => a.name).join(", "), f.pages ? `${f.pages} pages` : null, by ? `by ${by}` : null].filter(Boolean).join(" · ") || null,
+        date: iso(f.createdAt), status: OUTBOUND_FAX_STATUS[f.status as keyof typeof OUTBOUND_FAX_STATUS] ?? f.status, open: { type: "none" },
+      });
+    }
     for (const f of faxRows) {
       out.push({
         key: `fax:${f.id}`, section: "faxes", kind: "fax",

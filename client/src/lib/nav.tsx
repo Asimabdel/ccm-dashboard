@@ -36,7 +36,7 @@ const CARE_PLANS: NavItem = { label: "Care plans", path: "/care-plans", icon: No
 export const PROGRAM_APPROVALS: NavItem = { label: "Program approvals", path: "/program-approvals", icon: ClipboardCheck };
 const PLAYBOOKS: NavItem = { label: "Playbooks", path: "/playbooks", icon: BookOpen };
 const EMAILS: NavItem = { label: "Patient emails", path: "/patient-emails", icon: Mail };
-const FAXES: NavItem = { label: "Fax inbox", path: "/faxes", icon: Printer };
+const FAXES: NavItem = { label: "Faxes", path: "/faxes", icon: Printer };
 const BOOKINGS: NavItem = { label: "Website bookings", path: "/bookings", icon: CalendarPlus };
 const FORMS: NavItem = { label: "Patient forms", path: "/intake-forms", icon: ClipboardSignature };
 const DOCUMENTS: NavItem = { label: "Documents", path: "/documents", icon: FileSignature };
@@ -100,7 +100,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
   ],
   // Admin for one office (their home clinic): everything here is limited to that office. No CCM pages.
   office_manager: [
-    { label: "Workspace", items: [HOME, MY_WORK, MESSAGES, BOOKINGS, FORMS, DOCUMENTS, FLOW, OPPORTUNITIES, TESTING, PATIENTS, INSURANCE, PAYMENTS, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, MESSAGES, BOOKINGS, FORMS, DOCUMENTS, FAXES, FLOW, OPPORTUNITIES, TESTING, PATIENTS, INSURANCE, PAYMENTS, PLAYBOOKS] },
     {
       label: "My office",
       items: [
@@ -130,7 +130,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
     ME,
   ],
   provider: [
-    { label: "Workspace", items: [HOME, MY_WORK, MESSAGES, FORMS, DOCUMENTS, FLOW, OPPORTUNITIES, TESTING, PATIENTS, INSURANCE, PLAYBOOKS] },
+    { label: "Workspace", items: [HOME, MY_WORK, MESSAGES, FORMS, DOCUMENTS, FAXES, FLOW, OPPORTUNITIES, TESTING, PATIENTS, INSURANCE, PLAYBOOKS] },
     {
       label: "Care Management",
       items: [

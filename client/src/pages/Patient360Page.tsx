@@ -23,6 +23,8 @@ import { PatientChartPanel } from "@/components/chart/PatientChartPanel";
 import { PatientPaymentsPanel } from "@/components/payments/PatientPaymentsPanel";
 import { BookOpen, ClipboardCheck, FolderOpen, MessagesSquare, Wallet } from "lucide-react";
 import { PatientMessagesPanel } from "@/components/messages/PatientMessagesPanel";
+import { SendFaxDialog } from "@/components/fax/SendFaxDialog";
+import { Printer } from "lucide-react";
 import { CarePlanPanel } from "@/components/careplan/CarePlanPanel";
 import { EducationPanel } from "@/components/education/EducationPanel";
 import { PatientFolder } from "@/components/folder/PatientFolder";
@@ -63,6 +65,7 @@ function Patient360({ subjectKey, id }: { subjectKey: string; id: number | null 
   const defaultTab: Tab = ccmRecord ? "care" : "overview";
   const tab = (params.get("tab") as Tab) || defaultTab;
   const [taskOpen, setTaskOpen] = useState(false);
+  const [faxOpen, setFaxOpen] = useState(false);
   const q = trpc.workspace.patients.byKey.useQuery({ key: subjectKey }, { retry: false });
   const today = localDateStr();
 
@@ -129,6 +132,7 @@ function Patient360({ subjectKey, id }: { subjectKey: string; id: number | null 
               </div>
               <div className="flex flex-wrap gap-2">
                 <Btn onClick={() => setTaskOpen(true)}><ListPlus size={15} /> Create task</Btn>
+                {caps?.sendFax && <Btn variant="secondary" onClick={() => setFaxOpen(true)}><Printer size={15} /> Send fax</Btn>}
               </div>
             </div>
 
@@ -195,6 +199,7 @@ function Patient360({ subjectKey, id }: { subjectKey: string; id: number | null 
           )}
           {tab === "payments" && caps?.payments && <PatientPaymentsPanel subjectKey={subjectKey} name={p.name} clinicId={p.clinicId ?? null} />}
 
+          {caps?.sendFax && <SendFaxDialog open={faxOpen} onOpenChange={setFaxOpen} preset={{ subjectKey, patientName: p.name, clinicId: p.clinicId }} />}
           <NewTaskDialog open={taskOpen} onOpenChange={setTaskOpen} defaults={{ patientId: p.id ?? undefined, subjectKey: p.id ? undefined : subjectKey, patientName: p.name, clinicId: p.clinicId }} />
           <TaskDrawer taskId={Number(params.get("task")) || null} onClose={() => setParams({ task: null })} />
         </>

@@ -200,7 +200,12 @@ export const handler = async (event: any, context: any) => {
   }
   if (event && event.__job === "ringcentral-sync" && !event.requestContext && !event.version) {
     const { runRingCentralSync } = await import("../ringcentralSync");
-    return runRingCentralSync({ maxRequests: 8, maxMs: 22_000, manual: false });
+    const started = Date.now();
+    const sync = await runRingCentralSync({ maxRequests: 8, maxMs: 20_000, manual: false });
+    // Faxes sent from MyPCP: has RingCentral sent them yet?
+    const { refreshFaxStatuses } = await import("../faxSendDb");
+    const faxes = await refreshFaxStatuses({ deadline: started + 26_000 }).catch((e) => ({ error: String(e?.message ?? e).slice(0, 120) }));
+    return { ...sync, faxes };
   }
   return httpHandler(event, context);
 };

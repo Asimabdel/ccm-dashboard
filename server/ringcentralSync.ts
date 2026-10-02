@@ -116,7 +116,7 @@ async function extensions(token: string) {
   return byId;
 }
 
-async function loadCredentials() {
+export async function loadCredentials() {
   const cfg = await readSetting<StoredConfig>(CONFIG_KEY);
   if (!cfg?.clientId || !cfg.clientSecretEnc || !cfg.jwtEnc) return null;
   return { enabled: cfg.enabled, clientId: cfg.clientId, clientSecret: openSecret(cfg.clientSecretEnc), jwt: openSecret(cfg.jwtEnc) };

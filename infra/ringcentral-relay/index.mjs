@@ -85,12 +85,14 @@ export const handler = async (event) => {
   const headers = {};
   for (const [k, v] of Object.entries(event.headers ?? {})) if (FORWARD_HEADERS.includes(k.toLowerCase())) headers[k] = String(v);
   try {
-    const res = await fetch(url, { method, headers, body: method === "POST" ? String(event.body ?? "") : undefined, signal: AbortSignal.timeout(20_000) });
-    const body = await res.text();
-    if (body.length > MAX_BODY) return { status: 502, body: "The response was too large for the relay." };
+    // bodyBase64: a binary body (a fax's multipart upload); otherwise plain text/JSON.
+    const body = method !== "POST" ? undefined : typeof event.bodyBase64 === "string" ? Buffer.from(event.bodyBase64, "base64") : String(event.body ?? "");
+    const res = await fetch(url, { method, headers, body, signal: AbortSignal.timeout(25_000) });
+    const text = await res.text();
+    if (text.length > MAX_BODY) return { status: 502, body: "The response was too large for the relay." };
     const out = { "content-type": res.headers.get("content-type") ?? "application/json" };
     for (const h of RETURN_HEADERS) { const v = res.headers.get(h); if (v && h !== "content-type") out[h] = v; }
-    return { status: res.status, headers: out, body };
+    return { status: res.status, headers: out, body: text };
   } catch {
     return { status: 504, body: "The service didn't respond." };
   }

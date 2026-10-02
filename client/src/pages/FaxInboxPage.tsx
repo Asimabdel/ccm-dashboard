@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
-import { Ban, CheckCircle2, Eye, ExternalLink, FileCheck2, Inbox, Loader2, Printer, Search, Sparkles, UserCheck } from "lucide-react";
+import { Ban, BookUser, CheckCircle2, Eye, ExternalLink, FileCheck2, Forward, Inbox, Loader2, Printer, Search, Send, Sparkles, UserCheck } from "lucide-react";
+import { SendFaxDialog, type SendFaxPreset } from "@/components/fax/SendFaxDialog";
+import { FaxContacts, SentFaxes } from "@/components/fax/SentFaxes";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { useWorkspace } from "@/components/workspace/useWorkspace";
@@ -14,12 +16,15 @@ import { formatPhone } from "@shared/phone";
 import { FAX_DOC_TYPES, FAX_DOC_TYPE_KEYS, type FaxDocType } from "@shared/fax";
 
 type Filter = "needs_patient" | "to_file" | "filed" | "not_patient" | "all";
-const TABS: { k: Filter; label: string; icon: React.ElementType }[] = [
+type Tab = Filter | "sent" | "contacts";
+const TABS: { k: Tab; label: string; icon: React.ElementType; sending?: boolean }[] = [
   { k: "needs_patient", label: "Needs a patient", icon: Inbox },
   { k: "to_file", label: "To file", icon: Printer },
   { k: "filed", label: "Filed", icon: FileCheck2 },
   { k: "not_patient", label: "Set aside", icon: Ban },
   { k: "all", label: "All (60 days)", icon: Printer },
+  { k: "sent", label: "Sent", icon: Send, sending: true },
+  { k: "contacts", label: "Contacts", icon: BookUser, sending: true },
 ];
 const fmtTime = (d: Date | string) => new Date(d).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Chicago" });
 const dobText = (s: string | null) => (s ? fmtDay(s, { month: "short", day: "numeric", year: "numeric" }) : null);
@@ -32,8 +37,15 @@ export default function FaxInboxPage() {
   const { user } = useAuth({ redirectOnUnauthenticated: true });
   const ws = useWorkspace();
   const deepLink = typeof window !== "undefined" ? Number(new URLSearchParams(window.location.search).get("fax")) || null : null;
-  const [filter, setFilter] = useState<Filter>(deepLink ? "all" : "needs_patient");
-  const list = trpc.workspace.fax.list.useQuery({ filter }, { enabled: !!user && !!ws.caps?.emailTriage, refetchInterval: 60_000 });
+  const inbox = !!ws.caps?.emailTriage;
+  const sending = !!ws.caps?.sendFax;
+  const [tab, setTab] = useState<Tab>(deepLink ? "all" : "needs_patient");
+  // People who send faxes but don't work the inbox start on Sent.
+  useEffect(() => { if (ws.caps && !inbox && sending && !TABS.find((t) => t.k === tab)?.sending) setTab("sent"); }, [ws.caps, inbox, sending, tab]);
+  const filter: Filter = (TABS.find((t) => t.k === tab)?.sending ? "needs_patient" : tab) as Filter;
+  const receivedTab = !TABS.find((t) => t.k === tab)?.sending;
+  const list = trpc.workspace.fax.list.useQuery({ filter }, { enabled: !!user && inbox && receivedTab, refetchInterval: 60_000 });
+  const [sendOpen, setSendOpen] = useState<SendFaxPreset | null>(null);
   const utils = trpc.useUtils();
   const refresh = () => { void utils.workspace.fax.invalidate(); void utils.workspace.tasks.invalidate(); };
   const onError = (e: { message: string }) => toast.error(e.message);
@@ -63,24 +75,28 @@ export default function FaxInboxPage() {
 
   const rows = list.data ?? [];
   return (
-    <CCMDashboardLayout title="Fax inbox" pageTitle={false}>
-      <PageHeader title="Fax inbox" subtitle="Faxes that arrive by email. Confirm the patient, upload the fax to their chart in Practice Fusion (Documents → Upload), then mark it filed." />
-      {ws.caps && !ws.caps.emailTriage && <ErrorNote message="You don't have access to the fax inbox." />}
+    <CCMDashboardLayout title="Faxes" pageTitle={false}>
+      <PageHeader title="Faxes"
+        subtitle={inbox ? "Faxes that arrive by email: confirm the patient, upload the fax to their chart in Practice Fusion (Documents → Upload), then mark it filed. Send faxes through RingCentral from each clinic's fax number." : "Send faxes through RingCentral from your clinic's fax number."}
+        actions={sending ? <Btn onClick={() => setSendOpen({})}><Send size={15} /> Send a fax</Btn> : undefined} />
+      {ws.caps && !inbox && !sending && <ErrorNote message="You don't have access to faxes." />}
       <div className="flex gap-1 mb-5 border-b border-slate-200 dark:border-slate-700 overflow-x-auto" role="tablist">
-        {TABS.map((t) => (
-          <button key={t.k} role="tab" aria-selected={filter === t.k} onClick={() => setFilter(t.k)}
-            className={cn("flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px whitespace-nowrap", filter === t.k ? "border-brand text-slate-900 dark:text-slate-50" : "border-transparent text-slate-500 hover:text-slate-800")}>
+        {TABS.filter((t) => (t.sending ? sending : inbox)).map((t) => (
+          <button key={t.k} role="tab" aria-selected={tab === t.k} onClick={() => setTab(t.k)}
+            className={cn("flex shrink-0 items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px whitespace-nowrap", tab === t.k ? "border-brand text-slate-900 dark:text-slate-50" : "border-transparent text-slate-500 hover:text-slate-800")}>
             <t.icon size={15} /> {t.label}
           </button>
         ))}
       </div>
-      {list.isLoading && <Loading />}
-      {list.error && <ErrorNote message={list.error.message} />}
-      {list.data && rows.length === 0 && (
+      {tab === "sent" && sending && <SentFaxes onSend={() => setSendOpen({})} />}
+      {tab === "contacts" && sending && <FaxContacts />}
+      {receivedTab && list.isLoading && <Loading />}
+      {receivedTab && list.error && <ErrorNote message={list.error.message} />}
+      {receivedTab && list.data && rows.length === 0 && (
         <Panel><EmptyState icon={Printer} title={filter === "needs_patient" ? "Nothing waiting" : "No faxes here"}
           body={filter === "needs_patient" ? "Every fax has been matched to a patient or set aside." : "Faxes show up once the practice mailbox (or a fax mailbox) is connected in Admin → Integrations."} /></Panel>
       )}
-      {rows.length > 0 && (
+      {receivedTab && rows.length > 0 && (
         <Panel bodyClassName="p-0">
           <ul className="divide-y divide-slate-100 dark:divide-slate-700">
             {rows.map((f) => {
@@ -132,6 +148,12 @@ export default function FaxInboxPage() {
                         <Btn size="sm" variant="ghost" disabled={reread.isPending} onClick={() => reread.mutate(f.id)} title="Read this fax with AI again"><Sparkles size={13} /></Btn>
                       )}
                       {waiting && <Btn size="sm" variant="ghost" disabled={aside.isPending} onClick={() => aside.mutate(f.id)}><Ban size={13} /> Not a patient</Btn>}
+                      {sending && f.status !== "new" && (
+                        <Btn size="sm" variant="ghost" title="Fax this on to someone else" onClick={() => setSendOpen({
+                          subjectKey: f.subjectKey, patientName: f.patientName,
+                          attachments: [{ ref: { kind: "fax", id: f.id }, name: f.aiSummary || f.filename || "Fax", size: f.sizeBytes, detail: "Fax we received" }],
+                        })}><Forward size={13} /> Forward</Btn>
+                      )}
                     </div>
                   </div>
                 </li>
@@ -140,6 +162,7 @@ export default function FaxInboxPage() {
           </ul>
         </Panel>
       )}
+      <SendFaxDialog open={!!sendOpen} onOpenChange={(o) => !o && setSendOpen(null)} preset={sendOpen ?? undefined} />
       {picking && <PickDialog fax={picking} busy={assign.isPending} onClose={() => setPicking(null)} onPick={(subjectKey, docType) => assign.mutate({ faxId: picking.id, subjectKey, docType })} />}
       {viewing && (
         <Dialog open onOpenChange={(o) => !o && setViewing(null)}>

@@ -67,6 +67,15 @@ async function docOr404(a: WorkspaceActor, id: number) {
   return doc;
 }
 
+/** A finished document's signed PDF, to fax it: anyone who can see the document, or (from a patient's folder) any staff for that patient's documents. */
+export async function signedPdfForFax(a: WorkspaceActor, id: number, folderKey: string | null) {
+  const [doc] = await (await db()).select().from(documents).where(eq(documents.id, id)).limit(1);
+  const inFolder = !!doc && !!folderKey && doc.subjectKey === folderKey;
+  if (!doc || !(inFolder || (await canView(a, doc)))) throw new WorkspaceError("That document wasn't found.", "NOT_FOUND");
+  if (doc.status !== "completed" || !doc.finalKey) throw new WorkspaceError(`"${doc.title}" isn't signed yet.`);
+  return { bytes: await getBytes(doc.finalKey), title: doc.title };
+}
+
 const pagesOf = (doc: DocRow) => (doc.pages ?? []) as DocPage[];
 const fieldsOf = (doc: DocRow) => cleanFields(doc.fields ?? [], pagesOf(doc));
 

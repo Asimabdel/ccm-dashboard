@@ -1904,6 +1904,53 @@ export const chatMessages = mysqlTable("chatMessages", {
   convIdx: index("chatMessages_conv_idx").on(t.conversationId, t.id),
 }));
 
+/**
+ * Faxes sent from MyPCP through RingCentral (2026-10-02), from the sending clinic's fax number. The files
+ * themselves aren't copied: uploads stay in the private documents bucket, the rest are read from where
+ * they live (folder files, signed documents, received faxes) — so a fax can be sent again.
+ */
+export const outboundFaxes = mysqlTable("outboundFaxes", {
+  id: int("id").autoincrement().primaryKey(),
+  clinicId: int("clinicId").references(() => clinics.id).notNull(),
+  toNumber: varchar("toNumber", { length: 10 }).notNull(),
+  toName: varchar("toName", { length: 160 }).notNull(),
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  patientId: int("patientId").references(() => patients.id),
+  patientName: varchar("patientName", { length: 255 }),
+  coverNote: text("coverNote"),
+  /** What was attached (FaxAttachmentRef[] plus a display name each). */
+  attachments: json("attachments").$type<{ ref: unknown; name: string }[]>().notNull(),
+  pages: int("pages"),
+  /** sending | queued | sent | failed */
+  status: varchar("status", { length: 10 }).default("sending").notNull(),
+  rcMessageId: varchar("rcMessageId", { length: 40 }),
+  rcExtensionId: varchar("rcExtensionId", { length: 40 }),
+  error: varchar("error", { length: 255 }),
+  sentByUserId: int("sentByUserId").references(() => users.id).notNull(),
+  resendOfId: int("resendOfId"),
+  sentAt: datetime("sentAt"),
+  checkedAt: datetime("checkedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  createdIdx: index("outboundFaxes_created_idx").on(t.createdAt),
+  statusIdx: index("outboundFaxes_status_idx").on(t.status),
+  subjectIdx: index("outboundFaxes_subject_idx").on(t.subjectKey),
+}));
+
+/** Fax numbers the practice sends to often (specialists, pharmacies, hospitals). */
+export const faxContacts = mysqlTable("faxContacts", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 160 }).notNull(),
+  faxNumber: varchar("faxNumber", { length: 10 }).notNull(),
+  note: varchar("note", { length: 255 }),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  lastUsedAt: datetime("lastUsedAt"),
+  removedAt: datetime("removedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  numberIdx: index("faxContacts_number_idx").on(t.faxNumber),
+}));
+
 /** Call lists: a patient someone is calling right now is held for them (15 minutes) so nobody else calls. */
 export const outreachLocks = mysqlTable("outreachLocks", {
   id: int("id").autoincrement().primaryKey(),

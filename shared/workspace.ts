@@ -53,6 +53,8 @@ export const WORKSPACE_CAPS = {
   education: ["admin", "office_manager", "staff", "provider", "front_desk", "medical_assistant"],
   /** CCM care plans: see, start and edit them (signing is for providers). Also reads the condition library. */
   carePlans: ["admin", "staff", "provider"],
+  /** Send faxes through RingCentral (everyone with patient access, 2026-10-02). */
+  sendFax: ["admin", "office_manager", "staff", "provider", "front_desk", "medical_assistant"],
   /** Internal messages: direct messages, groups, clinic / team channels, conversations about a patient. */
   messages: ["admin", "office_manager", "staff", "provider", "billing", "front_desk", "medical_assistant"],
   /** Edit the condition library (handouts, talking points, care-plan templates); approving is for providers. */

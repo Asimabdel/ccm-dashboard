@@ -12,13 +12,17 @@ export class EgressError extends Error {
   constructor(message: string, public status: number) { super(message); }
 }
 
-export async function relayFetch(url: string, init: { method?: "GET" | "POST" | "DELETE"; headers?: Record<string, string>; body?: string } = {}): Promise<Response> {
-  if (!process.env.AWS_LAMBDA_FUNCTION_NAME) return fetch(url, init);
+/** Binary bodies (e.g. a fax upload) go through the relay as base64; keep them under ~4 MB (Lambda's 6 MB request cap). */
+export async function relayFetch(url: string, init: { method?: "GET" | "POST" | "DELETE"; headers?: Record<string, string>; body?: string; bodyBytes?: Uint8Array } = {}): Promise<Response> {
+  if (!process.env.AWS_LAMBDA_FUNCTION_NAME) return fetch(url, { method: init.method, headers: init.headers, body: (init.bodyBytes as unknown as BodyInit | undefined) ?? init.body });
   const { LambdaClient, InvokeCommand } = await import("@aws-sdk/client-lambda");
   lambdaClient ??= new LambdaClient({ region: process.env.AWS_REGION ?? "us-east-1" });
   const out = await lambdaClient.send(new InvokeCommand({
     FunctionName: RELAY_FUNCTION,
-    Payload: new TextEncoder().encode(JSON.stringify({ url, method: init.method ?? "GET", headers: init.headers ?? {}, body: init.body ?? null })),
+    Payload: new TextEncoder().encode(JSON.stringify({
+      url, method: init.method ?? "GET", headers: init.headers ?? {},
+      ...(init.bodyBytes ? { bodyBase64: Buffer.from(init.bodyBytes).toString("base64") } : { body: init.body ?? null }),
+    })),
   }));
   if (out.FunctionError || !out.Payload) throw new EgressError("The outbound relay failed.", 502);
   const r = JSON.parse(new TextDecoder().decode(out.Payload)) as { status: number; headers?: Record<string, string>; body: string };
