@@ -8,6 +8,7 @@ import { Btn, inputCls } from "@/components/workspace/ui";
 import { useWorkspace } from "@/components/workspace/useWorkspace";
 import { cn } from "@/lib/utils";
 import { PatientSearchBox, type PickedPatient } from "./PatientSearchBox";
+import { PresenceDot, usePresence } from "./presence";
 
 export type NewConversationMode = "dm" | "group" | "patient";
 
@@ -48,6 +49,7 @@ export function NewConversationDialog({ open, onOpenChange, mode: startMode = "d
   }, [open]);
 
   const people = trpc.workspace.chat.people.useQuery(undefined, { enabled: open, staleTime: 60_000 });
+  const presence = usePresence(open);
   const clinicName = useMemo(() => new Map(clinics.map((c) => [c.id, c.name])), [clinics]);
   const list = (people.data ?? []).filter((p) => p.id !== user?.id && (!q.trim() || (p.name ?? "").toLowerCase().includes(q.trim().toLowerCase())));
 
@@ -126,8 +128,11 @@ export function NewConversationDialog({ open, onOpenChange, mode: startMode = "d
                     {mode !== "dm" && (
                       <span className={cn("flex h-4 w-4 shrink-0 items-center justify-center rounded border", on ? "border-brand bg-brand text-white" : "border-slate-300 dark:border-slate-500")}>{on && <Check size={11} />}</span>
                     )}
-                    <span className="min-w-0 flex-1 truncate font-medium text-slate-800 dark:text-slate-100">{p.name}</span>
-                    <span className="shrink-0 text-xs text-slate-400">{[WORKSPACE_ROLE_LABELS[p.role] ?? p.role, p.clinicId ? clinicName.get(p.clinicId) : null].filter(Boolean).join(" · ")}</span>
+                    <PresenceDot p={presence[p.id]} className="ring-0" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium text-slate-800 dark:text-slate-100">{p.name}</span>
+                      <span className="block truncate text-xs text-slate-400">{[WORKSPACE_ROLE_LABELS[p.role] ?? p.role, p.clinicId ? clinicName.get(p.clinicId) : null, presence[p.id]?.label].filter(Boolean).join(" · ")}</span>
+                    </span>
                   </button>
                 );
               })}

@@ -1869,9 +1869,14 @@ export const chatMembers = mysqlTable("chatMembers", {
   id: int("id").autoincrement().primaryKey(),
   conversationId: int("conversationId").references(() => chatConversations.id).notNull(),
   userId: int("userId").references(() => users.id).notNull(),
+  /** When they last opened it. Null = never opened: unread counts from createdAt. */
   lastReadAt: datetime("lastReadAt"),
+  /** The newest message they've seen (unread = anything after it; read receipts). Times are only to the second. */
+  lastReadMessageId: int("lastReadMessageId"),
   /** Left a group / patient conversation (kept for history). */
   leftAt: datetime("leftAt"),
+  /** Muted: only @mentions of them count as unread / pop up. */
+  muted: boolean("muted").default(false).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (t) => ({
   pairIdx: uniqueIndex("chatMembers_pair_unique").on(t.conversationId, t.userId),
@@ -1883,6 +1888,8 @@ export const chatMessages = mysqlTable("chatMessages", {
   conversationId: int("conversationId").references(() => chatConversations.id).notNull(),
   userId: int("userId").references(() => users.id).notNull(),
   body: text("body").notNull(),
+  /** text, or flow (posted by Patient Flow: "James S. is roomed, ready for the provider"). */
+  kind: varchar("kind", { length: 10 }).default("text").notNull(),
   /** A patient the message is about (shown as a link to their Patient 360). */
   subjectKey: varchar("subjectKey", { length: 120 }),
   patientId: int("patientId").references(() => patients.id),
@@ -1893,4 +1900,27 @@ export const chatMessages = mysqlTable("chatMessages", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (t) => ({
   convIdx: index("chatMessages_conv_idx").on(t.conversationId, t.id),
+}));
+
+/** Who a message @mentions (counted as unread for them even in a muted conversation). */
+export const chatMentions = mysqlTable("chatMentions", {
+  id: int("id").autoincrement().primaryKey(),
+  messageId: int("messageId").references(() => chatMessages.id).notNull(),
+  conversationId: int("conversationId").references(() => chatConversations.id).notNull(),
+  userId: int("userId").references(() => users.id).notNull(),
+  createdAt: datetime("createdAt").notNull(),
+}, (t) => ({
+  pairIdx: uniqueIndex("chatMentions_pair_unique").on(t.messageId, t.userId),
+  userIdx: index("chatMentions_user_idx").on(t.userId, t.conversationId, t.createdAt),
+}));
+
+/** Quick reactions (👍 ✅ 🙏 ❤️ 😂) on a message. */
+export const chatReactions = mysqlTable("chatReactions", {
+  id: int("id").autoincrement().primaryKey(),
+  messageId: int("messageId").references(() => chatMessages.id).notNull(),
+  userId: int("userId").references(() => users.id).notNull(),
+  emoji: varchar("emoji", { length: 16 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  oneIdx: uniqueIndex("chatReactions_one_unique").on(t.messageId, t.userId, t.emoji),
 }));

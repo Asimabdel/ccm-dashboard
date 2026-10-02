@@ -1423,9 +1423,23 @@ export const workspaceRouter = router({
       await actorFor(ctx, "messages");
       return (await chat.staffDirectory()).map((u) => ({ id: u.id, name: u.name, role: u.role, clinicId: u.clinicId }));
     }),
-    get: protectedProcedure.input(z.object({ id: z.number().int().positive(), afterId: z.number().int().positive().optional() })).query(async ({ ctx, input }) => {
+    get: protectedProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "messages");
-      return run(() => chat.conversationDetail(actor, input.id, input.afterId));
+      return run(() => chat.conversationDetail(actor, input.id));
+    }),
+    /** Muted: only @mentions of me count on the badge / pop up. */
+    mute: protectedProcedure.input(z.object({ conversationId: z.number().int().positive(), muted: z.boolean() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.setMuted(actor, input.conversationId, input.muted));
+    }),
+    react: protectedProcedure.input(z.object({ messageId: z.number().int().positive(), emoji: z.string().min(1).max(16) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.react(actor, input.messageId, input.emoji));
+    }),
+    /** Who's in today (time clock, shifts, time off): a dot next to each name. */
+    presence: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "messages");
+      return chat.presence();
     }),
     send: protectedProcedure.input(z.object({ conversationId: z.number().int().positive(), body: z.string().max(4000), subjectKey: patientKey.nullish() })).mutation(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "messages");

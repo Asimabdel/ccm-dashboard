@@ -11,13 +11,14 @@ export const popupsSupported = () => typeof window !== "undefined" && "Notificat
 /**
  * Unread internal messages for the top bar and sidebar (checked every 15 seconds), plus a browser
  * pop-up when a new one arrives. The pop-up names only the sender: never the message, and never a
- * conversation title (a conversation about a patient is named after them).
+ * conversation title (a conversation about a patient is named after them). Muted conversations only
+ * count (and pop up for) @mentions of you.
  */
 export function useUnreadMessages(enabled: boolean): number {
   const [location, setLocation] = useLocation();
   const q = trpc.workspace.chat.unread.useQuery(undefined, { enabled, refetchInterval: 15_000, refetchIntervalInBackground: true, staleTime: 10_000 });
   const newest = q.data?.newest ?? null;
-  const stamp = newest ? `${newest.conversationId}|${new Date(newest.at).getTime()}` : null;
+  const stamp = newest ? String(newest.messageId) : null;
 
   useEffect(() => {
     if (!q.data) return;
@@ -29,8 +30,10 @@ export function useUnreadMessages(enabled: boolean): number {
     if (document.visibilityState === "visible" && location.startsWith("/messages")) return;
     if (!popupsSupported() || Notification.permission !== "granted" || !newest) return;
     try {
-      const n = new Notification("New message in MyPCP", {
-        body: newest.from ? `From ${newest.from}` : "Open MyPCP to read it.",
+      // Never the message or the patient: just who, and whether it's a mention or a "patient ready".
+      const from = newest.from ?? "Someone";
+      const n = new Notification(newest.flow ? "A patient is ready" : newest.mention ? "You were mentioned" : "New message in MyPCP", {
+        body: newest.flow ? `From ${from}. Open MyPCP to see who.` : newest.mention ? `${from} mentioned you.` : `From ${from}`,
         tag: "mypcp-message",
         icon: "/icon-192.png",
       });

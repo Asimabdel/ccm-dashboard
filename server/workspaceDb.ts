@@ -981,6 +981,15 @@ export async function moveAppointment(actor: WorkspaceActor, input: { appointmen
   }
   scheduleCache.clear();
   await audit(actor, "update_appointment", { entityType: "appointment", entityId: a.id, description: `${a.status} -> ${input.to}` });
+  // Roomed today: tell the provider's team in Messages ("James S. is in Room 3, ready for @Dr Chen").
+  if (input.to === "roomed" && a.status !== "roomed" && a.date === localDateStr()) {
+    try {
+      const { postFlowPing } = await import("./chatDb");
+      await postFlowPing(actor, { providerId: a.providerId, providerName: a.providerName, clinicId: a.clinicId, patientId: a.patientId, patientName: a.patientName, dateOfBirth: a.dateOfBirth, room: input.room !== undefined ? input.room : a.room });
+    } catch (e) {
+      console.warn("[Flow] message to the provider's team failed:", e);
+    }
+  }
   return { from: a.status, to: input.to };
 }
 

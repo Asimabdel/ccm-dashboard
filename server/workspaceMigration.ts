@@ -934,6 +934,27 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     CONSTRAINT \`chatMessages_conversationId_fk\` FOREIGN KEY (\`conversationId\`) REFERENCES \`chatConversations\`(\`id\`),
     CONSTRAINT \`chatMessages_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`),
     CONSTRAINT \`chatMessages_patientId_fk\` FOREIGN KEY (\`patientId\`) REFERENCES \`patients\`(\`id\`))` },
+  // Messages: @mentions and reactions (added 2026-10-02).
+  { label: "chatMentions", sql: `CREATE TABLE IF NOT EXISTS \`chatMentions\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`messageId\` int NOT NULL,
+    \`conversationId\` int NOT NULL,
+    \`userId\` int NOT NULL,
+    \`createdAt\` datetime NOT NULL,
+    UNIQUE KEY \`chatMentions_pair_unique\` (\`messageId\`, \`userId\`),
+    INDEX \`chatMentions_user_idx\` (\`userId\`, \`conversationId\`, \`createdAt\`),
+    CONSTRAINT \`chatMentions_messageId_fk\` FOREIGN KEY (\`messageId\`) REFERENCES \`chatMessages\`(\`id\`),
+    CONSTRAINT \`chatMentions_conversationId_fk\` FOREIGN KEY (\`conversationId\`) REFERENCES \`chatConversations\`(\`id\`),
+    CONSTRAINT \`chatMentions_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`))` },
+  { label: "chatReactions", sql: `CREATE TABLE IF NOT EXISTS \`chatReactions\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`messageId\` int NOT NULL,
+    \`userId\` int NOT NULL,
+    \`emoji\` varchar(16) NOT NULL,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    UNIQUE KEY \`chatReactions_one_unique\` (\`messageId\`, \`userId\`, \`emoji\`),
+    CONSTRAINT \`chatReactions_messageId_fk\` FOREIGN KEY (\`messageId\`) REFERENCES \`chatMessages\`(\`id\`),
+    CONSTRAINT \`chatReactions_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`))` },
 ];
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
@@ -1058,6 +1079,10 @@ const INTAKE_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: "emailMessages", column: "aiError", ddl: "`aiError` varchar(255) NULL AFTER `aiAt`" },
   { table: "emailMessages", column: "suggestedKey", ddl: "`suggestedKey` varchar(120) NULL AFTER `aiError`" },
   { table: "emailMessages", column: "suggestedName", ddl: "`suggestedName` varchar(255) NULL AFTER `suggestedKey`" },
+  // Added 2026-10-02: Messages — mute a conversation; messages posted by Patient Flow.
+  { table: "chatMembers", column: "muted", ddl: "`muted` boolean NOT NULL DEFAULT false AFTER `leftAt`" },
+  { table: "chatMessages", column: "kind", ddl: "`kind` varchar(10) NOT NULL DEFAULT 'text' AFTER `body`" },
+  { table: "chatMembers", column: "lastReadMessageId", ddl: "`lastReadMessageId` int NULL AFTER `lastReadAt`" },
 ];
 async function upgradeIntake(db: Db): Promise<string[]> {
   const applied: string[] = [];
@@ -1190,7 +1215,22 @@ export async function runWorkspaceMigration(): Promise<string[]> {
   applied.push(...(await upgradeShifts(db)));
   applied.push(...(await upgradePhoneCalls(db)));
   applied.push(...(await upgradeEmailMessages(db)));
-  applied.push(...(await upgradeIntake(db)));
+  const upgraded = await upgradeIntake(db);
+  applied.push(...upgraded);
+  // Once, with the Messages mute column (2026-10-02): channel read positions set just by loading MyPCP (not by
+  // opening the channel) become "not opened yet", so read receipts only count people who really read it.
+  if (upgraded.includes("chatMembers.muted added")) {
+    await db.execute(sql`UPDATE chatMembers mb JOIN chatConversations c ON c.id = mb.conversationId SET mb.lastReadAt = NULL
+      WHERE c.kind IN ('everyone', 'clinic', 'team') AND mb.lastReadAt = mb.createdAt`);
+    applied.push("chatMembers read positions reset");
+  }
+  // Once, with lastReadMessageId: what each person had already read, by message (not just by time).
+  if (upgraded.includes("chatMembers.lastReadMessageId added")) {
+    await db.execute(sql`UPDATE chatMembers mb SET mb.lastReadMessageId = (SELECT MAX(m.id) FROM chatMessages m WHERE m.conversationId = mb.conversationId AND m.createdAt <= mb.lastReadAt)
+      WHERE mb.lastReadAt IS NOT NULL`);
+    await db.execute(sql`UPDATE chatMembers SET lastReadMessageId = 0 WHERE lastReadAt IS NOT NULL AND lastReadMessageId IS NULL`);
+    applied.push("chatMembers read messages filled in");
+  }
   applied.push(...(await ensureMetricIndexes(db)));
   const seeded = await seedPlaybooksIfEmpty(db);
   if (seeded) applied.push(seeded);
