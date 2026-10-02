@@ -10,6 +10,7 @@ import {
   statusBadgeClass, currentMonthStr, fmtDate,
   PROGRAM_LABELS, programBadgeClass, type Program,
 } from "@/lib/ccm";
+import { PhoneLink } from "@/components/phone/PhoneLink";
 
 export default function WorklistPage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
@@ -163,6 +164,7 @@ export default function WorklistPage() {
               <tr className="text-left text-xs uppercase tracking-wider text-slate-400 border-b border-slate-100 bg-slate-50/50">
                 {isStaff && <th className="px-3 py-2.5 w-10"></th>}
                 <th className="px-4 py-2.5 font-medium">Patient</th>
+                <th className="px-4 py-2.5 font-medium">Phone</th>
                 <th className="px-4 py-2.5 font-medium">Provider</th>
                 <th
                   onClick={() => setLastCalledSort((d) => (d === "none" ? "asc" : d === "asc" ? "desc" : "none"))}
@@ -180,8 +182,8 @@ export default function WorklistPage() {
               </tr>
             </thead>
             <tbody>
-              {worklistLoading && <tr><td colSpan={8} className="px-5 py-12 text-center"><Loader2 className="animate-spin text-slate-300 mx-auto" /></td></tr>}
-              {!worklistLoading && rows.length === 0 && <tr><td colSpan={8} className="px-5 py-12 text-center text-slate-400 font-light">{filtersActive ? "No patients match your search or filters." : program === "bhi" ? "No BHI patients enrolled for this month. Enroll patients in BHI from their patient page." : "No tasks for this month. An admin can generate the worklist from the Admin Dashboard."}</td></tr>}
+              {worklistLoading && <tr><td colSpan={9} className="px-5 py-12 text-center"><Loader2 className="animate-spin text-slate-300 mx-auto" /></td></tr>}
+              {!worklistLoading && rows.length === 0 && <tr><td colSpan={9} className="px-5 py-12 text-center text-slate-400 font-light">{filtersActive ? "No patients match your search or filters." : program === "bhi" ? "No BHI patients enrolled for this month. Enroll patients in BHI from their patient page." : "No tasks for this month. An admin can generate the worklist from the Admin Dashboard."}</td></tr>}
               {rows.map((r) => (
                 <tr key={r.task.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60">
                   {isStaff && (
@@ -195,6 +197,11 @@ export default function WorklistPage() {
                       )}
                     </p>
                     <p className="text-xs text-slate-400">{r.clinicName} - {r.staffName || "Unassigned"}</p>
+                  </td>
+                  <td className="px-4 py-2 whitespace-nowrap">
+                    {r.patient.phoneNumber
+                      ? <PhoneLink phone={r.patient.phoneNumber} context={{ patientId: r.patient.id, name: r.patient.name, source: "ccm_call" }} className="font-medium text-slate-700" />
+                      : <span className="text-slate-300">—</span>}
                   </td>
                   <td className="px-4 py-2 text-slate-600">{r.providerName || "-"}</td>
                   <td className="px-4 py-2 text-slate-600 whitespace-nowrap font-mono text-xs tabular-nums">{fmtDate(r.patient.lastCalledAt)}</td>
