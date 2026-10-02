@@ -355,10 +355,14 @@ async function loadBatch(resources: FhirResource[], ctx: LoadCtx) {
     const info = patientInfo(r);
     const prev = ctx.byFhirPatient.get(info.fhirId);
     const m = ctx.match(info.name, info.dob);
-    const key = m?.sure ? m.person.key : prev && !prev.key.startsWith("f:") ? prev.key : `f:${info.fhirId}`;
+    // A link to a CCM-roster record stays: Record matching, merges and staff confirmations made it, and
+    // the roster spelling can differ from Practice Fusion's (re-matching by name + DOB would undo it).
+    const key = prev?.key.startsWith("p:") ? prev.key : m?.sure ? m.person.key : prev && !prev.key.startsWith("f:") ? prev.key : `f:${info.fhirId}`;
     const patientId = key.startsWith("p:") ? Number(key.slice(2)) : null;
     ptRows.push({ fhirId: info.fhirId, subjectKey: key, patientId, name: cut(info.name, 255), dob: info.dob, sex: info.sex, phone: info.phone, email: info.email, address: info.address, mrn: info.mrn, syncedAt: ctx.syncedAt });
-    if (prev && prev.key !== key) await d.update(fhirResources).set({ subjectKey: key }).where(eq(fhirResources.patientFhirId, info.fhirId));
+    // Re-key their chart rows through the subjectKey index (patientFhirId has none: a lookup by it alone
+    // scans the whole chart table and ran past the Lambda's 30 seconds).
+    if (prev && prev.key !== key) await d.update(fhirResources).set({ subjectKey: key }).where(and(eq(fhirResources.subjectKey, prev.key), eq(fhirResources.patientFhirId, info.fhirId)));
     ctx.byFhirPatient.set(info.fhirId, { key, patientId });
     // Sex for the testing tracker (staff corrections win) and the email address for patient emails.
     if (info.sex && !ctx.manualSex.has(key)) sexRows.push({ subjectKey: key, patientId, sex: info.sex, source: "import" });
