@@ -130,6 +130,16 @@ export const handler = async (event: any, context: any) => {
     const { pfDocProbe } = await import("../pfDocStats");
     return pfDocProbe({ deadline: Date.now() + 22_000 });
   }
+  // Provider teams = the provider + the MAs at their clinic (IAM-only; dry run unless apply; staff names only).
+  if (event && event.__job === "provider-teams-auto" && !event.requestContext && !event.version) {
+    const { autoProviderTeams } = await import("../emailRouting");
+    return autoProviderTeams({ apply: event.apply === true });
+  }
+  // Re-route patient emails already in the system (IAM-only; dry run unless apply; counts only).
+  if (event && event.__job === "email-routing-refresh" && !event.requestContext && !event.version) {
+    const { refreshEmailRouting } = await import("../emailRouting");
+    return refreshEmailRouting({ apply: event.apply === true, days: Math.min(Number(event.days) || 14, 60), deadline: Date.now() + 22_000 });
+  }
   // Complete care plans started before the specialized templates (IAM-only; dry run unless apply; counts only).
   if (event && event.__job === "careplan-refresh" && !event.requestContext && !event.version) {
     const { refreshPlans } = await import("../carePlansDb");

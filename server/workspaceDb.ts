@@ -147,7 +147,20 @@ export async function providerTeamAssignee(subjectKey: string) {
     providerId = s?.providerId ?? null;
     clinicId = clinicId ?? s?.clinicId ?? null;
   }
+  if (!providerId) {
+    // Anyone else (e.g. only in Practice Fusion): the provider of their latest visit.
+    const { directoryEntry } = await import("./directoryDb");
+    const e = await directoryEntry(subjectKey);
+    providerId = e?.providerId ?? null;
+    clinicId = clinicId ?? e?.clinicId ?? null;
+  }
   if (!providerId) return null;
+  return teamAssigneeFor(providerId, clinicId);
+}
+
+/** A provider's team queue as an assignee, when the team has members. */
+export async function teamAssigneeFor(providerId: number, clinicId: number | null) {
+  const d = await db();
   const [members] = await d.select({ n: sql<number>`count(*)` }).from(providerTeamMembers).where(eq(providerTeamMembers.providerId, providerId));
   if (!Number(members?.n ?? 0)) return null;
   const [prov] = await d.select({ name: providers.name, clinicId: providers.clinicId }).from(providers).where(eq(providers.id, providerId)).limit(1);
@@ -1085,7 +1098,7 @@ export async function loadScheduleSubjects(): Promise<Map<string, ScheduleSubjec
   return subjects;
 }
 
-/** Every known patient phone number (last 10 digits): CCM roster first, then the imported schedule. */
+/** Every known patient phone number (last 10 digits): CCM roster first, then the imported schedule, then Practice Fusion. */
 export async function buildPhoneIndex(): Promise<Map<string, { key: string; patientId: number | null; name: string }>> {
   const d = await db();
   const out = new Map<string, { key: string; patientId: number | null; name: string }>();
@@ -1097,10 +1110,14 @@ export async function buildPhoneIndex(): Promise<Map<string, { key: string; pati
     const n = normalizePhone(s.phone);
     if (n && !out.has(n)) out.set(n, { key: s.key, patientId: s.patientId, name: s.name });
   }
+  for (const f of await d.select({ key: fhirPatients.subjectKey, patientId: fhirPatients.patientId, name: fhirPatients.name, phone: fhirPatients.phone }).from(fhirPatients)) {
+    const n = normalizePhone(f.phone);
+    if (n && f.name && !out.has(n)) out.set(n, { key: f.key, patientId: f.patientId, name: f.name });
+  }
   return out;
 }
 
-/** Everyone an email could be from, by full name (roster + imported schedule); more than one = ambiguous. */
+/** Everyone an email could be from, by full name (roster + imported schedule + Practice Fusion); more than one = ambiguous. */
 export async function buildNameIndex(): Promise<Map<string, { key: string; patientId: number | null; name: string }[]>> {
   const d = await db();
   const out = new Map<string, { key: string; patientId: number | null; name: string }[]>();
@@ -1113,6 +1130,10 @@ export async function buildNameIndex(): Promise<Map<string, { key: string; patie
   };
   for (const p of await d.select({ id: patients.id, name: patients.name }).from(patients)) add(p.name, { key: `p:${p.id}`, patientId: p.id, name: p.name });
   for (const s of Array.from((await loadScheduleSubjects()).values())) if (!s.patientId) add(s.name, { key: s.key, patientId: null, name: s.name });
+  // Practice Fusion patients (a linked one has the roster key, so it isn't counted twice).
+  for (const f of await d.select({ key: fhirPatients.subjectKey, patientId: fhirPatients.patientId, name: fhirPatients.name }).from(fhirPatients)) {
+    if (f.name) add(f.name, { key: f.key, patientId: f.patientId, name: f.name });
+  }
   return out;
 }
 

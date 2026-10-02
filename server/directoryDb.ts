@@ -177,7 +177,7 @@ async function buildDirectory(): Promise<Map<string, DirectoryEntry>> {
   }
   const pfOnly = await d.select({ key: fhirResources.subjectKey, date: fhirResources.date, value: fhirResources.value })
     .from(fhirResources)
-    .where(and(eq(fhirResources.section, "Encounter"), like(fhirResources.subjectKey, "f:%"), lte(fhirResources.date, today), realVisit));
+    .where(and(eq(fhirResources.section, "Encounter"), isNotNull(fhirResources.subjectKey), lte(fhirResources.date, today), realVisit));
   const latest = new Map<string, { date: string; who: string | null }>();
   for (const v of pfOnly) {
     if (!v.key || !v.date) continue;
@@ -188,7 +188,8 @@ async function buildDirectory(): Promise<Map<string, DirectoryEntry>> {
   for (const [key, v] of Array.from(latest.entries())) {
     const e = out.get(key);
     const prov = findProvider(v.who);
-    if (!e || !prov) continue;
+    // The roster's or the schedule's provider wins; the latest Practice Fusion visit fills a gap.
+    if (!e || !prov || e.providerId) continue;
     e.providerId = prov.id;
     e.providerName = prov.name;
     e.clinicId ??= prov.clinicId ?? null;

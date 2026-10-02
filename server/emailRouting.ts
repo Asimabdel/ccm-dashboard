@@ -1,0 +1,133 @@
+// Where patient emails go (the practice's choices, 2026-10-02):
+// - a matched patient → their provider's team (the provider + the MAs on the team; Admin → Providers);
+// - matched, but no provider team → the MAs at the patient's clinic;
+// - not matched to anyone → the time-off approver (Asim) as a "Who is this?" task; picking the patient
+//   on Patient emails moves that task to the patient's provider team.
+// Plus the one-time jobs: fill each provider's team with the MAs at their clinic, and re-route
+// the emails already waiting.
+import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { getDb } from "./db";
+import { clinics, emailMessages, providerTeamMembers, providers, shifts, staffProfiles, users, workTaskActivities, workTasks } from "../drizzle/schema";
+import { addDays, localDateStr } from "../shared/workforce";
+import { subjectCare, providerTeamAssignee } from "./workspaceDb";
+
+async function db() {
+  const d = await getDb();
+  if (!d) throw new Error("Database not available");
+  return d;
+}
+
+export interface EmailAssignee { assignedUserId: number | null; assignedRole: string | null; clinicId: number | null; who: string }
+
+/** Unmatched mail goes to the time-off approver (Asim); with none set, the admins' queue. */
+export async function unmatchedAssignee(): Promise<EmailAssignee> {
+  const { getTimeOffApprover } = await import("./workforceDb");
+  const a = await getTimeOffApprover();
+  return a ? { assignedUserId: a.userId, assignedRole: null, clinicId: null, who: a.name ?? "the approver" } : { assignedUserId: null, assignedRole: "admin", clinicId: null, who: "the admins" };
+}
+
+/** A matched patient's email: their provider's team → the MAs at their clinic → the unmatched-mail person. */
+export async function emailAssignee(subjectKey: string): Promise<EmailAssignee> {
+  const team = await providerTeamAssignee(subjectKey);
+  if (team) return team;
+  const { directoryEntry } = await import("./directoryDb");
+  const clinicId = (await directoryEntry(subjectKey))?.clinicId ?? (await subjectCare(subjectKey))?.clinicId ?? null;
+  if (clinicId) {
+    const [c] = await (await db()).select({ name: clinics.name }).from(clinics).where(eq(clinics.id, clinicId)).limit(1);
+    return { assignedUserId: null, assignedRole: "medical_assistant", clinicId, who: `the MAs at ${c?.name ?? "their clinic"}` };
+  }
+  return unmatchedAssignee();
+}
+
+// ---------------------------------------------------------------------------
+// One-time: provider teams = the provider + the MAs at the provider's clinic
+// ---------------------------------------------------------------------------
+
+/** IAM-only. Dry run unless apply. Keeps anyone already on a team. Names only (staff, not patients). */
+export async function autoProviderTeams(opts: { apply: boolean }) {
+  const d = await db();
+  const provs = await d.select({ id: providers.id, name: providers.name, clinicId: providers.clinicId, userId: providers.userId }).from(providers);
+  const mas = await d.select({ id: users.id, name: users.name, clinicId: staffProfiles.homeClinicId, active: staffProfiles.active })
+    .from(users).innerJoin(staffProfiles, eq(staffProfiles.userId, users.id)).where(eq(users.role, "medical_assistant"));
+  const existing = await d.select({ providerId: providerTeamMembers.providerId, userId: providerTeamMembers.userId }).from(providerTeamMembers);
+  const have = new Set(existing.map((x) => `${x.providerId}|${x.userId}`));
+  const clinicName = new Map((await d.select({ id: clinics.id, name: clinics.name }).from(clinics)).map((c) => [c.id, c.name]));
+  const from = addDays(localDateStr(), -30), to = addDays(localDateStr(), 30);
+  const report: { provider: string; clinic: string | null; clinicFrom: string; team: string[]; adding: number }[] = [];
+  const noClinic: string[] = [];
+  let added = 0;
+  for (const p of provs) {
+    // Their clinic: the provider record's, else where their shifts are, else their Workforce home clinic.
+    let clinicId = p.clinicId, clinicFrom = "provider record";
+    if (!clinicId && p.userId) {
+      const [top] = await d.select({ clinicId: shifts.clinicId, n: sql<number>`count(*)` }).from(shifts)
+        .where(and(eq(shifts.userId, p.userId), gte(shifts.date, from), sql`${shifts.date} <= ${to}`)).groupBy(shifts.clinicId).orderBy(desc(sql`count(*)`)).limit(1);
+      if (top?.clinicId) { clinicId = top.clinicId; clinicFrom = "their shifts"; }
+      if (!clinicId) {
+        const [home] = await d.select({ clinicId: staffProfiles.homeClinicId }).from(staffProfiles).where(eq(staffProfiles.userId, p.userId)).limit(1);
+        if (home?.clinicId) { clinicId = home.clinicId; clinicFrom = "Workforce home clinic"; }
+      }
+    }
+    if (!clinicId) { noClinic.push(p.name); continue; }
+    const team = mas.filter((m) => m.active && m.clinicId === clinicId);
+    const adding = team.filter((m) => !have.has(`${p.id}|${m.id}`));
+    if (opts.apply && adding.length) {
+      await d.insert(providerTeamMembers).values(adding.map((m) => ({ providerId: p.id, userId: m.id })));
+      for (const m of adding) have.add(`${p.id}|${m.id}`);
+    }
+    added += adding.length;
+    report.push({ provider: p.name, clinic: clinicName.get(clinicId) ?? null, clinicFrom, team: team.map((m) => m.name ?? `#${m.id}`), adding: adding.length });
+  }
+  return { applied: opts.apply, membersAdded: added, teams: report, providersWithoutClinic: noClinic };
+}
+
+// ---------------------------------------------------------------------------
+// One-time: re-route emails already in the system
+// ---------------------------------------------------------------------------
+
+/**
+ * IAM-only. Dry run unless apply. (1) Waiting emails from the last `days` are matched again (now also
+ * against Practice Fusion's addresses, names and phones) and routed; (2) still-unmatched ones get a
+ * "Who is this?" task; (3) open, untouched email tasks move to the patient's provider team / clinic MAs.
+ * Counts only.
+ */
+export async function refreshEmailRouting(opts: { apply: boolean; days: number; deadline: number }) {
+  const d = await db();
+  const since = new Date(Date.now() - opts.days * 86_400_000);
+  const g = await import("./gmailSync");
+  const counts = { rematched: 0, whoIsThisTasks: 0, stillWaiting: 0, reroutedTasks: 0, toTeams: 0, toClinicMas: 0, toApprover: 0, done: true };
+  // 1 + 2: waiting emails.
+  const waiting = await d.select().from(emailMessages).where(and(eq(emailMessages.status, "needs_patient"), eq(emailMessages.historical, false), gte(emailMessages.receivedAt, since)));
+  const idx = waiting.length ? await g.matchIndex() : null;
+  for (const m of waiting) {
+    if (Date.now() > opts.deadline) { counts.done = false; break; }
+    const r = await g.routeWaitingEmail(m, idx!, opts.apply);
+    if (r === "matched") counts.rematched++;
+    else if (r === "task") counts.whoIsThisTasks++;
+    else counts.stillWaiting++;
+  }
+  // 3: open email tasks nobody has touched.
+  const open = await d.select({ t: workTasks, subjectKey: emailMessages.subjectKey }).from(workTasks)
+    .innerJoin(emailMessages, eq(emailMessages.taskId, workTasks.id))
+    .where(and(eq(workTasks.sourceType, "email"), eq(workTasks.status, "open"), gte(workTasks.createdAt, since), eq(emailMessages.status, "assigned")));
+  for (const { t, subjectKey } of open) {
+    if (Date.now() > opts.deadline) { counts.done = false; break; }
+    if (!subjectKey) continue;
+    const touched = await d.select({ id: workTaskActivities.id }).from(workTaskActivities)
+      .where(and(eq(workTaskActivities.taskId, t.id), inArray(workTaskActivities.type, ["comment", "status_changed"]))).limit(1);
+    if (touched.length) continue;
+    const who = await emailAssignee(subjectKey);
+    if (who.assignedUserId === t.assignedUserId && who.assignedRole === t.assignedRole) continue;
+    if (opts.apply) {
+      await d.update(workTasks).set({ assignedUserId: who.assignedUserId, assignedRole: who.assignedUserId ? null : who.assignedRole, clinicId: who.clinicId ?? t.clinicId }).where(eq(workTasks.id, t.id));
+      await d.insert(workTaskActivities).values({ taskId: t.id, userId: t.createdByUserId, type: "assigned", meta: { to: who.assignedUserId ? String(who.assignedUserId) : who.assignedRole, reason: "email routing" } });
+      await d.update(emailMessages).set({ assignedUserId: who.assignedUserId }).where(eq(emailMessages.taskId, t.id));
+    }
+    counts.reroutedTasks++;
+    if (who.assignedRole?.startsWith("team:")) counts.toTeams++;
+    else if (who.assignedRole === "medical_assistant") counts.toClinicMas++;
+    else counts.toApprover++;
+  }
+  return { applied: opts.apply, days: opts.days, waitingChecked: waiting.length, openTasksChecked: open.length, ...counts };
+}
+

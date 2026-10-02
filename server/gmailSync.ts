@@ -16,7 +16,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { and, asc, desc, eq, gte, inArray } from "drizzle-orm";
 import { getDb } from "./db";
 import { ENV } from "./_core/env";
-import { appSettings, emailContacts, emailMessages, faxes, users, workTaskActivities, workTasks } from "../drizzle/schema";
+import { appSettings, emailContacts, emailMessages, faxes, fhirPatients, users, workTaskActivities, workTasks } from "../drizzle/schema";
 import { gmailMessageLink, matchEmailSender, parseFromHeader, stripQuotedText, type EmailMatchIndex, type EmailSubject } from "../shared/email";
 import { isFaxEmail, isFaxFile, type FaxAttachment } from "../shared/fax";
 import { nameKey, parseCsvRows, parseDateValue } from "../shared/workspace";
@@ -26,6 +26,7 @@ import { relayFetch } from "./egress";
 import {
   WorkspaceError, audit, buildNameDobIndex, buildNameIndex, buildPhoneIndex, careTeamAssignee, clinicOfSubjects, createTask, inClinics, providerTeamAssignee, searchSubjects, subjectCare, type WorkspaceActor,
 } from "./workspaceDb";
+import { emailAssignee, unmatchedAssignee } from "./emailRouting";
 
 /** "practice" = the practice mailbox (patient emails + faxes); "fax" = an optional fax-only mailbox. */
 export type MailSlot = "practice" | "fax";
@@ -343,11 +344,25 @@ export async function mailboxAddress(slot: MailSlot) {
 async function buildIndex(): Promise<EmailMatchIndex> {
   const d = await db();
   const byEmail = new Map<string, EmailSubject | "ignore">();
+  // Practice Fusion's patient email addresses first (an address shared by two patients isn't used)...
+  const pf = new Map<string, EmailSubject[]>();
+  for (const f of await d.select({ key: fhirPatients.subjectKey, patientId: fhirPatients.patientId, name: fhirPatients.name, email: fhirPatients.email }).from(fhirPatients)) {
+    const email = f.email ? parseFromHeader(f.email).email : null;
+    if (!email || !f.name) continue;
+    const list = pf.get(email) ?? [];
+    if (!list.some((x) => x.key === f.key)) list.push({ key: f.key, patientId: f.patientId, name: f.name });
+    pf.set(email, list);
+  }
+  for (const [email, list] of Array.from(pf.entries())) if (list.length === 1) byEmail.set(email, list[0]!);
+  // ...then remembered/imported addresses, which win (staff decisions).
   for (const c of await d.select().from(emailContacts)) {
     byEmail.set(c.email, c.kind === "ignore" ? "ignore" : { key: c.subjectKey ?? `p:${c.patientId}`, patientId: c.patientId, name: c.name ?? "Patient" });
   }
   return { byEmail, byName: await buildNameIndex(), byPhone: await buildPhoneIndex() };
 }
+
+/** The matching index (for the one-time re-routing job). */
+export const matchIndex = buildIndex;
 
 function taskText(m: { fromName: string | null; fromEmail: string | null; subject: string | null; receivedAt: Date; preview: string | null; link: string; method: string }, patientName: string) {
   const who = m.fromName ? `${m.fromName} <${m.fromEmail}>` : m.fromEmail ?? "unknown sender";
@@ -366,9 +381,55 @@ export async function systemActor(slot: MailSlot = "practice"): Promise<Workspac
   return { id: u.id, name: "Practice mailbox", role: "admin", clinicIds: null };
 }
 
-/** Who a patient's email goes to: their provider's team once it's set up (Admin → Providers), else care coordinator → front desk. */
-async function emailAssignee(subjectKey: string) {
-  return (await providerTeamAssignee(subjectKey)) ?? (await careTeamAssignee(subjectKey));
+/** "Who is this?": an email no patient matched, as a task for the person who handles unmatched mail. */
+async function whoIsThisTask(actor: WorkspaceActor, m: { fromName: string | null; fromEmail: string | null; subject: string | null; receivedAt: Date; preview: string | null; link: string; gmailId: string }) {
+  const who = await unmatchedAssignee();
+  const sender = m.fromName ? `${m.fromName} <${m.fromEmail}>` : m.fromEmail ?? "unknown sender";
+  const task = await createTask({ ...actor, clinicIds: null }, {
+    title: `Who is this? Email from ${m.fromName || m.fromEmail || "unknown sender"}: ${m.subject || "(no subject)"}`.slice(0, 250),
+    description: [
+      `From: ${sender}`, `Received: ${m.receivedAt.toLocaleString("en-US", { timeZone: "America/Chicago" })}`,
+      "MyPCP couldn't match this sender to a patient. Pick the patient on Patient emails (or mark it \"Not a patient\"): this task then moves to the patient's provider team.",
+      "", m.preview ?? "", "", `Open in Gmail: ${m.link}`,
+    ].join("\n"),
+    assignedUserId: who.assignedUserId, assignedRole: who.assignedRole, priority: "normal", category: "patient_email",
+    dueDate: localDateStr(), sourceType: "email", sourceRef: m.gmailId,
+  });
+  return { taskId: task.id, assignedUserId: who.assignedUserId };
+}
+
+/**
+ * One waiting email (re-routing job): match it again with the current index; a match is routed like
+ * new mail, otherwise it gets a "Who is this?" task (once).
+ */
+export async function routeWaitingEmail(m: typeof emailMessages.$inferSelect, idx: EmailMatchIndex, apply: boolean): Promise<"matched" | "task" | "waiting"> {
+  const d = await db();
+  const match = matchEmailSender({ email: m.fromEmail, name: m.fromName, body: m.preview ?? "" }, idx);
+  const c = await config();
+  const link = gmailMessageLink(c.mailbox ?? "", m.messageIdHeader, m.threadId ?? "");
+  const actor = await systemActor();
+  if (match && !("ignore" in match)) {
+    if (!apply) return "matched";
+    const who = await emailAssignee(match.subject.key);
+    const text = taskText({ ...m, link, method: match.method }, match.subject.name);
+    let taskId = m.taskId;
+    if (taskId) {
+      await d.update(workTasks).set({ title: text.title, description: text.description, patientId: match.subject.patientId, clinicId: who.clinicId, assignedUserId: who.assignedUserId, assignedRole: who.assignedUserId ? null : who.assignedRole }).where(eq(workTasks.id, taskId));
+    } else {
+      taskId = (await createTask({ ...actor, clinicIds: null }, {
+        title: text.title, description: text.description, patientId: match.subject.patientId, clinicId: who.clinicId,
+        assignedUserId: who.assignedUserId, assignedRole: who.assignedRole, priority: "normal", category: "patient_email",
+        dueDate: localDateStr(), sourceType: "email", sourceRef: m.gmailId,
+      })).id;
+    }
+    await d.update(emailMessages).set({ status: "assigned", patientId: match.subject.patientId, subjectKey: match.subject.key, patientName: match.subject.name.slice(0, 255), matchMethod: match.method, taskId, assignedUserId: who.assignedUserId }).where(eq(emailMessages.id, m.id));
+    return "matched";
+  }
+  if (m.taskId) return "waiting";
+  if (!apply) return "task";
+  const t = await whoIsThisTask(actor, { ...m, link });
+  await d.update(emailMessages).set({ taskId: t.taskId, assignedUserId: t.assignedUserId }).where(eq(emailMessages.id, m.id));
+  return "task";
 }
 
 // ---- The sync ----
@@ -490,7 +551,8 @@ async function processMessage(m: GmailMessage, mailbox: string, idx: EmailMatchI
   const match = skip ? { ignore: true as const } : matchEmailSender({ email: from.email, name: from.name, body }, idx);
   const preview = skip ? (m.snippet ?? "").slice(0, 300) : stripQuotedText(body).replace(/\n{3,}/g, "\n\n").slice(0, 1500) || (m.snippet ?? "");
   if (!match || "ignore" in match) {
-    await d.insert(emailMessages).values({ ...base, preview, status: match ? "ignored" : "needs_patient" });
+    const t = !match && !historical ? await whoIsThisTask(actor, { ...base, preview, link: gmailMessageLink(mailbox, messageIdHeader, m.threadId), gmailId: m.id }) : null;
+    await d.insert(emailMessages).values({ ...base, preview, status: match ? "ignored" : "needs_patient", taskId: t?.taskId ?? null, assignedUserId: t?.assignedUserId ?? null });
     return match ? "ignored" : "needsPatient";
   }
   const matched = { patientId: match.subject.patientId, subjectKey: match.subject.key, patientName: match.subject.name.slice(0, 255), matchMethod: match.method };
@@ -655,7 +717,7 @@ export async function linkEmail(actor: WorkspaceActor, input: { emailId: number;
   const text = taskText({ ...m, link: gmailMessageLink(c.mailbox ?? "", m.messageIdHeader, m.threadId ?? ""), method: "manual" }, care.name);
   let taskId = m.taskId;
   if (taskId) {
-    await d.update(workTasks).set({ title: text.title, description: text.description, patientId: care.patientId, clinicId: who.clinicId, assignedUserId: who.assignedUserId, assignedRole: who.assignedRole }).where(eq(workTasks.id, taskId));
+    await d.update(workTasks).set({ title: text.title, description: text.description, patientId: care.patientId, clinicId: who.clinicId, assignedUserId: who.assignedUserId, assignedRole: who.assignedUserId ? null : who.assignedRole }).where(eq(workTasks.id, taskId));
     await d.insert(workTaskActivities).values({ taskId, userId: actor.id, type: "assigned", meta: { to: who.assignedUserId ? String(who.assignedUserId) : who.assignedRole } });
   } else if (!m.historical) {
     taskId = (await createTask({ ...actor, clinicIds: null }, {
@@ -680,7 +742,13 @@ export async function ignoreEmailSender(actor: WorkspaceActor, emailId: number) 
   if (m.fromEmail) {
     await d.insert(emailContacts).values({ email: m.fromEmail, kind: "ignore", source: "linked", createdByUserId: actor.id })
       .onDuplicateKeyUpdate({ set: { kind: "ignore", patientId: null, subjectKey: null, source: "linked", createdByUserId: actor.id } });
+    const others = await d.select({ taskId: emailMessages.taskId }).from(emailMessages).where(and(eq(emailMessages.fromEmail, m.fromEmail), eq(emailMessages.status, "needs_patient")));
     await d.update(emailMessages).set({ status: "ignored" }).where(and(eq(emailMessages.fromEmail, m.fromEmail), eq(emailMessages.status, "needs_patient")));
+    for (const o of others) {
+      if (!o.taskId || o.taskId === m.taskId) continue;
+      await d.update(workTasks).set({ status: "cancelled" }).where(and(eq(workTasks.id, o.taskId), inArray(workTasks.status, [...OPEN_STATUSES])));
+      await d.insert(workTaskActivities).values({ taskId: o.taskId, userId: actor.id, type: "status_changed", meta: { to: "cancelled", reason: "not a patient email" } });
+    }
   }
   await d.update(emailMessages).set({ status: "ignored" }).where(eq(emailMessages.id, m.id));
   if (m.taskId) {
