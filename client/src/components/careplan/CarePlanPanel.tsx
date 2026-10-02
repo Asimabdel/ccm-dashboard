@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { GENERAL_LABELS, PLAN_FIELD_LABELS, PLAN_LIST_FIELDS, emptyProblem, type PlanGeneral, type PlanProblem } from "@shared/carePlanDoc";
 import { Bullets, LinesField, TextField } from "./Fields";
 import { PLAN_STATUS } from "./status";
+import { itemLabel } from "@shared/conditionLibrary";
 
 type Data = RouterOutputs["workspace"]["carePlans"]["get"];
 type Plan = { problems: PlanProblem[]; general: PlanGeneral };
@@ -34,7 +35,7 @@ export function CarePlanPanel({ patientId }: { patientId: number }) {
   const plan = d.plan;
 
   const doBuild = async () => {
-    try { set(await build.mutateAsync({ patientId })); refreshLists(); toast.success("Draft started from the approved templates. Review it, then a provider signs it."); }
+    try { set(await build.mutateAsync({ patientId })); refreshLists(); toast.success("Care plan started from the specialized templates. Their provider signs it."); }
     catch (e) { toast.error((e as Error).message); }
   };
   const doSave = async (next: Plan) => {
@@ -67,7 +68,7 @@ export function CarePlanPanel({ patientId }: { patientId: number }) {
       <div className={cn(cardCls, "p-6")}>
         <EmptyState icon={ClipboardCheck} title="No care plan yet"
           body={d.conditions.length
-            ? <>The draft starts from the approved templates for: {d.conditions.map((c) => c.label).join(", ")}.{d.conditions.some((c) => !c.templateApproved) && <> Conditions whose template isn't approved yet start empty.</>}</>
+            ? <>The plan is built from the specialized templates for: {d.conditions.map((c) => c.label).join(", ")}.</>
             : "There are no chronic conditions on this patient's record yet. Add them on the CCM record first."}
           action={d.conditions.length ? <Btn disabled={build.isPending} onClick={doBuild}>{build.isPending ? <Loader2 size={15} className="animate-spin" /> : <FilePlus2 size={15} />} Start the care plan</Btn> : undefined} />
       </div>
@@ -86,6 +87,7 @@ export function CarePlanPanel({ patientId }: { patientId: number }) {
         </span>
         <div className="ml-auto flex flex-wrap gap-2">
           {!editing && <a href={`/care-plans/${patientId}/print`} target="_blank" rel="noreferrer"><Btn variant="secondary" size="sm"><Printer size={14} /> Patient copy</Btn></a>}
+          {!editing && <a href={`/care-plans/${patientId}/print?full=1`} target="_blank" rel="noreferrer"><Btn variant="secondary" size="sm"><Printer size={14} /> Full plan</Btn></a>}
           {!editing && <Btn variant="secondary" size="sm" onClick={() => setEditing({ problems: structuredClone(plan.problems), general: { ...plan.general } })}><Pencil size={14} /> Edit</Btn>}
           {!editing && d.canSign && plan.status !== "signed" && <Btn size="sm" disabled={sign.isPending || d.gaps.length > 0} title={d.gaps.length ? "Finish the plan first" : undefined} onClick={doSign}>{sign.isPending ? <Loader2 size={14} className="animate-spin" /> : <BadgeCheck size={14} />} Sign plan</Btn>}
           {editing && <Btn variant="secondary" size="sm" onClick={() => setEditing(null)}><X size={14} /> Cancel</Btn>}
@@ -121,13 +123,21 @@ export function CarePlanPanel({ patientId }: { patientId: number }) {
   );
 }
 
+/** "Type assumed" / "confirm the type" notes for the reviewing provider. */
+function SectionFlags({ p }: { p: PlanProblem }) {
+  if (p.assumed) return <p className="mt-1 inline-flex rounded-md bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">Type assumed: the record doesn't say which type, so this uses {p.key ? itemLabel(p.key) : "the most common type"}. Confirm or edit.</p>;
+  if (p.confirmType) return <p className="mt-1 inline-flex rounded-md bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">General plan: the type isn't documented. Confirm the type (and update the diagnosis) for a specialized plan.</p>;
+  return null;
+}
+
 function PlanView({ plan }: { plan: Plan }) {
   return (
     <>
       {plan.problems.map((p, i) => (
         <section key={i} className={cn(cardCls, "p-5")}>
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Problem {i + 1}</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">{p.kind === "addon" ? "Add-on: complication or combination" : `Problem ${i + 1}`}{p.key ? ` · ${itemLabel(p.key)}` : ""}</p>
           <h3 className="text-lg font-bold text-slate-900 dark:text-slate-50">{p.problem || p.diagnosis}</h3>
+          <SectionFlags p={p} />
           {p.diagnosis && p.diagnosis !== p.problem && <p className="text-sm text-slate-500">{p.diagnosis}</p>}
           {p.expectedOutcome && <p className="mt-2 text-sm text-slate-700 dark:text-slate-200"><b>{PLAN_FIELD_LABELS.expectedOutcome}:</b> {p.expectedOutcome}</p>}
           <div className="mt-3 grid gap-4 sm:grid-cols-2">
@@ -154,7 +164,7 @@ function PlanEditor({ plan, onChange }: { plan: Plan; onChange: (p: Plan) => voi
       {plan.problems.map((p, i) => (
         <section key={`${i}|${p.key ?? ""}|${p.diagnosis}`} className={cn(cardCls, "space-y-3 p-5")}>
           <div className="flex items-center gap-2">
-            <p className="flex-1 text-xs font-semibold uppercase tracking-wider text-slate-400">Problem {i + 1}{p.diagnosis ? ` · ${p.diagnosis}` : ""}</p>
+            <p className="flex-1 text-xs font-semibold uppercase tracking-wider text-slate-400">{p.kind === "addon" ? "Add-on" : `Problem ${i + 1}`}{p.key ? ` · ${itemLabel(p.key)}` : ""}{p.diagnosis ? ` · ${p.diagnosis}` : ""}</p>
             <Btn size="sm" variant="ghost" onClick={() => { if (window.confirm(`Remove "${p.problem || p.diagnosis}" from the plan?`)) onChange({ ...plan, problems: plan.problems.filter((_, j) => j !== i) }); }}><Trash2 size={14} /> Remove</Btn>
           </div>
           <TextField label="Problem" value={p.problem} rows={1} onChange={(v) => setProblem(i, { problem: v })} />

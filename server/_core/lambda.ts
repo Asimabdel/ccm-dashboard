@@ -125,6 +125,31 @@ export const handler = async (event: any, context: any) => {
     const { mergeDuplicates, mergeActor } = await import("../rosterMerge");
     return mergeDuplicates(await mergeActor(), { apply: event.apply === true, deadline: Date.now() + 22_000 });
   }
+  // Does Practice Fusion's per-patient API return more document kinds than the export? (IAM-only; counts only)
+  if (event && event.__job === "pf-doc-probe" && !event.requestContext && !event.version) {
+    const { pfDocProbe } = await import("../pfDocStats");
+    return pfDocProbe({ deadline: Date.now() + 22_000 });
+  }
+  // Complete care plans started before the specialized templates (IAM-only; dry run unless apply; counts only).
+  if (event && event.__job === "careplan-refresh" && !event.requestContext && !event.version) {
+    const { refreshPlans } = await import("../carePlansDb");
+    return refreshPlans({ apply: event.apply === true, deadline: Date.now() + 22_000 });
+  }
+  // Clean roster condition lists filled from Practice Fusion (IAM-only; dry run unless apply; counts only).
+  if (event && event.__job === "condition-cleanup" && !event.requestContext && !event.version) {
+    const { cleanupRosterConditions } = await import("../conditionCleanup");
+    return cleanupRosterConditions({ apply: event.apply === true, deadline: Date.now() + 22_000 });
+  }
+  // Which exact diagnoses CCM patients have (IAM-only; counts only, no names).
+  if (event && event.__job === "ccm-dx-stats" && !event.requestContext && !event.version) {
+    const { ccmDiagnosisStats } = await import("../diagnosisStats");
+    return ccmDiagnosisStats();
+  }
+  // Which kinds of Practice Fusion documents the import received (IAM-only; counts only).
+  if (event && event.__job === "pf-doc-stats" && !event.requestContext && !event.version) {
+    const { pfDocStats } = await import("../pfDocStats");
+    return pfDocStats({ deadline: Date.now() + 20_000 });
+  }
   // Are Practice Fusion links consistent, and what is the import doing? (IAM-only; counts only)
   if (event && event.__job === "pf-link-consistency" && !event.requestContext && !event.version) {
     const { pfLinkConsistency } = await import("../rosterMatch");

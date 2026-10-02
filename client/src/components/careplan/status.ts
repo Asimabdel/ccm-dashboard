@@ -7,7 +7,7 @@ export const PLAN_STATUS: Record<string, { label: string; cls: string }> = {
 };
 
 export const LIB_STATUS: Record<string, { label: string; cls: string }> = {
-  draft: { label: "Draft: needs provider approval", cls: PLAN_STATUS.draft!.cls },
-  changed: { label: "Edited: re-approval needed", cls: PLAN_STATUS.changed!.cls },
-  approved: { label: "Approved", cls: PLAN_STATUS.signed!.cls },
+  draft: { label: "In use", cls: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200" },
+  changed: { label: "In use · edited since review", cls: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200" },
+  approved: { label: "In use · provider-reviewed", cls: PLAN_STATUS.signed!.cls },
 };

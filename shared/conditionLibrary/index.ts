@@ -1,20 +1,28 @@
 // The starting (draft) condition library and the helpers both server and client use. Providers review,
-// edit and approve each condition in MyPCP; the database copy wins over these defaults (server/carePlansDb.ts).
-import { CONDITION_CATEGORIES } from "../programRules";
+// edit and approve each item in MyPCP; the database copy wins over these defaults (server/carePlansDb.ts).
+// Items are specialized: exact diagnoses and add-ons for complications / overlaps (./registry).
 import { GROUP_A } from "./groupA";
 import { GROUP_B } from "./groupB";
 import { GROUP_C } from "./groupC";
 import { GROUP_D } from "./groupD";
+import { SPEC_DIABETES, SPEC_DIABETES_NOTES } from "./spec_diabetes";
+import { SPEC_CARDIO, SPEC_CARDIO_NOTES } from "./spec_cardio";
+import { SPEC_RENAL_ENDO, SPEC_RENAL_ENDO_NOTES } from "./spec_renal_endo";
+import { SPEC_LIVER_SUBSTANCE, SPEC_LIVER_SUBSTANCE_NOTES } from "./spec_liver_substance";
+import { SPEC_BEHAVIORAL, SPEC_BEHAVIORAL_NOTES } from "./spec_behavioral";
+import { REVIEW_NOTES as GENERAL_NOTES } from "./reviewNotes";
 import type { ConditionLibraryEntry, EducationDoc, LibraryLang } from "./types";
 
 export * from "./types";
+export * from "./registry";
 
-/** The library covers the chronic conditions (the ones CCM counts), in the program rules' order. */
-export const LIBRARY_CONDITIONS = CONDITION_CATEGORIES.filter((c) => c.chronic);
-export const LIBRARY_KEYS = LIBRARY_CONDITIONS.map((c) => c.key);
-
-const ALL = [...GROUP_A, ...GROUP_B, ...GROUP_C, ...GROUP_D];
+const ALL = [...GROUP_A, ...GROUP_B, ...GROUP_C, ...GROUP_D, ...SPEC_DIABETES, ...SPEC_CARDIO, ...SPEC_RENAL_ENDO, ...SPEC_LIVER_SUBSTANCE, ...SPEC_BEHAVIORAL];
 export const DEFAULT_LIBRARY: ReadonlyMap<string, ConditionLibraryEntry> = new Map(ALL.map((e) => [e.key, e]));
+
+/** Points in the built-in drafts the reviewing provider should check before approving. */
+export const REVIEW_NOTES: Record<string, string[]> = {
+  ...GENERAL_NOTES, ...SPEC_DIABETES_NOTES, ...SPEC_CARDIO_NOTES, ...SPEC_RENAL_ENDO_NOTES, ...SPEC_LIVER_SUBSTANCE_NOTES, ...SPEC_BEHAVIORAL_NOTES,
+};
 
 /** "heart_failure" ↔ "heart-failure" (the patient page address). */
 export const slugOf = (key: string) => key.replace(/_/g, "-");

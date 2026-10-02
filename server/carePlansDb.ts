@@ -15,13 +15,15 @@ import {
   ccmTasks, clinics, conditionContent, conditionContentHistory, educationSends, fhirResources, patientCarePlanSignatures,
   patientCarePlans, patients, providers, users,
 } from "../drizzle/schema";
-import { DEFAULT_LIBRARY, LIBRARY_CONDITIONS, LIBRARY_KEYS, type ConditionLibraryEntry, type LibraryLang } from "../shared/conditionLibrary";
-import { REVIEW_NOTES } from "../shared/conditionLibrary/reviewNotes";
+import {
+  DEFAULT_LIBRARY, ITEM_BY_KEY, LIBRARY_ITEMS, LIBRARY_KEYS, REVIEW_NOTES, itemLabel, resolveItems,
+  type ConditionLibraryEntry, type LibraryLang, type ResolvedItem,
+} from "../shared/conditionLibrary";
 import {
   defaultGeneral, emptyProblem, planGaps, problemFromTemplate, renderPlanText, type PlanGeneral, type PlanProblem,
 } from "../shared/carePlanDoc";
-import { categoryLabel, classifyConditionName, classifyDiagnosis } from "../shared/programRules";
-import { formatUsPhone } from "../shared/intake";
+import { categoryLabel, classifyDiagnosis } from "../shared/programRules";
+import { formatUsPhone, langFromPreferred } from "../shared/intake";
 import { localDateStr } from "../shared/workforce";
 import { WorkspaceError, audit, type WorkspaceActor } from "./workspaceDb";
 
@@ -68,21 +70,21 @@ async function contentRows(keys?: string[]): Promise<Map<string, ContentRow>> {
 const entryOf = (key: string, row: ContentRow | undefined): ConditionLibraryEntry | null =>
   (row ? (row.content as ConditionLibraryEntry) : DEFAULT_LIBRARY.get(key)) ?? null;
 
-/** The approved content for these conditions (what patients, calls and new plans use). Edited-but-not-reapproved conditions keep their last approved version. */
+/**
+ * The content in use for these items: the practice's edited copy if there is one, else the built-in
+ * draft. The practice decided (2026-10-01) to use the library as approved: nothing waits for a provider
+ * review; a provider can still edit an item or mark it reviewed (approvedByName / approvedAt).
+ */
 export async function approvedContent(keys: string[]): Promise<Map<string, { entry: ConditionLibraryEntry; version: number; approvedByName: string | null; approvedAt: Date | null }>> {
   const out = new Map<string, { entry: ConditionLibraryEntry; version: number; approvedByName: string | null; approvedAt: Date | null }>();
   const want = keys.filter((k) => LIBRARY_SET.has(k));
   if (!want.length) return out;
   const rows = await contentRows(want);
-  const needHistory: string[] = [];
   for (const k of want) {
     const r = rows.get(k);
-    if (r?.status === "approved") out.set(k, { entry: r.content as ConditionLibraryEntry, version: r.version, approvedByName: r.approvedByName, approvedAt: r.approvedAt });
-    else if (r) needHistory.push(k);
-  }
-  if (needHistory.length) {
-    const hist = await (await db()).select().from(conditionContentHistory).where(inArray(conditionContentHistory.conditionKey, needHistory)).orderBy(desc(conditionContentHistory.version));
-    for (const h of hist) if (!out.has(h.conditionKey)) out.set(h.conditionKey, { entry: h.content as ConditionLibraryEntry, version: h.version, approvedByName: h.approvedByName, approvedAt: h.approvedAt });
+    const entry = entryOf(k, r);
+    if (!entry) continue;
+    out.set(k, { entry, version: r?.version ?? 1, approvedByName: r?.status === "approved" ? r.approvedByName : null, approvedAt: r?.status === "approved" ? r.approvedAt : null });
   }
   return out;
 }
@@ -90,14 +92,15 @@ export async function approvedContent(keys: string[]): Promise<Map<string, { ent
 export async function libraryList() {
   const rows = await contentRows();
   const approved = await approvedContent(LIBRARY_KEYS);
-  return LIBRARY_CONDITIONS.map((c) => {
+  return LIBRARY_ITEMS.map((c) => {
     const r = rows.get(c.key);
     const a = approved.get(c.key);
     return {
-      key: c.key, label: c.label, behavioral: c.behavioral,
-      status: (r?.status === "approved" ? "approved" : a ? "changed" : "draft") as "approved" | "changed" | "draft",
-      version: r?.version ?? 1, edited: !!r, hasContent: !!entryOf(c.key, r),
-      approvedVersion: a?.version ?? null, approvedByName: a?.approvedByName ?? null, approvedAt: a?.approvedAt ?? null,
+      key: c.key, label: c.label, category: c.category, categoryLabel: categoryLabel(c.category), kind: c.kind, general: !!c.general, isDefault: !!c.isDefault,
+      // approved = a provider marked it reviewed; changed = edited since a review; draft = in use, not reviewed yet.
+      status: (r?.status === "approved" ? "approved" : r && r.version > 1 ? "changed" : "draft") as "approved" | "changed" | "draft",
+      version: r?.version ?? 1, edited: !!r, hasContent: !!a,
+      approvedVersion: a?.approvedByName ? a.version : null, approvedByName: a?.approvedByName ?? null, approvedAt: a?.approvedAt ?? null,
     };
   });
 }
@@ -110,7 +113,7 @@ export async function libraryGet(key: string) {
   const history = await (await db()).select({ version: conditionContentHistory.version, approvedByName: conditionContentHistory.approvedByName, approvedAt: conditionContentHistory.approvedAt })
     .from(conditionContentHistory).where(eq(conditionContentHistory.conditionKey, key)).orderBy(desc(conditionContentHistory.version));
   return {
-    key, label: categoryLabel(key), entry, status: (r?.status ?? "draft") as "approved" | "draft", version: r?.version ?? 1, edited: !!r,
+    key, label: itemLabel(key), kind: ITEM_BY_KEY.get(key)?.kind ?? "condition", categoryLabel: categoryLabel(ITEM_BY_KEY.get(key)?.category ?? key), entry, status: (r?.status ?? "draft") as "approved" | "draft", version: r?.version ?? 1, edited: !!r,
     approvedByName: r?.status === "approved" ? r.approvedByName : null, approvedAt: r?.status === "approved" ? r.approvedAt : null, history,
     /** Points in the built-in draft to check before approving. */
     reviewNotes: REVIEW_NOTES[key] ?? [],
@@ -125,7 +128,7 @@ export async function librarySave(actor: WorkspaceActor, key: string, entry: Con
   const content = { ...entry, key };
   if (!r) await d.insert(conditionContent).values({ conditionKey: key, content, status: "draft", version: 1, updatedByUserId: actor.id });
   else await d.update(conditionContent).set({ content, status: "draft", version: r.status === "approved" ? r.version + 1 : r.version, approvedByUserId: null, approvedByName: null, approvedAt: null, updatedByUserId: actor.id }).where(eq(conditionContent.id, r.id));
-  await audit(actor, "manage_document", { entityType: "conditionContent", description: `Condition library edited: ${categoryLabel(key)} (back to draft)` });
+  await audit(actor, "manage_document", { entityType: "conditionContent", description: `Condition library edited: ${itemLabel(key)} (back to draft)` });
   return libraryGet(key);
 }
 
@@ -144,7 +147,7 @@ export async function libraryApprove(actor: WorkspaceActor, key: string) {
   if (!r) await d.insert(conditionContent).values({ conditionKey: key, content: entry, status: "approved", version, approvedByUserId: actor.id, approvedByName: name, approvedAt: now, updatedByUserId: actor.id });
   else await d.update(conditionContent).set({ status: "approved", approvedByUserId: actor.id, approvedByName: name, approvedAt: now }).where(eq(conditionContent.id, r.id));
   await d.insert(conditionContentHistory).values({ conditionKey: key, version, content: entry, approvedByUserId: actor.id, approvedByName: name, approvedAt: now });
-  await audit(actor, "manage_document", { entityType: "conditionContent", description: `Condition library approved: ${categoryLabel(key)} v${version}` });
+  await audit(actor, "manage_document", { entityType: "conditionContent", description: `Condition library approved: ${itemLabel(key)} v${version}` });
   return libraryGet(key);
 }
 
@@ -152,38 +155,28 @@ export async function libraryApprove(actor: WorkspaceActor, key: string) {
 // A patient's conditions
 // ---------------------------------------------------------------------------
 
-export interface PatientCondition { key: string; label: string; diagnosis: string }
-
-/** One entry per library condition, from condition names (first name seen wins). */
-function conditionsFromNames(names: (string | null | undefined)[]): PatientCondition[] {
-  const out = new Map<string, PatientCondition>();
-  for (const n of names) {
-    if (!n?.trim()) continue;
-    const m = classifyConditionName(n.trim());
-    if (m && LIBRARY_SET.has(m.category) && !out.has(m.category)) out.set(m.category, { key: m.category, label: m.label, diagnosis: n.trim() });
-  }
-  return Array.from(out.values());
+/** The active diagnoses on a patient's Practice Fusion problem list (names only). */
+async function pfDiagnosisNames(subjectKey: string): Promise<string[]> {
+  const rows = await (await db()).select({ title: fhirResources.title, code: fhirResources.code, status: fhirResources.status }).from(fhirResources)
+    .where(and(eq(fhirResources.section, "Condition"), eq(fhirResources.subjectKey, subjectKey)));
+  return rows.filter((r) => classifyDiagnosis({ title: r.title, code: r.code, status: r.status })).map((r) => r.title!);
 }
 
-/** Roster patient: the CCM and BHI condition lists (Practice Fusion problems are synced into them nightly). */
-async function rosterConditions(patientId: number): Promise<PatientCondition[]> {
+/** The roster lists of a CCM patient (as typed or synced). */
+const rosterNames = (p: { chronic: unknown; bhi: unknown }) => [...((p.chronic as string[] | null) ?? []), ...((p.bhi as string[] | null) ?? [])];
+
+/** Roster patient: the CCM/BHI condition lists plus their Practice Fusion problem list → specialized items. */
+async function rosterItems(patientId: number): Promise<ResolvedItem[]> {
   const [p] = await (await db()).select({ chronic: patients.chronicConditions, bhi: patients.bhiConditions }).from(patients).where(eq(patients.id, patientId)).limit(1);
   if (!p) throw new WorkspaceError("Patient not found.", "NOT_FOUND");
-  return conditionsFromNames([...((p.chronic as string[] | null) ?? []), ...((p.bhi as string[] | null) ?? [])]);
+  return resolveItems([...rosterNames(p), ...(await pfDiagnosisNames(`p:${patientId}`))]).filter((i) => LIBRARY_SET.has(i.key));
 }
 
-/** Anyone: roster lists for roster patients, else the Practice Fusion problem list. */
-export async function conditionsFor(subjectKey: string): Promise<PatientCondition[]> {
+/** Anyone: roster patients as above, everyone else from their Practice Fusion problem list. */
+export async function itemsFor(subjectKey: string): Promise<ResolvedItem[]> {
   const m = /^p:(\d+)$/.exec(subjectKey);
-  if (m) return rosterConditions(Number(m[1]));
-  const rows = await (await db()).select({ title: fhirResources.title, code: fhirResources.code, status: fhirResources.status }).from(fhirResources)
-    .where(and(eq(fhirResources.subjectKey, subjectKey), eq(fhirResources.resourceType, "Condition")));
-  const out = new Map<string, PatientCondition>();
-  for (const r of rows) {
-    const c = classifyDiagnosis({ title: r.title, code: r.code, status: r.status });
-    if (c && LIBRARY_SET.has(c.category) && !out.has(c.category)) out.set(c.category, { key: c.category, label: c.label, diagnosis: c.icd ? `${c.title} (${c.icd})` : c.title });
-  }
-  return Array.from(out.values());
+  if (m) return rosterItems(Number(m[1]));
+  return resolveItems(await pfDiagnosisNames(subjectKey)).filter((i) => LIBRARY_SET.has(i.key));
 }
 
 // ---------------------------------------------------------------------------
@@ -199,7 +192,7 @@ async function patientBasics(patientId: number) {
   const d = await db();
   const [p] = await d.select({
     id: patients.id, name: patients.name, clinicId: patients.clinicId, providerId: patients.providerId, staffId: patients.assignedStaffId,
-    ccm: patients.ccmEnrollmentStatus, apcmCarePlan: patients.apcmCarePlan,
+    ccm: patients.ccmEnrollmentStatus, apcmCarePlan: patients.apcmCarePlan, preferredLanguage: patients.preferredLanguage,
   }).from(patients).where(eq(patients.id, patientId)).limit(1);
   if (!p) throw new WorkspaceError("Patient not found.", "NOT_FOUND");
   const [prov] = p.providerId ? await d.select({ name: providers.name, title: providers.title, userId: providers.userId }).from(providers).where(eq(providers.id, p.providerId)).limit(1) : [];
@@ -220,19 +213,27 @@ export async function planFor(actor: WorkspaceActor, patientId: number) {
   const p = await patientBasics(patientId);
   const d = await db();
   const [row] = await d.select().from(patientCarePlans).where(eq(patientCarePlans.patientId, patientId)).limit(1);
-  const conditions = await rosterConditions(patientId);
-  const approved = await approvedContent(conditions.map((c) => c.key));
+  const items = await rosterItems(patientId);
+  const approved = await approvedContent(items.map((c) => c.key));
   const onPlan = new Set(((row?.problems as PlanProblem[] | undefined) ?? []).map((x) => x.key).filter(Boolean));
+  const planKeys = ((row?.problems as PlanProblem[] | undefined) ?? []).map((x) => x.key).filter((k): k is string => !!k);
+  const handoutContent = await approvedContent(planKeys);
   const signatures = row ? await d.select({ version: patientCarePlanSignatures.version, signedByName: patientCarePlanSignatures.signedByName, signedAt: patientCarePlanSignatures.signedAt })
     .from(patientCarePlanSignatures).where(eq(patientCarePlanSignatures.planId, row.id)).orderBy(desc(patientCarePlanSignatures.signedAt)).limit(10) : [];
   await audit(actor, "view_patient", { entityType: "carePlan", entityId: patientId, description: "Care plan viewed" });
   return {
-    patient: { id: p.id, name: p.name, ccm: p.ccm, providerName: p.providerName, coordinatorName: p.coordinatorName, clinicName: p.clinicName, clinicPhone: p.clinicPhone },
+    patient: {
+      id: p.id, name: p.name, ccm: p.ccm, providerName: p.providerName, coordinatorName: p.coordinatorName, clinicName: p.clinicName, clinicPhone: p.clinicPhone,
+      language: (langFromPreferred(p.preferredLanguage) === "es" ? "es" : "en") as LibraryLang,
+    },
+    /** The patient handouts for the items on the plan (the patient's copy uses their plain wording). */
+    handouts: Object.fromEntries(Array.from(handoutContent.entries()).map(([k, v]) => [k, v.entry.education])),
     plan: row ? {
       id: row.id, problems: row.problems as PlanProblem[], general: row.general as PlanGeneral, version: row.version, status: statusOf(row),
       signedByName: row.signedByName, signedAt: row.signedAt, signedVersion: row.signedVersion, lastReviewedAt: row.lastReviewedAt, lastReviewedMonth: row.lastReviewedMonth, updatedAt: row.updatedAt,
     } : null,
-    conditions: conditions.map((c) => ({ ...c, onPlan: onPlan.has(c.key), templateApproved: approved.has(c.key) })),
+    /** The specialized items this patient's diagnoses call for (exact diagnoses, then add-ons). */
+    conditions: items.map((c) => ({ ...c, onPlan: onPlan.has(c.key), templateApproved: approved.has(c.key) })),
     signatures,
     canSign: await isSigningProvider(actor.id, actor.role),
     gaps: row ? planGaps({ problems: row.problems as PlanProblem[] }) : [],
@@ -243,14 +244,20 @@ export async function planFor(actor: WorkspaceActor, patientId: number) {
 export async function templateSection(key: string, diagnosis: string): Promise<PlanProblem> {
   assertKey(key);
   const a = (await approvedContent([key])).get(key);
-  return a ? problemFromTemplate(key, diagnosis, a.entry.carePlan, a.version) : emptyProblem(key, diagnosis, categoryLabel(key));
+  const item = ITEM_BY_KEY.get(key)!;
+  const section = a ? problemFromTemplate(key, diagnosis, a.entry.carePlan, a.version) : emptyProblem(key, diagnosis, itemLabel(key));
+  return { ...section, kind: item.kind };
 }
 
-function newPlanFor(p: Awaited<ReturnType<typeof patientBasics>>, conditions: PatientCondition[], approved: Awaited<ReturnType<typeof approvedContent>>) {
-  const problems = conditions.map((c) => {
-    const a = approved.get(c.key);
-    return a ? problemFromTemplate(c.key, c.diagnosis, a.entry.carePlan, a.version) : emptyProblem(c.key, c.diagnosis, c.label);
-  });
+/** One section per specialized item: its approved template (or an empty section), with the item's flags. */
+function sectionFor(c: ResolvedItem, approved: Awaited<ReturnType<typeof approvedContent>>): PlanProblem {
+  const a = approved.get(c.key);
+  const base = a ? problemFromTemplate(c.key, c.diagnosis, a.entry.carePlan, a.version) : emptyProblem(c.key, c.diagnosis, c.label);
+  return { ...base, kind: c.kind, assumed: c.assumed || undefined, confirmType: c.confirmType || undefined };
+}
+
+function newPlanFor(p: Awaited<ReturnType<typeof patientBasics>>, items: ResolvedItem[], approved: Awaited<ReturnType<typeof approvedContent>>) {
+  const problems = items.map((c) => sectionFor(c, approved));
   return { problems, general: defaultGeneral({ providerName: p.providerName, coordinatorName: p.coordinatorName, clinicPhone: p.clinicPhone }) };
 }
 
@@ -261,9 +268,9 @@ export async function buildDraft(actor: WorkspaceActor, patientId: number) {
   const d = await db();
   const [existing] = await d.select({ id: patientCarePlans.id }).from(patientCarePlans).where(eq(patientCarePlans.patientId, patientId)).limit(1);
   if (existing) throw new WorkspaceError("This patient already has a care plan.");
-  const conditions = await rosterConditions(patientId);
-  if (!conditions.length) throw new WorkspaceError("No chronic conditions on this patient's record to build a plan from. Add their conditions first.");
-  const plan = newPlanFor(p, conditions, await approvedContent(conditions.map((c) => c.key)));
+  const items = await rosterItems(patientId);
+  if (!items.length) throw new WorkspaceError("No chronic conditions on this patient's record to build a plan from. Add their conditions first.");
+  const plan = newPlanFor(p, items, await approvedContent(items.map((c) => c.key)));
   await d.insert(patientCarePlans).values({ patientId, problems: plan.problems, general: plan.general, version: 1, createdByUserId: actor.id, updatedByUserId: actor.id });
   await audit(actor, "update_patient", { entityType: "carePlan", entityId: patientId, description: "Care plan draft started" });
   return planFor(actor, patientId);
@@ -295,19 +302,88 @@ export async function signPlan(actor: WorkspaceActor, patientId: number, version
   if (row.signedVersion === row.version) throw new WorkspaceError("This version is already signed.");
   const gaps = planGaps({ problems: row.problems as PlanProblem[] });
   if (gaps.length) throw new WorkspaceError(`Finish the plan before signing: ${gaps.slice(0, 3).join(" ")}`);
-  const name = await signerName(actor);
+  await signRow(actor, await signerName(actor), row, p);
+  return planFor(actor, patientId);
+}
+
+/** Record one signature: the plan's signed version, a signed copy, and the patient's plan text. */
+async function signRow(actor: WorkspaceActor, name: string, row: PlanRow, p: { name: string; apcmCarePlan: string | null }) {
+  const d = await db();
   const now = new Date();
   const snapshot = { problems: row.problems, general: row.general };
   await d.transaction(async (tx) => {
     await tx.update(patientCarePlans).set({ signedVersion: row.version, signedByUserId: actor.id, signedByName: name, signedAt: now }).where(eq(patientCarePlans.id, row.id));
-    await tx.insert(patientCarePlanSignatures).values({ planId: row.id, patientId, version: row.version, snapshot, signedByUserId: actor.id, signedByName: name, signedAt: now });
+    await tx.insert(patientCarePlanSignatures).values({ planId: row.id, patientId: row.patientId, version: row.version, snapshot, signedByUserId: actor.id, signedByName: name, signedAt: now });
     if (!p.apcmCarePlan?.trim() || GENERIC_PLAN.test(p.apcmCarePlan.trim())) {
       const text = renderPlanText({ problems: row.problems as PlanProblem[], general: row.general as PlanGeneral }, { patientName: p.name, signedBy: name, signedAt: now });
-      await tx.update(patients).set({ apcmCarePlan: text, updatedAt: now }).where(eq(patients.id, patientId));
+      await tx.update(patients).set({ apcmCarePlan: text, updatedAt: now }).where(eq(patients.id, row.patientId));
     }
   });
-  await audit(actor, "update_patient", { entityType: "carePlan", entityId: patientId, description: `Care plan signed (v${row.version})` });
-  return planFor(actor, patientId);
+  await audit(actor, "update_patient", { entityType: "carePlan", entityId: row.patientId, description: `Care plan signed (v${row.version})` });
+}
+
+/**
+ * A provider signs, in one step, every unsigned (or changed) complete plan for the CCM patients
+ * assigned to them. Their own signature, recorded on each plan like a single signing.
+ */
+export async function signAllMine(actor: WorkspaceActor, opts: { deadline: number }) {
+  await assertSigner(actor, "sign care plans");
+  const d = await db();
+  const mine = (await d.select({ id: providers.id }).from(providers).where(eq(providers.userId, actor.id))).map((x) => x.id);
+  if (!mine.length) throw new WorkspaceError("Your login isn't linked to a provider record, so MyPCP can't tell which patients are yours. An admin links it in Admin → Providers.");
+  const rows = await d.select({ plan: patientCarePlans, name: patients.name, apcmCarePlan: patients.apcmCarePlan }).from(patientCarePlans)
+    .innerJoin(patients, eq(patients.id, patientCarePlans.patientId))
+    .where(and(inArray(patients.providerId, mine), eq(patients.ccmEnrollmentStatus, "active"), sql`(${patientCarePlans.signedVersion} IS NULL OR ${patientCarePlans.signedVersion} <> ${patientCarePlans.version})`));
+  const name = await signerName(actor);
+  let signed = 0, incomplete = 0, done = true;
+  for (const r of rows) {
+    if (Date.now() > opts.deadline) { done = false; break; }
+    if (planGaps({ problems: r.plan.problems as PlanProblem[] }).length) { incomplete++; continue; }
+    await signRow(actor, name, r.plan, { name: r.name, apcmCarePlan: r.apcmCarePlan });
+    signed++;
+  }
+  return { signed, incomplete, done };
+}
+
+/** Old keys from the first (per-group) library. */
+const LEGACY_KEYS: Record<string, string> = { diabetes: "diabetes_t2", thyroid: "thyroid_hypo" };
+
+/**
+ * Plans started before the specialized templates were in use: an untouched draft is rebuilt from the
+ * patient's specialized items; any other plan gets only its empty sections filled (a signed plan then
+ * shows "changed since signed"). Dry run unless apply; counts only.
+ */
+export async function refreshPlans(opts: { apply: boolean; deadline: number }) {
+  const d = await db();
+  const plans = await d.select().from(patientCarePlans);
+  const content = await approvedContent(LIBRARY_KEYS);
+  let rebuilt = 0, filledPlans = 0, sectionsFilled = 0, done = true;
+  for (const pl of plans) {
+    if (Date.now() > opts.deadline) { done = false; break; }
+    if (pl.signedVersion == null && pl.version === 1) {
+      const items = await rosterItems(pl.patientId);
+      if (!items.length) continue;
+      const fresh = newPlanFor(await patientBasics(pl.patientId), items, content);
+      if (opts.apply) await d.update(patientCarePlans).set({ problems: fresh.problems, general: fresh.general, version: pl.version + 1 }).where(eq(patientCarePlans.id, pl.id));
+      rebuilt++;
+      continue;
+    }
+    let n = 0;
+    const next = (pl.problems as PlanProblem[]).map((x) => {
+      if (x.goals.some((g) => g.trim()) || x.interventions.some((g) => g.trim())) return x;
+      const key = x.key ? LEGACY_KEYS[x.key] ?? x.key : null;
+      const a = key ? content.get(key) : undefined;
+      if (!key || !a) return x;
+      n++;
+      return { ...problemFromTemplate(key, x.diagnosis, a.entry.carePlan, a.version), kind: ITEM_BY_KEY.get(key)?.kind };
+    });
+    if (!n) continue;
+    if (opts.apply) await d.update(patientCarePlans).set({ problems: next, version: pl.version + 1 }).where(eq(patientCarePlans.id, pl.id));
+    filledPlans++; sectionsFilled += n;
+  }
+  const summary = { applied: opts.apply, plans: plans.length, rebuiltDrafts: rebuilt, plansWithSectionsFilled: filledPlans, sectionsFilled, done };
+  console.log(`[careplan-refresh] ${JSON.stringify(summary)}`); // counts only
+  return summary;
 }
 
 /** The care plan was reviewed with the patient (CCM call). */
@@ -338,7 +414,7 @@ export async function planQueue(actor: WorkspaceActor, opts: { filter: PlanFilte
     return {
       patientId: r.id, name: r.name, dob: r.dob ? r.dob.toISOString().slice(0, 10) : null, clinic: r.clinicId ? clinicName.get(r.clinicId) ?? null : null,
       provider: prov?.name ?? null, providerUserId: prov?.userId ?? null, coordinator: r.staffId ? staffName.get(r.staffId) ?? null : null,
-      conditions: conditionsFromNames([...((r.chronic as string[] | null) ?? []), ...((r.bhi as string[] | null) ?? [])]).map((c) => c.label),
+      conditions: resolveItems(rosterNames(r)).filter((i) => i.kind === "condition").map((c) => c.label),
       status, signedByName: r.signedByName, signedAt: r.signedAt, lastReviewedMonth: r.lastReviewedMonth, updatedAt: r.planUpdatedAt,
     };
   });
@@ -361,10 +437,10 @@ export async function buildMissingDrafts(actor: WorkspaceActor, opts: { deadline
   let built = 0, noConditions = 0, done = true;
   for (const r of rows) {
     if (Date.now() > opts.deadline) { done = false; break; }
-    const conditions = conditionsFromNames([...((r.chronic as string[] | null) ?? []), ...((r.bhi as string[] | null) ?? [])]);
-    if (!conditions.length) { noConditions++; continue; }
+    const items = await rosterItems(r.id);
+    if (!items.length) { noConditions++; continue; }
     const p = await patientBasics(r.id);
-    const plan = newPlanFor(p, conditions, approved);
+    const plan = newPlanFor(p, items, approved);
     await d.insert(patientCarePlans).values({ patientId: r.id, problems: plan.problems, general: plan.general, version: 1, createdByUserId: actor.id, updatedByUserId: actor.id });
     built++;
   }
@@ -384,7 +460,7 @@ function newCode(): string {
 
 /** The education tab: the patient's conditions, which handouts are approved, and what they've been given. */
 export async function educationFor(actor: WorkspaceActor, subjectKey: string) {
-  const conditions = await conditionsFor(subjectKey);
+  const conditions = await itemsFor(subjectKey);
   const approved = await approvedContent(conditions.map((c) => c.key));
   const d = await db();
   const sends = await d.select({ id: educationSends.id, keys: educationSends.conditionKeys, language: educationSends.language, channel: educationSends.channel, createdAt: educationSends.createdAt, openedAt: educationSends.openedAt, by: users.name })
@@ -394,7 +470,7 @@ export async function educationFor(actor: WorkspaceActor, subjectKey: string) {
       const a = approved.get(c.key);
       return { ...c, approved: !!a, titles: a ? { en: a.entry.education.en.title, es: a.entry.education.es.title } : null };
     }),
-    history: sends.map((s) => ({ ...s, labels: (s.keys as string[]).map(categoryLabel) })),
+    history: sends.map((s) => ({ ...s, labels: (s.keys as string[]).map(itemLabel) })),
   };
 }
 
@@ -409,14 +485,14 @@ export async function recordEducation(actor: WorkspaceActor, input: { subjectKey
   if (!keys.length) throw new WorkspaceError("Pick at least one topic.");
   const approved = await approvedContent(keys);
   const missing = keys.filter((k) => !approved.has(k));
-  if (missing.length && input.channel !== "call") throw new WorkspaceError(`Not approved by a provider yet: ${missing.map(categoryLabel).join(", ")}.`);
+  if (missing.length && input.channel !== "call") throw new WorkspaceError(`There is no handout yet for: ${missing.map(itemLabel).join(", ")}.`);
   const code = input.channel === "text" || input.channel === "email" || input.channel === "link" ? newCode() : null;
   const versions = Object.fromEntries(keys.filter((k) => approved.has(k)).map((k) => [k, approved.get(k)!.version]));
   await (await db()).insert(educationSends).values({
     code, subjectKey: input.subjectKey, patientId: await patientIdOf(input.subjectKey), conditionKeys: keys, versions, language: input.language,
     channel: input.channel, ccmTaskId: input.ccmTaskId ?? null, sentByUserId: actor.id,
   });
-  await audit(actor, "update_patient", { entityType: "education", description: `Education ${input.channel === "print" ? "printed" : input.channel === "call" ? "covered on call" : `sent (${input.channel})`}: ${keys.map(categoryLabel).join(", ")}` });
+  await audit(actor, "update_patient", { entityType: "education", description: `Education ${input.channel === "print" ? "printed" : input.channel === "call" ? "covered on call" : `sent (${input.channel})`}: ${keys.map(itemLabel).join(", ")}` });
   return { code };
 }
 
@@ -460,7 +536,7 @@ export async function emailEducation(actor: WorkspaceActor, input: { subjectKey:
 
 export async function publicTopics() {
   const approved = await approvedContent(LIBRARY_KEYS);
-  return LIBRARY_CONDITIONS.filter((c) => approved.has(c.key)).map((c) => {
+  return LIBRARY_ITEMS.filter((c) => approved.has(c.key)).map((c) => {
     const e = approved.get(c.key)!.entry;
     return { key: c.key, titles: { en: e.education.en.title, es: e.education.es.title } };
   });
@@ -494,7 +570,7 @@ export async function publicSent(code: string) {
 
 /** For the guided CCM call: the plan's state and each condition's approved teaching points. */
 export async function callContext(actor: WorkspaceActor, patientId: number) {
-  const conditions = await rosterConditions(patientId);
+  const conditions = await rosterItems(patientId);
   const approved = await approvedContent(conditions.map((c) => c.key));
   const d = await db();
   const [row] = await d.select().from(patientCarePlans).where(eq(patientCarePlans.patientId, patientId)).limit(1);
@@ -510,7 +586,7 @@ export async function callContext(actor: WorkspaceActor, patientId: number) {
     } : null,
     conditions: conditions.map((c) => {
       const a = approved.get(c.key);
-      return { key: c.key, label: c.label, diagnosis: c.diagnosis, talkingPoints: a?.entry.talkingPoints ?? null, lastCovered: lastCovered.get(c.key) ?? null };
+      return { key: c.key, label: c.label, kind: c.kind, diagnosis: c.diagnosis, talkingPoints: a?.entry.talkingPoints ?? null, lastCovered: lastCovered.get(c.key) ?? null };
     }),
   };
 }

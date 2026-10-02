@@ -17,7 +17,7 @@ const educationDoc = z.object({
 });
 
 export const carePlanTemplateSchema = z.object({
-  problem: z.string().trim().min(1).max(200),
+  problem: z.string().trim().min(1).max(400),
   expectedOutcome: para,
   goals: lines(12),
   monitoring: lines(15),
@@ -36,10 +36,13 @@ export const libraryEntrySchema = z.object({
 });
 
 export const planProblemSchema = carePlanTemplateSchema.extend({
-  problem: z.string().trim().max(200),
+  problem: z.string().trim().max(400),
   key: z.string().max(40).nullable(),
-  diagnosis: z.string().trim().max(300),
+  diagnosis: z.string().trim().max(1000),
   templateVersion: z.number().int().nullable(),
+  kind: z.enum(["condition", "addon"]).optional(),
+  assumed: z.boolean().optional(),
+  confirmType: z.boolean().optional(),
 });
 
 export const planGeneralSchema = z.object({

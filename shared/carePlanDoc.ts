@@ -11,6 +11,12 @@ export interface PlanProblem extends CarePlanTemplate {
   diagnosis: string;
   /** The approved template version this section started from (null: written by hand / no approved template yet). */
   templateVersion: number | null;
+  /** A plan for an exact diagnosis, or an add-on for a complication / overlap of conditions. */
+  kind?: "condition" | "addon";
+  /** The exact type wasn't on the record, so the most common type was assumed (e.g. "Diabetes" → Type 2). */
+  assumed?: boolean;
+  /** A general plan because the type isn't documented (heart-failure EF, CKD stage, liver-disease cause). */
+  confirmType?: boolean;
 }
 
 export interface PlanGeneral {

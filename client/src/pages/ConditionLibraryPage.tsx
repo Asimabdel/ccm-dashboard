@@ -39,16 +39,16 @@ export default function ConditionLibraryPage() {
     if (!editing) return;
     try {
       await save.mutateAsync({ key, entry: editing });
-      toast.success("Saved. It's a draft again until a provider approves it.");
+      toast.success("Saved. Patients, calls and new care plans use the new version.");
       setEditing(null);
       void utils.workspace.library.invalidate();
     } catch (e) { toast.error((e as Error).message); }
   };
   const doApprove = async () => {
-    if (!window.confirm(`Approve "${d?.label}" for patient handouts, CCM calls and new care plans? Your name and the date are recorded.`)) return;
+    if (!window.confirm(`Mark "${d?.label}" as reviewed by you? Your name and the date are recorded.`)) return;
     try {
       await approve.mutateAsync({ key });
-      toast.success("Approved.");
+      toast.success("Marked as reviewed.");
       void utils.workspace.library.invalidate();
     } catch (e) { toast.error((e as Error).message); }
   };
@@ -62,11 +62,12 @@ export default function ConditionLibraryPage() {
         <>
           <div className="mb-4 flex flex-wrap items-start gap-3">
             <div className="flex-1">
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">{d.categoryLabel}{d.kind === "addon" ? " · Add-on (complication or combination)" : ""}</p>
               <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-50">{d.label}</h1>
               <p className="mt-1 text-sm text-slate-500">
                 {d.status === "approved"
-                  ? <span className="font-semibold text-emerald-700">Approved v{d.version} by {d.approvedByName} on {fmtShortDate(d.approvedAt)}</span>
-                  : <span className="font-semibold text-amber-700">Draft v{d.version}: not approved yet{d.history.length ? ` (patients still get v${d.history[0]!.version}, approved by ${d.history[0]!.approvedByName})` : ""}</span>}
+                  ? <span className="font-semibold text-emerald-700">In use · v{d.version} reviewed by {d.approvedByName} on {fmtShortDate(d.approvedAt)}</span>
+                  : <span className="font-semibold text-slate-600">In use · v{d.version}{d.history.length ? ` (edited since ${d.history[0]!.approvedByName} reviewed v${d.history[0]!.version})` : ""}</span>}
                 {d.entry.basis.length > 0 && <> · Based on: {d.entry.basis.join("; ")}</>}
               </p>
             </div>
@@ -74,7 +75,7 @@ export default function ConditionLibraryPage() {
               <div className="flex flex-wrap gap-2">
                 {d.status === "approved" && <a href={learnPath(key)} target="_blank" rel="noreferrer"><Btn variant="secondary" size="sm"><ExternalLink size={14} /> Patient page</Btn></a>}
                 {d.canEdit && <Btn variant="secondary" size="sm" onClick={() => setEditing(structuredClone(d.entry))}><Pencil size={14} /> Edit</Btn>}
-                {d.canApprove && d.status !== "approved" && <Btn size="sm" disabled={approve.isPending} onClick={doApprove}>{approve.isPending ? <Loader2 size={14} className="animate-spin" /> : <BadgeCheck size={14} />} Approve</Btn>}
+                {d.canApprove && d.status !== "approved" && <Btn size="sm" disabled={approve.isPending} onClick={doApprove}>{approve.isPending ? <Loader2 size={14} className="animate-spin" /> : <BadgeCheck size={14} />} Mark reviewed</Btn>}
               </div>
             )}
             {editing && (
@@ -84,11 +85,10 @@ export default function ConditionLibraryPage() {
               </div>
             )}
           </div>
-          {!d.canApprove && d.status !== "approved" && !editing && <p className="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">A provider reviews and approves this before patients, calls and care plans use it.</p>}
 
           {d.status !== "approved" && d.reviewNotes.length > 0 && !editing && (
             <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
-              <p className="font-semibold">Please check before approving</p>
+              <p className="font-semibold">Points a provider may want to check</p>
               <ul className="mt-1 list-disc space-y-0.5 ps-5">{d.reviewNotes.map((n, i) => <li key={i}>{n}</li>)}</ul>
             </div>
           )}

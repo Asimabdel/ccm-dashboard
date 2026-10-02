@@ -30,6 +30,20 @@ export default function CarePlansPage() {
   const library = trpc.workspace.library.list.useQuery(undefined, { enabled: !!ws.caps?.carePlans && tab === "library" });
   const utils = trpc.useUtils();
   const buildMissing = trpc.workspace.carePlans.buildMissing.useMutation();
+  const signAll = trpc.workspace.carePlans.signAllMine.useMutation();
+  const doSignAll = async () => {
+    if (!window.confirm("Sign every complete care plan for your CCM patients that isn't signed yet? Your signature confirms you've reviewed and established each plan; your name and the time are recorded on each one.")) return;
+    let signed = 0, incomplete = 0;
+    try {
+      for (let i = 0; i < 30; i++) {
+        const r = await signAll.mutateAsync();
+        signed += r.signed; incomplete = r.incomplete;
+        if (r.done) break;
+      }
+      toast.success(`${signed} plan${signed === 1 ? "" : "s"} signed.${incomplete ? ` ${incomplete} still have empty sections; open them to finish.` : ""}`);
+    } catch (e) { toast.error((e as Error).message); }
+    finally { void utils.workspace.carePlans.invalidate(); }
+  };
   const [building, setBuilding] = useState(false);
 
   const words = nameKey(filter).split(" ").filter(Boolean);
@@ -39,7 +53,7 @@ export default function CarePlansPage() {
   if (!ws.caps?.carePlans) return <CCMDashboardLayout title="Care plans"><EmptyState icon={ClipboardCheck} title="No access" body="Your role doesn't include care plans." /></CCMDashboardLayout>;
 
   const startAll = async () => {
-    if (!window.confirm("Start a draft care plan for every CCM-active patient who doesn't have one? Each draft uses the approved templates for the patient's conditions; a provider still reviews and signs each one.")) return;
+    if (!window.confirm("Start a care plan for every CCM-active patient who doesn't have one? Each plan is built from the specialized templates for the patient's diagnoses; their provider signs it.")) return;
     setBuilding(true);
     let built = 0;
     try {
@@ -47,7 +61,7 @@ export default function CarePlansPage() {
         const r = await buildMissing.mutateAsync();
         built += r.built;
         if (r.done) {
-          toast.success(`${built} draft plan${built === 1 ? "" : "s"} started.${r.noConditions ? ` ${r.noConditions} patient${r.noConditions === 1 ? " has" : "s have"} no chronic conditions on record yet.` : ""}${r.approvedConditions === 0 ? " No condition templates are approved yet, so the drafts have empty sections." : ""}`);
+          toast.success(`${built} plan${built === 1 ? "" : "s"} started.${r.noConditions ? ` ${r.noConditions} patient${r.noConditions === 1 ? " has" : "s have"} no chronic conditions on record yet.` : ""}`);
           break;
         }
       }
@@ -73,7 +87,11 @@ export default function CarePlansPage() {
       <PageHeader
         title="Care plans"
         subtitle="Each CCM patient's comprehensive care plan, built from the provider-approved templates for their conditions and signed by a provider."
-        actions={tab === "none" && (c?.none ?? 0) > 0 ? <Btn disabled={building} onClick={startAll}>{building ? <Loader2 size={15} className="animate-spin" /> : <FilePlus2 size={15} />} Start drafts for all ({c?.none})</Btn> : undefined}
+        actions={tab === "none" && (c?.none ?? 0) > 0
+          ? <Btn disabled={building} onClick={startAll}>{building ? <Loader2 size={15} className="animate-spin" /> : <FilePlus2 size={15} />} Start plans for all ({c?.none})</Btn>
+          : tab === "to_sign" && queue.data?.canSign && (c?.to_sign ?? 0) > 0
+            ? <Btn disabled={signAll.isPending} onClick={doSignAll}>{signAll.isPending ? <Loader2 size={15} className="animate-spin" /> : <PenLine size={15} />} Sign all my patients' plans</Btn>
+            : undefined}
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -107,14 +125,24 @@ export default function CarePlansPage() {
           {library.data && (
             <>
               <p className="mb-3 text-sm text-slate-500">
-                Each condition has a patient handout (English and Spanish), talking points for the CCM call, and a care-plan template. They're drafts until a provider approves them; only approved content reaches patients, calls and new care plans.
-                {!library.data.canApprove && " A provider approves them."}
+                Each exact diagnosis, and each add-on for a complication or a combination of conditions, has a patient handout (English and Spanish), talking points for the CCM call and a care-plan template. All of it is in use; a provider can edit any item or mark it reviewed.
               </p>
+              {(() => {
+                const approvedN = library.data.conditions.filter((x) => x.status === "approved").length;
+                return <p className="mb-3 text-sm font-medium text-slate-700 dark:text-slate-200">{library.data.conditions.length} items in use · {approvedN} marked reviewed by a provider</p>;
+              })()}
+              {Array.from(new Set(library.data.conditions.map((x) => x.categoryLabel))).map((group) => (
+              <div key={group} className="mb-3">
+              <p className="mb-1 px-1 text-xs font-semibold uppercase tracking-wider text-slate-400">{group}</p>
               <div className={cn(cardCls, "divide-y divide-slate-100 dark:divide-slate-800")}>
-                {library.data.conditions.map((x) => (
+                {library.data.conditions.filter((x) => x.categoryLabel === group).map((x) => (
                   <Link key={x.key} href={`/care-plans/library/${x.key}`} className="flex flex-wrap items-center gap-3 px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/50">
                     <BookOpen size={16} className="text-slate-400" />
-                    <span className="min-w-[12rem] flex-1 font-medium text-slate-900 dark:text-slate-50">{x.label}{x.behavioral && <span className="ml-2 text-xs font-normal text-violet-600">behavioral</span>}</span>
+                    <span className="min-w-[12rem] flex-1 font-medium text-slate-900 dark:text-slate-50">
+                      {x.label}
+                      {x.kind === "addon" && <span className="ml-2 rounded bg-sky-50 px-1.5 py-0.5 text-[11px] font-semibold text-sky-700 dark:bg-sky-500/10 dark:text-sky-300">Add-on</span>}
+                      {x.kind === "condition" && x.isDefault && !x.general && <span className="ml-2 text-[11px] font-normal text-slate-400">used when the type isn't specified</span>}
+                    </span>
                     {!x.hasContent ? <span className="text-xs text-slate-400">No content yet</span> : (
                       <>
                         <span className={cn("rounded-full px-2.5 py-0.5 text-xs font-semibold", LIB_STATUS[x.status]!.cls)}>{LIB_STATUS[x.status]!.label}</span>
@@ -124,6 +152,8 @@ export default function CarePlansPage() {
                   </Link>
                 ))}
               </div>
+              </div>
+              ))}
             </>
           )}
         </>

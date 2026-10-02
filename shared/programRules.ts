@@ -49,7 +49,7 @@ const CATEGORIES: Category[] = [
   { key: "rheumatoid", label: "Rheumatoid arthritis", icd: /^M0[56]/, text: /rheumatoid arthritis/, chronic: true },
   { key: "osteoporosis", label: "Osteoporosis", icd: /^M8[01]/, text: /osteoporosis/, chronic: true },
   { key: "dementia", label: "Dementia", icd: /^(F0[1-3]|G3[01])/, text: /dementia|alzheimer/, chronic: true },
-  { key: "parkinsons", label: "Parkinson's disease", icd: /^G20/, text: /parkinson/, chronic: true },
+  { key: "parkinsons", label: "Parkinson's disease", icd: /^G20/, text: /parkinson/, notText: /secondary|neuroleptic|drug.induced|induced/, chronic: true },
   { key: "stroke", label: "Stroke (lasting effects)", icd: /^I69/, text: /sequela.*(stroke|cerebral infarction)|late effect.*stroke/, chronic: true },
   { key: "pvd", label: "Peripheral artery disease", icd: /^I7(0[2-9]|39)/, text: /peripheral (arterial|vascular|artery) disease/, chronic: true },
   { key: "cancer", label: "Cancer", icd: /^C(?!44)/, text: /cancer|carcinoma|malignan|lymphoma|leukemia|myeloma|melanoma/, notText: /basal cell|squamous cell carcinoma of skin|in situ/, chronic: true },
@@ -82,6 +82,24 @@ export const isBehavioralCategory = (key: string) => !!BY_KEY.get(key)?.behavior
 /** Problems that are over (or were never right) don't count. */
 const NOT_CURRENT = /resolved|inactive|remission|refuted|entered.in.error|history/i;
 const HISTORY_OF = /^\s*(history of|hx of|h\/o|family history|personal history|screening|rule out|r\/o)\b/i;
+/**
+ * Not a condition the patient has, wherever it appears in the name: screenings ("Diabetes mellitus
+ * screening"), history and family history, counseling ("Alcoholism counseling"), prevention ("HIV
+ * pre-exposure prophylaxis"), pregnancy-related, suspected / rule-out.
+ */
+const NOT_A_DIAGNOSIS = /\bscreening\b|\bhistory of\b|\bfamily history\b|\bpersonal history\b|\bhx of\b|\bcounseling\b|\bpre-?exposure\b|\bprophyla|\bmaternal\b|\bgestational\b|\bpregnan|\brule out\b|\bsuspected\b|\bencounter for\b/i;
+
+/**
+ * The diagnosis itself from a Practice Fusion condition name: PF sends "Encounter diagnosis: Hyperlipidemia"
+ * and "Hyperlipidemia; Not applicable; Not applicable; Active; Dr …" (severity, status and the provider
+ * after the first ";").
+ */
+export function cleanConditionTitle(t: string | null | undefined): string {
+  let s = (t ?? "").trim().replace(/^(encounter|visit|problem[- ]list)\s+diagnosis\s*:\s*/i, "");
+  const semi = s.indexOf(";");
+  if (semi > 0) s = s.slice(0, semi);
+  return s.trim();
+}
 
 export interface DiagnosisFact {
   title: string | null;
@@ -107,9 +125,9 @@ export function icd10Of(code: string | null | undefined): string | null {
 
 /** One problem-list entry → its category (or null). ICD-10 decides when there is one; otherwise the name. */
 export function classifyDiagnosis(f: DiagnosisFact): MatchedDiagnosis | null {
-  const title = (f.title ?? "").trim();
+  const title = cleanConditionTitle(f.title);
   if (f.status && NOT_CURRENT.test(f.status)) return null;
-  if (HISTORY_OF.test(title)) return null;
+  if (HISTORY_OF.test(title) || NOT_A_DIAGNOSIS.test(title)) return null;
   const icd = icd10Of(f.code);
   const name = title.toLowerCase();
   let cat: Category | undefined;

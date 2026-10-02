@@ -1376,7 +1376,12 @@ export const workspaceRouter = router({
       const actor = await actorFor(ctx, "carePlans");
       return run(() => carePlans.signPlan(actor, input.patientId, input.version));
     }),
-    /** The guided CCM call's card: plan state + each condition's approved teaching points. */
+    /** A provider signs every complete, unsigned plan of the CCM patients assigned to them. */
+    signAllMine: protectedProcedure.mutation(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "carePlans");
+      return run(() => carePlans.signAllMine(actor, { deadline: Date.now() + 20_000 }));
+    }),
+    /** The guided CCM call's card: plan state + each condition's teaching points. */
     forCall: protectedProcedure.input(z.object({ patientId: z.number().int().positive() })).query(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "carePlans");
       return run(() => carePlans.callContext(actor, input.patientId));

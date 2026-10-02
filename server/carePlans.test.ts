@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_LIBRARY, LIBRARY_KEYS, educationMessage, keyOfSlug, slugOf } from "../shared/conditionLibrary";
+import { DEFAULT_LIBRARY, LIBRARY_KEYS, educationMessage, keyOfSlug, resolveItems, slugOf } from "../shared/conditionLibrary";
 import { defaultGeneral, planGaps, problemFromTemplate, renderPlanText } from "../shared/carePlanDoc";
-import { classifyConditionName } from "../shared/programRules";
+import { classifyConditionName, classifyDiagnosis, cleanConditionTitle } from "../shared/programRules";
+import { cleanList } from "./conditionCleanup";
 import { can } from "../shared/workspace";
 import { libraryEntrySchema } from "./carePlanSchemas";
 import { appRouter } from "./routers";
@@ -37,6 +38,78 @@ describe("condition library", () => {
     for (const key of LIBRARY_KEYS) expect(msg.toLowerCase()).not.toContain(DEFAULT_LIBRARY.get(key)!.education.en.title.toLowerCase());
     expect(slugOf("heart_failure")).toBe("heart-failure");
     expect(keyOfSlug("Heart-Failure")).toBe("heart_failure");
+  });
+});
+
+describe("diagnosis names from Practice Fusion", () => {
+  it("reads the diagnosis out of Practice Fusion's names", () => {
+    expect(cleanConditionTitle("Encounter diagnosis: Hyperlipidemia")).toBe("Hyperlipidemia");
+    expect(cleanConditionTitle("Hyperlipidemia; Not applicable; Not applicable; Active; Dr Test Provider")).toBe("Hyperlipidemia");
+    expect(classifyDiagnosis({ title: "Hyperlipidemia; Not applicable; Not applicable; Active; Dr Test Provider" })).toMatchObject({ category: "lipids", title: "Hyperlipidemia" });
+  });
+
+  it("doesn't count screenings, history, counseling, PrEP or pregnancy-related entries as conditions", () => {
+    for (const t of [
+      "Encounter diagnosis: Screening for malignant neoplasm of colon",
+      "Diabetes mellitus screening; Not applicable; Not applicable; Active; Dr Test",
+      "Encounter diagnosis: Family history of malignant neoplasm",
+      "Encounter diagnosis: Personal history of primary malignant neoplasm",
+      "Alcoholism counseling; Not applicable; Not applicable; Active",
+      "Encounter diagnosis: Administration of human immunodeficiency virus pre-exposure prophylaxis",
+      "Encounter diagnosis: Maternal hypertension",
+      "Encounter diagnosis: Screening for osteoporosis",
+      "Encounter diagnosis: Secondary parkinsonism",
+    ]) expect(classifyDiagnosis({ title: t }), t).toBeNull();
+  });
+
+  it("cleans roster lists filled from Practice Fusion, leaving what staff typed", () => {
+    const r = cleanList([
+      "Hyperlipidemia; Not applicable; Not applicable; Active; Dr Test",
+      "Encounter diagnosis: Screening for malignant neoplasm of colon",
+      "Encounter diagnosis: Hyperlipidemia",
+      "GERD",
+      "HTN",
+    ]);
+    expect(r.list).toEqual(["Hyperlipidemia", "GERD", "HTN"]);
+    expect(r.renamed).toBe(2);
+    expect(r.removed).toEqual(["screening"]);
+  });
+});
+
+describe("specialized plans by exact diagnosis", () => {
+  const keys = (names: string[]) => resolveItems(names).map((i) => i.key);
+
+  it("picks the exact diagnosis and the add-ons for complications and overlaps", () => {
+    const items = resolveItems([
+      "Encounter diagnosis: Hyperglycemia due to type 2 diabetes mellitus",
+      "Polyneuropathy due to type 2 diabetes mellitus; Not applicable; Not applicable; Active",
+      "Essential hypertension",
+      "Mixed hyperlipidemia",
+    ]);
+    expect(items.map((i) => i.key)).toEqual(["diabetes_t2", "hypertension", "lipids", "dm_neuropathy", "dm_above_goal", "cardiometabolic"]);
+    expect(items[0]).toMatchObject({ assumed: false, diagnosis: "Hyperglycemia due to type 2 diabetes mellitus / Polyneuropathy due to type 2 diabetes mellitus" });
+  });
+
+  it("assumes the most common type when the name is vague, except where treatment depends on it", () => {
+    expect(resolveItems(["Diabetes"])[0]).toMatchObject({ key: "diabetes_t2", assumed: true });
+    expect(resolveItems(["Hypothyroidism"])[0]).toMatchObject({ key: "thyroid_hypo", assumed: false });
+    expect(keys(["Type 1 diabetes mellitus"])).toEqual(["diabetes_t1"]);
+    expect(resolveItems(["Heart failure"])[0]).toMatchObject({ key: "heart_failure", confirmType: true, assumed: false });
+    expect(keys(["Chronic systolic heart failure"])).toEqual(["hf_reduced"]);
+    expect(resolveItems(["Chronic kidney disease"])[0]).toMatchObject({ key: "ckd", confirmType: true });
+    expect(keys(["Chronic kidney disease stage 3a"])).toEqual(["ckd_3"]);
+    expect(keys(["End-stage renal disease"])).toEqual(["ckd_5"]);
+  });
+
+  it("tells liver, substance, behavioral and cardiac types apart", () => {
+    expect(keys(["Non-alcoholic fatty liver disease"])).toEqual(["liver_fatty"]);
+    expect(keys(["Alcoholic cirrhosis"])).toEqual(["liver_alcohol", "liver_cirrhosis"]);
+    expect(keys(["Opioid dependence"])).toEqual(["substance_opioid"]);
+    expect(keys(["Anxiety", "Depression"]).sort()).toEqual(["anxiety", "dep_anx", "depression"]);
+    expect(keys(["Panic disorder"])).toEqual(["anxiety_panic"]);
+    expect(keys(["Bipolar disorder", "Obesity"]).sort()).toEqual(["bipolar", "obesity", "smi_metabolic"]);
+    expect(keys(["Old myocardial infarction"])).toEqual(["cad_post_event"]);
+    expect(keys(["Hypertensive heart and chronic kidney disease stage 5"])).toEqual(["hypertension_heart", "htn_ckd"]);
   });
 });
 

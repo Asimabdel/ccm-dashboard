@@ -64,13 +64,14 @@ export function CallCarePlanCard({ patientId, covered, setCovered, reviewed, set
               <button type="button" onClick={() => setOpen(open === c.key ? null : c.key)} disabled={!c.talkingPoints} className="flex flex-1 items-center gap-1.5 text-left text-sm font-medium text-slate-800 disabled:cursor-default">
                 {c.talkingPoints ? (open === c.key ? <ChevronDown size={15} /> : <ChevronRight size={15} />) : <span className="w-[15px]" />}
                 {c.label}
+                {c.kind === "addon" && <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 dark:bg-sky-500/10 dark:text-sky-300">Add-on</span>}
               </button>
               <span className="text-[11px] text-slate-400">{c.lastCovered ? `Last taught ${fmtShortDate(c.lastCovered)}` : "Not taught yet"}</span>
               {c.talkingPoints ? (
                 <label className="flex items-center gap-1.5 text-xs font-medium text-slate-700 cursor-pointer">
                   <input type="checkbox" checked={covered.includes(c.key)} onChange={() => toggle(c.key)} className="accent-teal-600 w-4 h-4" /> Covered
                 </label>
-              ) : <span className="text-[11px] text-amber-700">Talking points not approved yet</span>}
+              ) : <span className="text-[11px] text-slate-400">No talking points yet</span>}
             </div>
             {open === c.key && c.talkingPoints && (
               <div className="mt-3 grid gap-3 sm:grid-cols-2 text-[13px]">

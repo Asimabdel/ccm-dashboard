@@ -93,16 +93,16 @@ export function EducationPanel({ subjectKey }: { subjectKey: string }) {
                 onChange={() => setPicked((s) => { const n = new Set(s); if (n.has(c.key)) n.delete(c.key); else n.add(c.key); return n; })} />
               <span className="min-w-[10rem] flex-1">
                 <span className="font-medium text-slate-900 dark:text-slate-50">{c.titles ? c.titles[lang] : c.label}</span>
-                <span className="block text-xs text-slate-500">{c.diagnosis}</span>
+                <span className="block text-xs text-slate-500">{c.kind === "addon" ? `Add-on: ${c.label}` : c.diagnosis}{c.assumed ? " · type assumed" : ""}</span>
               </span>
               {c.approved
                 ? <a href={learnPath(c.key, lang)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-800"><ExternalLink size={12} /> View</a>
-                : <span className="text-xs text-amber-700">Waiting for a provider to approve it</span>}
+                : <span className="text-xs text-slate-400">No handout yet</span>}
             </li>
           ))}
         </ul>
         {approvedCount === 0 ? (
-          <p className="mt-3 text-sm text-amber-700">None of these handouts are approved yet. A provider approves them in Care plans → Condition library.</p>
+          <p className="mt-3 text-sm text-slate-500">There are no handouts for these conditions yet.</p>
         ) : (
           <>
             <div className="mt-4 flex flex-wrap gap-2">
