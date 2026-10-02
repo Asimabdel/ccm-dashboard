@@ -7,8 +7,9 @@
 //   New RPMs: 0
 //   Injections: Esraa Naser (WL #11), Fatima Gendra (WL #8)
 // Seen = that provider's visits marked arrived…seen/checked out (schedule import / Patient Flow).
-// Testing = in-office tests marked done that day. New CCMs / RPMs = patients seen that day who qualify
-// for the program (Program approvals, from their diagnoses) or signed its consent that day.
+// Testing = in-office tests marked done that day. New CCMs / RPMs = NEW patients (that day was their first
+// visit with the practice) who qualify for the program (Program approvals, from their diagnoses) or signed
+// its consent that day.
 // Injections = logged by staff in MyPCP.
 
 export const INJECTION_KINDS = {

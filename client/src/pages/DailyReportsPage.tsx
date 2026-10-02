@@ -83,7 +83,7 @@ export default function DailyReportsPage() {
       {reports.length > 0 && (
         <p className="mt-5 flex items-start gap-2 text-xs text-slate-500">
           <Info size={13} className="mt-0.5 shrink-0" />
-          <span><b>Seen</b> = visits marked arrived through seen/checked out (Practice Fusion schedule import or Patient Flow). <b>Testing</b> = ABI-Q / PFT / RMR marked done in the Testing tab. <b>New CCMs / RPMs</b> = patients seen that day who qualify by their diagnoses (Program approvals) or signed that consent that day; new diagnoses are picked up the next morning, after the overnight Practice Fusion update. <b>Injections</b> = logged with "Injection given" on the patient or on Patient Flow.</span>
+          <span><b>Seen</b> = visits marked arrived through seen/checked out (Practice Fusion schedule import or Patient Flow). <b>Testing</b> = ABI-Q / PFT / RMR marked done in the Testing tab. <b>New CCMs / RPMs</b> = new patients only (that day was their first visit with the practice, by the imported schedules and the Practice Fusion chart) who qualify by their diagnoses (Program approvals) or signed that consent that day; a new patient's diagnoses are picked up the next morning, after the overnight Practice Fusion update. <b>Injections</b> = logged with "Injection given" on the patient or on Patient Flow.</span>
         </p>
       )}
     </CCMDashboardLayout>

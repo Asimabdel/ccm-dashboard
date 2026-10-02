@@ -64,17 +64,18 @@ export async function dailyReports(actor: WorkspaceActor, input: { date: string;
   // Seen: that day's visits marked arrived … seen / checked out. Each person goes on the provider they saw.
   const visits = await d.select({ patientId: appointments.patientId, name: appointments.patientName, dob: appointments.dateOfBirth, providerId: appointments.providerId, providerName: appointments.providerName, clinicId: appointments.clinicId, status: appointments.status, startsAt: appointments.startsAt })
     .from(appointments).where(eq(appointments.date, date)).orderBy(asc(appointments.startsAt));
-  const seenBy = new Map<string, { b: Bucket; name: string }>();
+  const seenBy = new Map<string, { b: Bucket; name: string; key: string }>();
   const anyVisitBy = new Map<string, Bucket>();
   for (const v of visits) {
     if (!inScope(v.clinicId)) continue;
     const person = personOf({ patientId: v.patientId, name: v.name, dob: ymd(v.dob) });
+    const subjectKey = v.patientId ? `p:${v.patientId}` : `s:${nameKey(v.name)}|${ymd(v.dob) ?? ""}`;
     const b = bucket(v.providerId, v.providerName);
     if (!anyVisitBy.has(person)) anyVisitBy.set(person, b);
     if (!(SEEN_STATUSES as string[]).includes(v.status)) continue;
     if (v.clinicId) b.clinics.add(clinicName.get(v.clinicId) ?? "");
     b.seen.add(person);
-    if (!seenBy.has(person)) seenBy.set(person, { b, name: displayName(v.name) });
+    if (!seenBy.has(person)) seenBy.set(person, { b, name: displayName(v.name), key: subjectKey });
   }
   /** The provider a person counts on that day: the one they were seen by, else any visit that day, else their own provider. */
   const providerFor = async (person: string, fallback: { providerId: number | null } | null) =>
@@ -93,7 +94,15 @@ export async function dailyReports(actor: WorkspaceActor, input: { date: string;
     b.testing.set(person, row);
   }
 
-  // New CCMs / RPMs: seen that day, and qualify (Program approvals, from diagnoses) or signed the consent that day.
+  // New CCMs / RPMs: NEW patients only (that day was their first visit with the practice: no earlier seen
+  // visit on any imported schedule or in the Practice Fusion chart), who qualify (Program approvals, from
+  // their diagnoses) or signed that consent that day.
+  const { loadDirectory } = await import("./directoryDb");
+  const dir = await loadDirectory();
+  const isNewPatient = (key: string) => {
+    const first = dir.get(key)?.firstVisit ?? null;
+    return !first || first >= date;
+  };
   const qualifies = { ccm: new Set<string>(), rpm: new Set<string>() };
   const sugg = await d.select({ patientId: programSuggestions.patientId, name: programSuggestions.name, dob: programSuggestions.dob, program: programSuggestions.program })
     .from(programSuggestions).where(and(inArray(programSuggestions.program, ["ccm", "rpm"]), ne(programSuggestions.status, "withdrawn")));
@@ -104,7 +113,8 @@ export async function dailyReports(actor: WorkspaceActor, input: { date: string;
     if (ymd(c.ccm) === date) qualifies.ccm.add(`p:${c.id}`);
     if (ymd(c.rpm) === date) qualifies.rpm.add(`p:${c.id}`);
   }
-  for (const [person, { b, name }] of Array.from(seenBy)) {
+  for (const [person, { b, name, key }] of Array.from(seenBy)) {
+    if (!isNewPatient(key)) continue;
     if (qualifies.ccm.has(person)) b.ccm.set(person, name);
     if (qualifies.rpm.has(person)) b.rpm.set(person, name);
   }
