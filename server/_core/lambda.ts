@@ -56,9 +56,12 @@ export const handler = async (event: any, context: any) => {
     const faxBox = await runGmailSync({ slot: "fax", maxMs: 4_000, manual: false });
     // Faxes waiting for the AI read (each takes a few seconds; none starts after 17s so the run ends before 30s).
     const faxRead = await readPendingFaxes({ deadline: started + 17_000 });
+    // Emails no patient matched: the AI reads who they're about (name + DOB → their care team).
+    const { readPendingEmails } = await import("../emailRouting");
+    const emailRead = await readPendingEmails({ deadline: started + 22_000 });
     // Then keep loading earlier emails ("Load the last 30 days") with the time left.
     const backfill = "skipped" in sync ? null : await runGmailBackfill({ deadline: started + 23_000 });
-    return { ...sync, faxBox, faxRead, backfill };
+    return { ...sync, faxBox, faxRead, emailRead, backfill };
   }
   // Demo plan: one made-up Availity eligibility request (nothing stored), to check the reply format.
   if (event && event.__job === "availity-demo-probe" && !event.requestContext && !event.version) {

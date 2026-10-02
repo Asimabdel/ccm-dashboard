@@ -1005,6 +1005,13 @@ const INTAKE_COLUMNS: { table: string; column: string; ddl: string }[] = [
   // (carePlanReviewed may already exist from the archived June care plan; then it's left as is.)
   { table: "ccmNotes", column: "carePlanReviewed", ddl: "`carePlanReviewed` boolean DEFAULT false AFTER `bhiRiskFlag`" },
   { table: "ccmNotes", column: "educationCovered", ddl: "`educationCovered` json NULL AFTER `carePlanReviewed`" },
+  // Added 2026-10-02: AI read of unmatched patient emails (who the email is about).
+  { table: "emailMessages", column: "aiPatientName", ddl: "`aiPatientName` varchar(255) NULL AFTER `historical`" },
+  { table: "emailMessages", column: "aiDob", ddl: "`aiDob` varchar(10) NULL AFTER `aiPatientName`" },
+  { table: "emailMessages", column: "aiAt", ddl: "`aiAt` datetime NULL AFTER `aiDob`" },
+  { table: "emailMessages", column: "aiError", ddl: "`aiError` varchar(255) NULL AFTER `aiAt`" },
+  { table: "emailMessages", column: "suggestedKey", ddl: "`suggestedKey` varchar(120) NULL AFTER `aiError`" },
+  { table: "emailMessages", column: "suggestedName", ddl: "`suggestedName` varchar(255) NULL AFTER `suggestedKey`" },
 ];
 async function upgradeIntake(db: Db): Promise<string[]> {
   const applied: string[] = [];

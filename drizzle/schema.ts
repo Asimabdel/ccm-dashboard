@@ -895,6 +895,13 @@ export const emailMessages = mysqlTable("emailMessages", {
   assignedUserId: int("assignedUserId").references(() => users.id),
   /** Loaded from before the mailbox was connected ("Load the last 30 days"): shown, but no task. */
   historical: boolean("historical").default(false).notNull(),
+  // AI read of an unmatched email (who it is about) and the patient it points to (2026-10-02).
+  aiPatientName: varchar("aiPatientName", { length: 255 }),
+  aiDob: varchar("aiDob", { length: 10 }),
+  aiAt: datetime("aiAt"),
+  aiError: varchar("aiError", { length: 255 }),
+  suggestedKey: varchar("suggestedKey", { length: 120 }),
+  suggestedName: varchar("suggestedName", { length: 255 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (t) => ({
   statusIdx: index("emailMessages_status_idx").on(t.status, t.receivedAt),

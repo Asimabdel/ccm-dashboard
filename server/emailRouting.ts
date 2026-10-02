@@ -131,3 +131,84 @@ export async function refreshEmailRouting(opts: { apply: boolean; days: number; 
   return { applied: opts.apply, days: opts.days, waitingChecked: waiting.length, openTasksChecked: open.length, ...counts };
 }
 
+
+// ---------------------------------------------------------------------------
+// AI read of unmatched emails (Bedrock, covered by the AWS BAA): who is the email about?
+// ---------------------------------------------------------------------------
+
+/** Everyone an email could be about, with a date of birth: CCM roster, schedule, Practice Fusion. */
+async function peopleWithDob() {
+  const { buildNameDobIndex } = await import("./workspaceDb");
+  const { fhirPatients } = await import("../drizzle/schema");
+  const out = Array.from((await buildNameDobIndex()).entries()).map(([k, v]) => ({ ...v, dob: k.split("|")[1] ?? null }));
+  const seen = new Set(out.map((p) => `${p.key}|${p.dob}`));
+  for (const f of await (await db()).select({ key: fhirPatients.subjectKey, patientId: fhirPatients.patientId, name: fhirPatients.name, dob: fhirPatients.dob }).from(fhirPatients)) {
+    if (!f.name || !f.dob || seen.has(`${f.key}|${f.dob}`)) continue;
+    out.push({ key: f.key, patientId: f.patientId, name: f.name, dob: f.dob });
+  }
+  return out;
+}
+
+/**
+ * Read waiting (unmatched) emails from the last 30 days, newest first, until the deadline. A name +
+ * date of birth matching exactly one patient routes the email to them; a weaker match (a unique name,
+ * same birthday + last name, or a phone number) is saved as a suggestion on its "Who is this?" task.
+ * Counts only.
+ */
+export async function readPendingEmails(opts: { deadline: number }) {
+  if (!process.env.BEDROCK_MODEL_ID) return { read: 0, routed: 0, suggested: 0 };
+  const d = await db();
+  const { invokeLLM } = await import("./_core/llm");
+  const { EMAIL_AI_PROMPT, parseEmailReading } = await import("../shared/email");
+  const { makePersonMatcher } = await import("../shared/fax");
+  const { buildPhoneIndex } = await import("./workspaceDb");
+  const g = await import("./gmailSync");
+  const since = new Date(Date.now() - 30 * 86_400_000);
+  let read = 0, routed = 0, suggested = 0;
+  let match: ReturnType<typeof makePersonMatcher> | null = null;
+  let phones: Awaited<ReturnType<typeof buildPhoneIndex>> | null = null;
+  // Each read takes a few seconds: don't start one without time to finish it.
+  while (Date.now() < opts.deadline - 5_000) {
+    const [m] = await d.select().from(emailMessages)
+      .where(and(eq(emailMessages.status, "needs_patient"), eq(emailMessages.historical, false), sql`${emailMessages.aiAt} IS NULL`, gte(emailMessages.receivedAt, since)))
+      .orderBy(desc(emailMessages.receivedAt)).limit(1);
+    if (!m) break;
+    read++;
+    try {
+      const res = await invokeLLM({ messages: [
+        { role: "system", content: EMAIL_AI_PROMPT },
+        { role: "user", content: `From: ${m.fromName ?? ""} <${m.fromEmail ?? ""}>\nSubject: ${m.subject ?? ""}\n\n${(m.preview ?? "").slice(0, 1500)}` },
+      ] });
+      const raw = res.choices[0]?.message?.content;
+      const r = parseEmailReading(typeof raw === "string" ? raw : JSON.stringify(raw ?? ""));
+      if (!r) throw new Error("The AI couldn't read this email");
+      match ??= makePersonMatcher(await peopleWithDob());
+      phones ??= await buildPhoneIndex();
+      // The patient's name: the one written in the email, else (when the writer is the patient) the sender's.
+      const name = r.patientName ?? (r.writerIsPatient !== false ? m.fromName : null);
+      const hit = name ? match(name, r.dob) : null;
+      let suggestion: { key: string; patientId: number | null; name: string } | null = hit && !hit.sure ? hit.person : null;
+      if (!hit && r.phone) suggestion = phones.get(r.phone) ?? null;
+      await d.update(emailMessages).set({
+        aiPatientName: r.patientName?.slice(0, 255) ?? null, aiDob: r.dob, aiAt: new Date(), aiError: null,
+        suggestedKey: suggestion?.key ?? null, suggestedName: suggestion?.name.slice(0, 255) ?? null,
+      }).where(eq(emailMessages.id, m.id));
+      if (hit?.sure) {
+        await g.assignToSubject(m, { key: hit.person.key, patientId: hit.person.patientId, name: hit.person.name }, "ai");
+        routed++;
+      } else if (suggestion && m.taskId) {
+        const [t] = await d.select({ description: workTasks.description, createdBy: workTasks.createdByUserId }).from(workTasks).where(eq(workTasks.id, m.taskId)).limit(1);
+        const note = `AI read this email: it looks like ${suggestion.name}. Confirm (or pick someone else) on Patient emails.`;
+        if (t) {
+          await d.update(workTasks).set({ description: `${note}\n\n${t.description ?? ""}`.slice(0, 60_000) }).where(eq(workTasks.id, m.taskId));
+          await d.insert(workTaskActivities).values({ taskId: m.taskId, userId: t.createdBy, type: "comment", body: note });
+        }
+        suggested++;
+      }
+    } catch (e) {
+      await d.update(emailMessages).set({ aiAt: new Date(), aiError: (e as Error).message.slice(0, 255) }).where(eq(emailMessages.id, m.id));
+    }
+  }
+  if (read) console.log(`[email-read] ${JSON.stringify({ read, routed, suggested })}`); // counts only
+  return { read, routed, suggested };
+}

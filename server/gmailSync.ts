@@ -366,7 +366,7 @@ export const matchIndex = buildIndex;
 
 function taskText(m: { fromName: string | null; fromEmail: string | null; subject: string | null; receivedAt: Date; preview: string | null; link: string; method: string }, patientName: string) {
   const who = m.fromName ? `${m.fromName} <${m.fromEmail}>` : m.fromEmail ?? "unknown sender";
-  const how = { address: "a remembered email address", name: "the sender's name", phone: "a phone number in the email", manual: "staff" }[m.method] ?? m.method;
+  const how = { address: "an email address on file", name: "the sender's name", phone: "a phone number in the email", manual: "staff", ai: "reading the email (patient's name and date of birth)" }[m.method] ?? m.method;
   return {
     title: `Email from ${patientName}: ${m.subject || "(no subject)"}`.slice(0, 250),
     description: `From: ${who}\nReceived: ${m.receivedAt.toLocaleString("en-US", { timeZone: "America/Chicago" })}\nMatched to ${patientName} by ${how}.\n\n${m.preview ?? ""}\n\nOpen in Gmail: ${m.link}\nReply from the practice mailbox; this task is only a pointer to the email.`,
@@ -398,6 +398,29 @@ async function whoIsThisTask(actor: WorkspaceActor, m: { fromName: string | null
   return { taskId: task.id, assignedUserId: who.assignedUserId };
 }
 
+/** Route a waiting email to a patient found without staff (re-match or AI read): its task moves to their team. */
+export async function assignToSubject(m: typeof emailMessages.$inferSelect, subject: EmailSubject, method: string) {
+  const d = await db();
+  const c = await config();
+  const link = gmailMessageLink(c.mailbox ?? "", m.messageIdHeader, m.threadId ?? "");
+  const actor = await systemActor();
+  const who = await emailAssignee(subject.key);
+  const text = taskText({ ...m, link, method }, subject.name);
+  let taskId = m.taskId;
+  if (taskId) {
+    await d.update(workTasks).set({ title: text.title, description: text.description, patientId: subject.patientId, clinicId: who.clinicId, assignedUserId: who.assignedUserId, assignedRole: who.assignedUserId ? null : who.assignedRole }).where(eq(workTasks.id, taskId));
+    await d.insert(workTaskActivities).values({ taskId, userId: actor.id, type: "assigned", meta: { to: who.assignedUserId ? String(who.assignedUserId) : who.assignedRole, reason: `matched by ${method}` } });
+  } else if (!m.historical) {
+    taskId = (await createTask({ ...actor, clinicIds: null }, {
+      title: text.title, description: text.description, patientId: subject.patientId, clinicId: who.clinicId,
+      assignedUserId: who.assignedUserId, assignedRole: who.assignedRole, priority: "normal", category: "patient_email",
+      dueDate: localDateStr(), sourceType: "email", sourceRef: m.gmailId,
+    })).id;
+  }
+  await d.update(emailMessages).set({ status: "assigned", patientId: subject.patientId, subjectKey: subject.key, patientName: subject.name.slice(0, 255), matchMethod: method.slice(0, 20), taskId, assignedUserId: taskId ? who.assignedUserId : null }).where(eq(emailMessages.id, m.id));
+  return who;
+}
+
 /**
  * One waiting email (re-routing job): match it again with the current index; a match is routed like
  * new mail, otherwise it gets a "Who is this?" task (once).
@@ -410,19 +433,7 @@ export async function routeWaitingEmail(m: typeof emailMessages.$inferSelect, id
   const actor = await systemActor();
   if (match && !("ignore" in match)) {
     if (!apply) return "matched";
-    const who = await emailAssignee(match.subject.key);
-    const text = taskText({ ...m, link, method: match.method }, match.subject.name);
-    let taskId = m.taskId;
-    if (taskId) {
-      await d.update(workTasks).set({ title: text.title, description: text.description, patientId: match.subject.patientId, clinicId: who.clinicId, assignedUserId: who.assignedUserId, assignedRole: who.assignedUserId ? null : who.assignedRole }).where(eq(workTasks.id, taskId));
-    } else {
-      taskId = (await createTask({ ...actor, clinicIds: null }, {
-        title: text.title, description: text.description, patientId: match.subject.patientId, clinicId: who.clinicId,
-        assignedUserId: who.assignedUserId, assignedRole: who.assignedRole, priority: "normal", category: "patient_email",
-        dueDate: localDateStr(), sourceType: "email", sourceRef: m.gmailId,
-      })).id;
-    }
-    await d.update(emailMessages).set({ status: "assigned", patientId: match.subject.patientId, subjectKey: match.subject.key, patientName: match.subject.name.slice(0, 255), matchMethod: match.method, taskId, assignedUserId: who.assignedUserId }).where(eq(emailMessages.id, m.id));
+    await assignToSubject(m, match.subject, match.method);
     return "matched";
   }
   if (m.taskId) return "waiting";
@@ -692,6 +703,8 @@ export async function listEmails(filter: "needs_patient" | "all", clinicIds: num
     id: m.id, fromEmail: m.fromEmail, fromName: m.fromName, subject: m.subject, preview: m.preview, receivedAt: m.receivedAt,
     status: m.status, patientName: m.patientName, patientId: m.patientId, matchMethod: m.matchMethod, taskId: m.taskId, historical: m.historical,
     assigneeName: assignee, link: c.mailbox ? gmailMessageLink(c.mailbox, m.messageIdHeader, m.threadId ?? "") : null,
+    // What the AI read in an unmatched email, and the patient it points to (staff confirm).
+    ai: m.aiAt ? { patientName: m.aiPatientName, dob: m.aiDob, error: m.aiError, suggestedKey: m.suggestedKey, suggestedName: m.suggestedName } : null,
   }));
 }
 

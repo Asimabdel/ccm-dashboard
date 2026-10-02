@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
-import { ExternalLink, Inbox, Loader2, Mail, Search, UserCheck, UserX } from "lucide-react";
+import { ExternalLink, Inbox, Loader2, Mail, Search, Sparkles, UserCheck, UserX } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { useWorkspace } from "@/components/workspace/useWorkspace";
@@ -11,7 +11,7 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { fmtDay } from "@shared/workforce";
 
-const METHOD: Record<string, string> = { address: "known address", name: "sender's name", phone: "phone number in email", manual: "linked by staff" };
+const METHOD: Record<string, string> = { address: "known address", name: "sender's name", phone: "phone number in email", manual: "linked by staff", ai: "AI read the email: name + date of birth" };
 const fmtTime = (d: Date | string) => new Date(d).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Chicago" });
 
 /**
@@ -25,6 +25,10 @@ export default function PatientEmailsPage() {
   const list = trpc.workspace.email.list.useQuery({ filter }, { enabled: !!user && !!ws.caps?.emailTriage, refetchInterval: 60_000 });
   const utils = trpc.useUtils();
   const [linking, setLinking] = useState<{ id: number; from: string } | null>(null);
+  const confirm = trpc.workspace.email.link.useMutation({
+    onSuccess: (r) => { void utils.workspace.email.invalidate(); void utils.workspace.tasks.invalidate(); toast.success(r.task ? `Confirmed and sent to ${r.assignedTo}.` : "Confirmed."); },
+    onError: (e) => toast.error(e.message),
+  });
   const ignore = trpc.workspace.email.ignore.useMutation({
     onSuccess: () => { void utils.workspace.email.invalidate(); void utils.workspace.tasks.invalidate(); toast.success("Hidden — emails from that address will be ignored."); },
     onError: (e) => toast.error(e.message),
@@ -66,6 +70,18 @@ export default function PatientEmailsPage() {
                       </p>
                     )}
                     {m.status === "ignored" && <p className="mt-1 text-xs text-slate-400">Not a patient email</p>}
+                    {m.status === "needs_patient" && m.ai && (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-lg bg-violet-50 px-2.5 py-1.5 text-xs text-violet-900 dark:bg-violet-500/10 dark:text-violet-200">
+                        <Sparkles size={13} className="shrink-0" />
+                        {m.ai.error ? <span>The AI couldn't read this email.</span>
+                          : m.ai.suggestedName ? <span>AI read it: looks like <b>{m.ai.suggestedName}</b>{m.ai.dob ? ` (DOB ${fmtDay(m.ai.dob)})` : ""}.</span>
+                          : m.ai.patientName ? <span>AI read it: about <b>{m.ai.patientName}</b>{m.ai.dob ? ` (DOB ${fmtDay(m.ai.dob)})` : ""}, but that isn't a patient MyPCP knows.</span>
+                          : <span>AI read it: no patient name in the email.</span>}
+                        {m.ai.suggestedKey && (
+                          <Btn size="sm" disabled={confirm.isPending} onClick={() => confirm.mutate({ emailId: m.id, subjectKey: m.ai!.suggestedKey! })}><UserCheck size={13} /> Confirm</Btn>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <div className="flex shrink-0 flex-wrap items-center gap-2">
                     {m.link && <a href={m.link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 hover:text-slate-900"><ExternalLink size={13} /> Gmail</a>}
