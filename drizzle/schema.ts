@@ -274,6 +274,10 @@ export const ccmNotes = mysqlTable("ccmNotes", {
   carePlanUpdated: boolean("carePlanUpdated").default(false),
   // Safety flag (e.g. PHQ-9 item 9 / suicidal ideation) — routes to provider review.
   bhiRiskFlag: boolean("bhiRiskFlag").default(false),
+  // CCM: the comprehensive care plan was reviewed with the patient on this call, and which
+  // conditions' teaching points were covered (condition keys). Added 2026-10-01.
+  carePlanReviewed: boolean("carePlanReviewed").default(false),
+  educationCovered: json("educationCovered").$type<string[]>(),
 
   timeSpentMinutes: int("timeSpentMinutes").default(0),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -1706,4 +1710,97 @@ export const patientFiles = mysqlTable("patientFiles", {
 }, (t) => ({
   subjectIdx: index("patientFiles_subject_idx").on(t.subjectKey, t.createdAt),
   patientIdx: index("patientFiles_patient_idx").on(t.patientId),
+}));
+
+/**
+ * The condition library as the providers approved it: one row per condition (handout EN/ES, CCM-call
+ * talking points, care-plan template). No row = the built-in draft (shared/conditionLibrary). Any edit
+ * returns it to draft; approving stamps who and when and keeps a copy in conditionContentHistory.
+ */
+export const conditionContent = mysqlTable("conditionContent", {
+  id: int("id").autoincrement().primaryKey(),
+  conditionKey: varchar("conditionKey", { length: 40 }).notNull().unique(),
+  content: json("content").notNull(),
+  /** draft | approved */
+  status: varchar("status", { length: 12 }).notNull().default("draft"),
+  version: int("version").notNull().default(1),
+  approvedByUserId: int("approvedByUserId").references(() => users.id),
+  approvedByName: varchar("approvedByName", { length: 255 }),
+  approvedAt: datetime("approvedAt"),
+  updatedByUserId: int("updatedByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+/** Every approved version of a condition's content (what patients were given at the time). */
+export const conditionContentHistory = mysqlTable("conditionContentHistory", {
+  id: int("id").autoincrement().primaryKey(),
+  conditionKey: varchar("conditionKey", { length: 40 }).notNull(),
+  version: int("version").notNull(),
+  content: json("content").notNull(),
+  approvedByUserId: int("approvedByUserId").references(() => users.id),
+  approvedByName: varchar("approvedByName", { length: 255 }),
+  approvedAt: datetime("approvedAt").notNull(),
+}, (t) => ({
+  keyIdx: index("conditionContentHistory_key_idx").on(t.conditionKey, t.version),
+}));
+
+/**
+ * A CCM patient's comprehensive care plan (one living plan per roster patient). Built from the
+ * approved condition templates, individualized by the care team, signed by a provider. Edits after
+ * signing raise `version` above `signedVersion` ("changed since signed").
+ */
+export const patientCarePlans = mysqlTable("patientCarePlans", {
+  id: int("id").autoincrement().primaryKey(),
+  patientId: int("patientId").references(() => patients.id).notNull().unique(),
+  problems: json("problems").notNull(),
+  general: json("general").notNull(),
+  version: int("version").notNull().default(1),
+  signedVersion: int("signedVersion"),
+  signedByUserId: int("signedByUserId").references(() => users.id),
+  signedByName: varchar("signedByName", { length: 255 }),
+  signedAt: datetime("signedAt"),
+  lastReviewedAt: datetime("lastReviewedAt"),
+  lastReviewedByUserId: int("lastReviewedByUserId").references(() => users.id),
+  lastReviewedMonth: varchar("lastReviewedMonth", { length: 7 }),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  updatedByUserId: int("updatedByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+/** Signed copies of each care plan (the record of what the provider signed, and when). */
+export const patientCarePlanSignatures = mysqlTable("patientCarePlanSignatures", {
+  id: int("id").autoincrement().primaryKey(),
+  planId: int("planId").references(() => patientCarePlans.id).notNull(),
+  patientId: int("patientId").references(() => patients.id).notNull(),
+  version: int("version").notNull(),
+  snapshot: json("snapshot").notNull(),
+  signedByUserId: int("signedByUserId").references(() => users.id).notNull(),
+  signedByName: varchar("signedByName", { length: 255 }).notNull(),
+  signedAt: datetime("signedAt").notNull(),
+}, (t) => ({
+  planIdx: index("patientCarePlanSignatures_plan_idx").on(t.planId),
+}));
+
+/**
+ * Education given to a patient: handouts sent (text / email / link), printed, or covered on a CCM
+ * call. A sent set opens at /learn/s/<code> (the code names no condition).
+ */
+export const educationSends = mysqlTable("educationSends", {
+  id: int("id").autoincrement().primaryKey(),
+  code: varchar("code", { length: 16 }).unique(),
+  subjectKey: varchar("subjectKey", { length: 120 }).notNull(),
+  patientId: int("patientId").references(() => patients.id),
+  conditionKeys: json("conditionKeys").$type<string[]>().notNull(),
+  versions: json("versions").$type<Record<string, number>>(),
+  language: varchar("language", { length: 5 }).notNull().default("en"),
+  /** text | email | link | print | call */
+  channel: varchar("channel", { length: 8 }).notNull(),
+  ccmTaskId: int("ccmTaskId").references(() => ccmTasks.id),
+  sentByUserId: int("sentByUserId").references(() => users.id),
+  openedAt: datetime("openedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  subjectIdx: index("educationSends_subject_idx").on(t.subjectKey, t.createdAt),
 }));

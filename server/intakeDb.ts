@@ -49,9 +49,13 @@ async function logEvent(packetId: number, type: string, opts: { userId?: number 
   });
 }
 
+/** The site address patient links use (the caller's own when it's one of ours). */
+export function publicBase(origin: string | null | undefined) {
+  return origin && ALLOWED_ORIGINS.includes(origin) ? origin : PUBLIC_ORIGIN;
+}
+
 export function linkFor(origin: string | null | undefined, token: string) {
-  const base = origin && ALLOWED_ORIGINS.includes(origin) ? origin : PUBLIC_ORIGIN;
-  return `${base}/f/${token}`;
+  return `${publicBase(origin)}/f/${token}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +229,7 @@ async function packetOr404(id: number, _actor: WorkspaceActor) {
 }
 const isExpired = (p: { expiresAt: Date }) => p.expiresAt.getTime() < Date.now();
 
-async function clinicPhone(clinicId: number | null) {
+export async function clinicPhone(clinicId: number | null) {
   if (!clinicId) return null;
   return (await (await db()).select({ phone: clinics.phone }).from(clinics).where(eq(clinics.id, clinicId)).limit(1))[0]?.phone ?? null;
 }

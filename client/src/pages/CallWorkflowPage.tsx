@@ -11,6 +11,7 @@ import {
 import { phq9Severity, gad7Severity, bhiCompliance } from "@/lib/ccm";
 import { MedRefillPanel } from "@/components/MedRefillPanel";
 import { PhoneLink } from "@/components/phone/PhoneLink";
+import { CallCarePlanCard } from "@/components/careplan/CallCarePlanCard";
 
 type Responses = {
   howFeeling: string; newSymptoms: string; medicationAdherence: string; refillsNeeded: string;
@@ -82,6 +83,11 @@ export default function CallWorkflowPage() {
   const [carePlanUpdated, setCarePlanUpdated] = useState(false);
   const [bhiRisk, setBhiRisk] = useState(false);
 
+  // CCM: care plan reviewed + which conditions' teaching points were covered on this call.
+  const [planReviewed, setPlanReviewed] = useState(false);
+  const [covered, setCovered] = useState<string[]>([]);
+  const callCtx = trpc.workspace.carePlans.forCall.useQuery({ patientId: patientId! }, { enabled: !!patientId && !isBhi, retry: false });
+
   // Minutes spent on this call — entered manually, logged onto the monthly task
   // when the note is saved (used toward the monthly time total for billing).
   const [manualMins, setManualMins] = useState("");
@@ -109,6 +115,8 @@ export default function CallWorkflowPage() {
       if (n.behavioralStatus) setBehavioralStatus(n.behavioralStatus);
       if (n.carePlanUpdated) setCarePlanUpdated(true);
       if (n.bhiRiskFlag) setBhiRisk(true);
+      if (n.carePlanReviewed) setPlanReviewed(true);
+      if (Array.isArray(n.educationCovered)) setCovered(n.educationCovered as string[]);
       setHydrated(true);
     } else if (task.data && !existingNote.data && !hydrated && existingNote.isFetched) {
       setHydrated(true);
@@ -158,6 +166,16 @@ export default function CallWorkflowPage() {
     behavioralStatus: behavioralStatus || undefined,
     carePlanUpdated, riskFlag: bhiRisk,
   } : undefined;
+
+  // CCM-only fields for ccmNotes.save and the AI note.
+  const ccmFields = isBhi ? {} : { carePlanReviewed: planReviewed, educationCovered: covered };
+  const cc = callCtx.data;
+  const carePlanForNote = isBhi || !cc ? undefined : {
+    status: cc.plan?.status ?? "none",
+    reviewed: planReviewed,
+    problems: (cc.plan?.problems ?? []).map((x) => x.problem),
+    educationCovered: cc.conditions.filter((c) => covered.includes(c.key)).map((c) => c.label),
+  };
 
   const phqBand = phq9Severity(phq9 !== "" ? Number(phq9) : null);
   const gadBand = gad7Severity(gad7 !== "" ? Number(gad7) : null);
@@ -290,6 +308,8 @@ export default function CallWorkflowPage() {
             </div>
           )}
 
+          {!isBhi && patientId && <CallCarePlanCard patientId={patientId} covered={covered} setCovered={setCovered} reviewed={planReviewed} setReviewed={setPlanReviewed} />}
+
           <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_28px_-18px_rgba(15,23,42,0.18)] p-6">
             <div className="flex items-center gap-2 mb-5">{isBhi ? <Brain size={16} className="text-violet-500" /> : <Phone size={16} className="text-[hsl(17_68%_47%)]" />}<h3 className="font-bold text-slate-900">{isBhi ? "Behavioral Health Check-In" : "Call Script & Documentation"}</h3></div>
             <div className="space-y-5">
@@ -323,7 +343,7 @@ export default function CallWorkflowPage() {
           <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_28px_-18px_rgba(15,23,42,0.18)] p-6">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2"><Sparkles size={16} className="text-[hsl(280_60%_55%)]" /><h3 className="font-bold text-slate-900">{isBhi ? "BHI Documentation Note" : "CCM Documentation Note"}</h3></div>
-              <button disabled={genNote.isPending} onClick={() => genNote.mutate({ patientName: p?.name || "Patient", localDateTime: new Date().toLocaleString(undefined, { dateStyle: "long", timeStyle: "short" }), program: isBhi ? "bhi" : "ccm", responses, bhiAssessment })}
+              <button disabled={genNote.isPending} onClick={() => genNote.mutate({ patientName: p?.name || "Patient", localDateTime: new Date().toLocaleString(undefined, { dateStyle: "long", timeStyle: "short" }), program: isBhi ? "bhi" : "ccm", responses, bhiAssessment, carePlan: carePlanForNote })}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl bg-[hsl(280_60%_55%)] text-white text-sm font-semibold hover:brightness-110 active:scale-[0.97] transition disabled:opacity-50">
                 {genNote.isPending ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Generate with AI
               </button>
@@ -343,7 +363,7 @@ export default function CallWorkflowPage() {
               ccmTaskId: taskId, patientId: patientId!, ...responses, generatedNote,
               aiGeneratedAt: aiGeneratedAt ?? undefined,
               escalationFlag: escalate, escalationReason: escalate ? escalationReason : undefined,
-              sessionMinutes, ...bhiFields,
+              sessionMinutes, ...bhiFields, ...ccmFields,
               markCompleted: false,
             })} className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-2xl border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50 active:scale-[0.97] disabled:opacity-50 transition">
               <Save size={15} /> Save Draft
@@ -352,7 +372,7 @@ export default function CallWorkflowPage() {
               ccmTaskId: taskId, patientId: patientId!, ...responses, generatedNote,
               aiGeneratedAt: aiGeneratedAt ?? undefined,
               escalationFlag: escalate, escalationReason: escalate ? escalationReason : undefined,
-              sessionMinutes, ...bhiFields,
+              sessionMinutes, ...bhiFields, ...ccmFields,
               markCompleted: true,
             })} className="inline-flex items-center gap-1.5 px-6 py-2.5 rounded-2xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 active:scale-[0.97] transition disabled:opacity-50">
               {saveNote.isPending ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Complete & Save

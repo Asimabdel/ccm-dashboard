@@ -33,6 +33,13 @@ export const ccmNotesRouter = router({
           carePlanUpdated: z.boolean().optional(),
           riskFlag: z.boolean().optional(),
         }).optional(),
+        // CCM: the care plan and the teaching covered on this call.
+        carePlan: z.object({
+          status: z.string().max(20).optional(),
+          reviewed: z.boolean().optional(),
+          problems: z.array(z.string().max(200)).max(40).optional(),
+          educationCovered: z.array(z.string().max(120)).max(40).optional(),
+        }).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -44,6 +51,7 @@ export const ccmNotesRouter = router({
 
       const isBhi = input.program === "bhi";
       const a = input.bhiAssessment;
+      const cp = input.carePlan;
       const bhiPrompt = `Generate a professional, concise BHI (Behavioral Health Integration, CPT 99484) monthly care-management note based on the following patient call. The note must document behavioral-health care management, be clinically appropriate, and be suitable for the medical record.
 
 Patient: ${input.patientName}
@@ -94,7 +102,13 @@ Call Assessment:
 - Upcoming Appointments: ${input.responses.upcomingAppointments || "None scheduled"}
 - Follow-up/Testing Needed: ${input.responses.followUpNeeded || "None identified"}
 - Patient Concerns/Questions: ${input.responses.patientConcerns || "None reported"}
-
+${cp ? `
+Care Plan & Education:
+- Comprehensive care plan on file: ${cp.status === "signed" ? "Yes (signed by provider)" : cp.status === "draft" || cp.status === "changed" ? "Yes (awaiting provider signature)" : "No"}
+- Care plan problems: ${cp.problems?.length ? cp.problems.join("; ") : "None listed"}
+- Care plan reviewed with patient on this call: ${cp.reviewed ? "Yes" : "No"}
+- Condition education provided on this call: ${cp.educationCovered?.length ? cp.educationCovered.join(", ") : "None documented"}
+` : ""}
 Generate a structured clinical note with the following sections:
 1. CHIEF COMPLAINT/REASON FOR CONTACT
 2. HISTORY OF PRESENT ILLNESS
@@ -102,7 +116,7 @@ Generate a structured clinical note with the following sections:
 4. MEDICATION REVIEW
 5. ASSESSMENT
 6. PLAN/RECOMMENDATIONS
-7. FOLLOW-UP
+7. FOLLOW-UP${cp ? "\n8. CARE PLAN REVIEW & PATIENT EDUCATION (state only what is documented above)" : ""}
 
 The note should be professional, concise (300-500 words), and ready for inclusion in the patient's medical record. Begin directly with the first section heading — do NOT add a title, patient name, date, or "completed by" line, as those are added separately at the top of the note.`;
 

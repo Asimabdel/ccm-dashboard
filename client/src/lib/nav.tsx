@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, ClipboardList, UserCog, AlertTriangle, Receipt,
   BarChart3, PhoneCall, CalendarClock, ShieldCheck, Building2, Stethoscope, Target,
   UserMinus, Ban, Pill, PhoneOutgoing, Activity, Sunrise, CalendarDays, BriefcaseBusiness,
-  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature, FileSignature, Wallet, HeartPulse, ClipboardCheck, FlaskConical, Link2,
+  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature, FileSignature, Wallet, HeartPulse, ClipboardCheck, FlaskConical, Link2, NotebookPen,
 } from "lucide-react";
 
 export interface NavItem {
@@ -28,6 +28,8 @@ const TESTING: NavItem = { label: "Testing", path: "/testing", icon: FlaskConica
 // Everyone at the clinics (Practice Fusion + schedule + CCM list); the CCM list itself is the CCM roster.
 const PATIENTS: NavItem = { label: "Patients", path: "/patients", icon: Users };
 const CCM_ROSTER: NavItem = { label: "CCM roster", path: "/ccm-roster", icon: HeartPulse };
+/** CCM care plans (providers sign) and the condition library (handouts, talking points, templates). */
+const CARE_PLANS: NavItem = { label: "Care plans", path: "/care-plans", icon: NotebookPen };
 /** Only for the named program approvers (added to their sidebar by the layout, whatever their role). */
 export const PROGRAM_APPROVALS: NavItem = { label: "Program approvals", path: "/program-approvals", icon: ClipboardCheck };
 const PLAYBOOKS: NavItem = { label: "Playbooks", path: "/playbooks", icon: BookOpen };
@@ -58,6 +60,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
       items: [
         { label: "CCM Dashboard", path: "/admin", icon: LayoutDashboard },
         CCM_ROSTER,
+        CARE_PLANS,
         { label: "Monthly Worklist", path: "/worklist", icon: ClipboardList },
         { label: "Staff Assignment", path: "/assignment", icon: UserCog },
         { label: "APCM", path: "/apcm", icon: Activity },
@@ -114,6 +117,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
         { label: "CCM Dashboard", path: "/coordinator", icon: LayoutDashboard },
         { label: "My Worklist", path: "/worklist", icon: ClipboardList },
         CCM_ROSTER,
+        CARE_PLANS,
         { label: "Call Workflow", path: "/workflow", icon: PhoneCall },
         { label: "APCM", path: "/apcm", icon: Activity },
         { label: "Reach Out", path: "/reach-out", icon: PhoneOutgoing },
@@ -128,6 +132,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
     {
       label: "Care Management",
       items: [
+        CARE_PLANS,
         CCM_ROSTER,
         { label: "Refill Requests", path: "/refill-requests", icon: Pill },
         { label: "Escalations", path: "/escalations", icon: AlertTriangle },

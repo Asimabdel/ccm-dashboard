@@ -49,6 +49,12 @@ export const WORKSPACE_CAPS = {
   chartBasic: ["admin", "office_manager", "staff", "provider", "front_desk", "medical_assistant"],
   /** Square payments: see payments, link them to patients, send payment links, charge on the Terminal. */
   payments: ["admin", "office_manager", "front_desk", "medical_assistant"],
+  /** Give patients education handouts (send, print) for their conditions (e.g. printed at checkout). */
+  education: ["admin", "office_manager", "staff", "provider", "front_desk", "medical_assistant"],
+  /** CCM care plans: see, start and edit them (signing is for providers). Also reads the condition library. */
+  carePlans: ["admin", "staff", "provider"],
+  /** Edit the condition library (handouts, talking points, care-plan templates); approving is for providers. */
+  libraryEdit: ["admin", "provider"],
 } as const satisfies Record<string, readonly WorkspaceRole[]>;
 
 export type WorkspaceCap = keyof typeof WORKSPACE_CAPS;

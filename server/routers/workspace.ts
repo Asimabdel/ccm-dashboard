@@ -36,6 +36,9 @@ import * as officeTests from "../officeTestingDb";
 import * as seenSince from "../seenSince";
 import * as rosterMatch from "../rosterMatch";
 import * as rosterMerge from "../rosterMerge";
+import * as carePlans from "../carePlansDb";
+import { libraryEntrySchema, planSchema } from "../carePlanSchemas";
+import { LIBRARY_LANGS } from "../../shared/conditionLibrary/types";
 import { OFFICE_TESTS } from "../../shared/officeTests";
 import { SUGGEST_PROGRAMS } from "../../shared/programRules";
 import { DIRECTORY_PROGRAMS, DIRECTORY_SORTS, DIRECTORY_STATUSES } from "../../shared/directory";
@@ -1319,6 +1322,84 @@ export const workspaceRouter = router({
     scan: protectedProcedure.mutation(async ({ ctx }) => {
       await programActor(ctx);
       return run(() => programs.scanProgramSuggestions());
+    }),
+  }),
+
+  /** Condition library: patient handouts, CCM-call talking points and care-plan templates (providers approve). */
+  library: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "carePlans");
+      return { conditions: await carePlans.libraryList(), canApprove: await carePlans.isSigningProvider(actor.id, actor.role) };
+    }),
+    get: protectedProcedure.input(z.object({ key: z.string().max(40) })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "carePlans");
+      const r = await run(() => carePlans.libraryGet(input.key));
+      return { ...r, canApprove: await carePlans.isSigningProvider(actor.id, actor.role), canEdit: can(actor.role, "libraryEdit") };
+    }),
+    save: protectedProcedure.input(z.object({ key: z.string().max(40), entry: libraryEntrySchema })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "libraryEdit");
+      return run(() => carePlans.librarySave(actor, input.key, input.entry));
+    }),
+    approve: protectedProcedure.input(z.object({ key: z.string().max(40) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "carePlans");
+      return run(() => carePlans.libraryApprove(actor, input.key));
+    }),
+  }),
+
+  /** CCM care plans (one per roster patient), built from the approved templates and signed by a provider. */
+  carePlans: router({
+    queue: protectedProcedure.input(z.object({ filter: z.enum(["to_sign", "none", "signed", "all"]).default("to_sign"), mine: z.boolean().optional() })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "carePlans");
+      return carePlans.planQueue(actor, input);
+    }),
+    get: protectedProcedure.input(z.object({ patientId: z.number().int().positive() })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "carePlans");
+      return run(() => carePlans.planFor(actor, input.patientId));
+    }),
+    template: protectedProcedure.input(z.object({ key: z.string().max(40), diagnosis: z.string().max(300) })).query(async ({ ctx, input }) => {
+      await actorFor(ctx, "carePlans");
+      return run(() => carePlans.templateSection(input.key, input.diagnosis));
+    }),
+    build: protectedProcedure.input(z.object({ patientId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "carePlans");
+      return run(() => carePlans.buildDraft(actor, input.patientId));
+    }),
+    buildMissing: protectedProcedure.mutation(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "carePlans");
+      return run(() => carePlans.buildMissingDrafts(actor, { deadline: Date.now() + 20_000 }));
+    }),
+    save: protectedProcedure.input(z.object({ patientId: z.number().int().positive(), version: z.number().int().positive(), plan: planSchema })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "carePlans");
+      return run(() => carePlans.savePlan(actor, input.patientId, input.version, input.plan));
+    }),
+    sign: protectedProcedure.input(z.object({ patientId: z.number().int().positive(), version: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "carePlans");
+      return run(() => carePlans.signPlan(actor, input.patientId, input.version));
+    }),
+    /** The guided CCM call's card: plan state + each condition's approved teaching points. */
+    forCall: protectedProcedure.input(z.object({ patientId: z.number().int().positive() })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "carePlans");
+      return run(() => carePlans.callContext(actor, input.patientId));
+    }),
+  }),
+
+  /** Patient education handouts: send (text / email / link), print, see what was given. */
+  education: router({
+    forPatient: protectedProcedure.input(z.object({ subjectKey: patientKey })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "education");
+      return run(() => carePlans.educationFor(actor, input.subjectKey));
+    }),
+    prepare: protectedProcedure.input(z.object({ subjectKey: patientKey, keys: z.array(z.string().max(40)).min(1).max(30), language: z.enum(LIBRARY_LANGS), channel: z.enum(["text", "link"]) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "education");
+      return run(() => carePlans.prepareSend(actor, input, intake.publicBase(reqOrigin(ctx))));
+    }),
+    email: protectedProcedure.input(z.object({ subjectKey: patientKey, keys: z.array(z.string().max(40)).min(1).max(30), language: z.enum(LIBRARY_LANGS), to: z.string().trim().max(320) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "education");
+      return run(() => carePlans.emailEducation(actor, input, intake.publicBase(reqOrigin(ctx))));
+    }),
+    printed: protectedProcedure.input(z.object({ subjectKey: patientKey, keys: z.array(z.string().max(40)).min(1).max(30), language: z.enum(LIBRARY_LANGS) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "education");
+      return run(() => carePlans.recordEducation(actor, { ...input, channel: "print" }));
     }),
   }),
 

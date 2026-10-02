@@ -82,6 +82,7 @@ import { staffProfiles } from "../drizzle/schema";
 import { workforceRouter } from "./routers/workforce";
 import { workspaceRouter } from "./routers/workspace";
 import { patientFormsRouter } from "./routers/patientForms";
+import { learnRouter } from "./routers/learn";
 import { seedDatabase, isSeeded, currentMonth } from "./seed";
 import { ensureMonthlyTask, ensureMonthlyTasksForPatient, deletePatient, getUpcomingAppointments } from "./db";
 import {
@@ -218,6 +219,7 @@ export const appRouter = router({
   workspace: workspaceRouter,
   // Public: the patient's side of patient forms (link + date of birth, no login).
   patientForms: patientFormsRouter,
+  learn: learnRouter,
 
   auth: router({
     me: publicProcedure.query((opts) => sanitizeUser(opts.ctx.user)),
@@ -1063,6 +1065,9 @@ export const appRouter = router({
           // monthly task's total (CCM 99490 / BHI 99484 require >=20 documented min/month).
           sessionMinutes: z.number().int().min(0).max(480).optional(),
           markCompleted: z.boolean().optional(),
+          // ---- CCM care plan + education on this call ----
+          carePlanReviewed: z.boolean().optional(),
+          educationCovered: z.array(z.string().max(40)).max(40).optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
@@ -1099,6 +1104,8 @@ export const appRouter = router({
           behavioralStatus: input.behavioralStatus,
           carePlanUpdated: input.carePlanUpdated || false,
           bhiRiskFlag: input.bhiRiskFlag || false,
+          ...(input.carePlanReviewed !== undefined ? { carePlanReviewed: input.carePlanReviewed } : {}),
+          ...(input.educationCovered !== undefined ? { educationCovered: input.educationCovered } : {}),
         };
 
         let noteId: number;
@@ -1132,6 +1139,14 @@ export const appRouter = router({
 
         // Record that this patient was contacted now (powers the "Last Called" column)
         await db.update(patients).set({ lastCalledAt: new Date() }).where(eq(patients.id, input.patientId));
+
+        // Care plan reviewed / condition teaching covered on this call → the plan and the patient's education log.
+        if (input.carePlanReviewed || input.educationCovered?.length) {
+          const { recordCallEducation } = await import("./carePlansDb");
+          await recordCallEducation({ id: ctx.user.id, name: ctx.user.name ?? null, role: ctx.user.role, clinicIds: null }, {
+            patientId: input.patientId, ccmTaskId: input.ccmTaskId, covered: input.educationCovered ?? [], planReviewed: !!input.carePlanReviewed,
+          });
+        }
 
         // Escalation -> create provider escalation + notify provider.
         // Requires a provider on the patient (escalations route to a provider);

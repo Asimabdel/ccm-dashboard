@@ -21,13 +21,15 @@ import { InsurancePanel } from "@/components/insurance/InsurancePanel";
 import { PatientFormsPanel } from "@/components/intake/PatientFormsPanel";
 import { PatientChartPanel } from "@/components/chart/PatientChartPanel";
 import { PatientPaymentsPanel } from "@/components/payments/PatientPaymentsPanel";
-import { FolderOpen, Wallet } from "lucide-react";
+import { BookOpen, ClipboardCheck, FolderOpen, Wallet } from "lucide-react";
+import { CarePlanPanel } from "@/components/careplan/CarePlanPanel";
+import { EducationPanel } from "@/components/education/EducationPanel";
 import { PatientFolder } from "@/components/folder/PatientFolder";
 import { FOLDER_SECTION_LIST, isPatientKey, type FolderSection } from "@shared/folder";
 import { fmtDay } from "@shared/workforce";
 import { DIRECTORY_PROGRAM_LABELS, type DirectoryProgram } from "@shared/directory";
 
-type Tab = "overview" | "folder" | "appointments" | "tasks" | "care" | "testing" | "chart" | "insurance" | "forms" | "payments";
+type Tab = "overview" | "folder" | "appointments" | "tasks" | "care" | "careplan" | "education" | "testing" | "chart" | "insurance" | "forms" | "payments";
 
 /**
  * Patient 360, for every patient: CCM-roster patients by their number (/patients/123), everyone
@@ -71,6 +73,8 @@ function Patient360({ subjectKey, id }: { subjectKey: string; id: number | null 
     { key: "tasks", label: "Tasks", icon: ClipboardList, count: q.data?.openTasks.length },
   ];
   if (ccmRecord) tabs.unshift({ key: "care", label: "Care Management", icon: HeartPulse });
+  if (id && caps?.carePlans) tabs.push({ key: "careplan", label: "Care plan", icon: ClipboardCheck });
+  if (caps?.education) tabs.push({ key: "education", label: "Education", icon: BookOpen });
   if (caps?.patientFull) tabs.push({ key: "testing", label: "Testing", icon: FlaskConical });
   if (caps?.intakeForms) tabs.push({ key: "forms", label: "Forms", icon: ClipboardSignature });
   if (caps?.eligibility) tabs.push({ key: "insurance", label: "Insurance", icon: ShieldCheck });
@@ -177,6 +181,8 @@ function Patient360({ subjectKey, id }: { subjectKey: string; id: number | null 
           )}
 
           {tab === "care" && ccmRecord && id && <PatientDetailPage embedded patientId={id} />}
+          {tab === "careplan" && id && caps?.carePlans && <CarePlanPanel patientId={id} />}
+          {tab === "education" && caps?.education && <EducationPanel subjectKey={subjectKey} />}
           {tab === "testing" && caps?.patientFull && <Panel><OfficeTestsPanel subjectKey={subjectKey} name={p.name} /><PatientTestingPanel subjectKey={subjectKey} /></Panel>}
           {tab === "chart" && caps?.chartBasic && <PatientChartPanel subjectKey={subjectKey} />}
           {tab === "insurance" && caps?.eligibility && <InsurancePanel subjectKey={subjectKey} />}

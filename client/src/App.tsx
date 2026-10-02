@@ -48,6 +48,10 @@ import IntakePrintPage from "./pages/IntakePrintPage";
 import PatientFormsPage from "./pages/PatientFormsPage";
 import DocumentsPage from "./pages/DocumentsPage";
 import PaymentsPage from "./pages/PaymentsPage";
+import CarePlansPage from "./pages/CarePlansPage";
+import ConditionLibraryPage from "./pages/ConditionLibraryPage";
+import CarePlanPrintPage from "./pages/CarePlanPrintPage";
+import LearnPage from "./pages/LearnPage";
 import FolderPage from "./pages/FolderPage";
 import DirectoryPage from "./pages/DirectoryPage";
 import ProgramApprovalsPage from "./pages/ProgramApprovalsPage";
@@ -80,6 +84,9 @@ function Router() {
       <Route path="/ccm-roster" component={PatientsPage} />
       <Route path="/program-approvals" component={ProgramApprovalsPage} />
       <Route path="/testing" component={TestingPage} />
+      <Route path="/care-plans" component={CarePlansPage} />
+      <Route path="/care-plans/library/:key" component={ConditionLibraryPage} />
+      <Route path="/care-plans/:patientId/print" component={CarePlanPrintPage} />
       <Route path="/record-matching" component={RecordMatchingPage} />
       <Route path="/inactive-patients" component={InactivePatientsPage} />
       <Route path="/declined-patients" component={DeclinedPatientsPage} />
@@ -118,6 +125,11 @@ function Router() {
       <Route path="/f/:token" component={PatientFormsPage} />
       {/* Public: an open form link for the website (e.g. /sign/consent). */}
       <Route path="/sign/:slug" component={PatientFormsPage} />
+      {/* Public: patient education handouts (provider-approved; no login, no patient details). */}
+      <Route path="/learn" component={LearnPage} />
+      <Route path="/learn/print" component={LearnPage} />
+      <Route path="/learn/s/:code" component={LearnPage} />
+      <Route path="/learn/:slug" component={LearnPage} />
       <Route path="/billing" component={BillingPage} />
       <Route path="/follow-ups" component={FollowUpsPage} />
       <Route path="/reports" component={ReportsPage} />
@@ -130,7 +142,7 @@ function Router() {
 function App() {
   const [loc] = useLocation();
   // Patient forms page and printouts: no staff phone, always light.
-  const patientOrPrint = loc.startsWith("/f/") || loc.startsWith("/sign/") || loc.endsWith("/print");
+  const patientOrPrint = loc.startsWith("/f/") || loc.startsWith("/sign/") || loc === "/learn" || loc.startsWith("/learn/") || loc.endsWith("/print");
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="light" switchable forceLight={patientOrPrint}>

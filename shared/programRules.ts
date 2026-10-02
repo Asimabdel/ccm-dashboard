@@ -71,6 +71,9 @@ const CATEGORIES: Category[] = [
   { key: "eating", label: "Eating disorder", icd: /^F50/, text: /anorexia nervosa|bulimia|binge eating/, chronic: false, behavioral: true },
 ];
 const BY_KEY = new Map(CATEGORIES.map((c) => [c.key, c]));
+/** Every recognized condition, in display order (no matching rules). */
+export const CONDITION_CATEGORIES = CATEGORIES.map((c) => ({ key: c.key, label: c.label, chronic: c.chronic, behavioral: !!c.behavioral }));
+export const categoryLabel = (key: string) => BY_KEY.get(key)?.label ?? key;
 /** A recognized chronic condition (counts toward CCM's 2+). */
 export const isChronicCategory = (key: string) => !!BY_KEY.get(key)?.chronic;
 /** A behavioral-health diagnosis (BHI). */
@@ -173,6 +176,13 @@ export function suggestPrograms(matches: MatchedDiagnosis[], s: ProgramStanding)
 
 /** A short fingerprint of the qualifying diagnoses: a "not now" stands until these change. */
 export const diagnosesFingerprint = (dx: MatchedDiagnosis[]) => dx.map((d) => d.category).sort().join(",");
+
+/** A condition as written on the roster ("Type 2 diabetes mellitus (E11.9)"): the ICD-10 code in brackets decides when there is one. */
+export function classifyConditionName(name: string): MatchedDiagnosis | null {
+  const m = /\(([A-TV-Z]\d{2}(?:\.[0-9A-Z]{1,4})?)\)\s*$/i.exec(name);
+  const title = m ? name.slice(0, m.index).trim() : name;
+  return classifyDiagnosis(m ? { title, code: m[1]! } : { title });
+}
 
 /** How many different recognized chronic conditions are in a list of condition names (APCM-only leveling). */
 export function countChronicConditions(titles: string[]): number {
