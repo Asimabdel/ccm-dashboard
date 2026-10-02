@@ -13,6 +13,7 @@ import { localDateStr } from "@shared/workforce";
 import { TASK_CATEGORY_LABELS, type TaskCategory } from "@shared/workspace";
 import { cn } from "@/lib/utils";
 import { PhoneLink } from "@/components/phone/PhoneLink";
+import { DoximityButtons } from "@/components/phone/DoximityButtons";
 import { CALL_OUTCOMES, type CallOutcome } from "@shared/phone";
 import { PatientTestingPanel } from "@/components/testing/PatientTestingPanel";
 import { OfficeTestsPanel } from "@/components/testing/OfficeTests";
@@ -117,6 +118,7 @@ function Patient360({ subjectKey, id }: { subjectKey: string; id: number | null 
                   <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-500 dark:text-slate-400">
                     <span>DOB {fmtDob(p.dateOfBirth)}{age != null ? ` (${age})` : ""}</span>
                     {p.phoneNumber && <PhoneLink phone={p.phoneNumber} context={{ patientId: p.id, subjectKey, name: p.name, source: "patient" }}><Phone size={13} /> {p.phoneNumber}</PhoneLink>}
+                    {p.phoneNumber && <DoximityButtons phone={p.phoneNumber} />}
                     {p.clinicName && <span className="inline-flex items-center gap-1"><Building2 size={13} /> {p.clinicName}</span>}
                     {p.providerName && <span className="inline-flex items-center gap-1"><Stethoscope size={13} /> {p.providerName}</span>}
                     {p.preferredLanguage && <span className="inline-flex items-center gap-1"><Globe size={13} /> {p.preferredLanguage}</span>}

@@ -31,6 +31,7 @@ import {
 } from "../drizzle/schema";
 import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
 import type { ListSort, OutreachStatus, SortDir } from "../shared/outreach";
+import { isTelehealthVisit } from "../shared/doximity";
 import { getDb } from "./db";
 import { currentMonth } from "./seed";
 import { localDateStr, addDays } from "../shared/workforce";
@@ -913,6 +914,7 @@ export async function flowBoard(actor: WorkspaceActor, input: { clinicId?: numbe
       providerDisplay: providers.name,
       visitType: appointments.visitType,
       reason: appointments.reason,
+      phoneNumber: appointments.phoneNumber,
       status: appointments.status,
       room: appointments.room,
       clinicId: appointments.clinicId,
@@ -932,8 +934,12 @@ export async function flowBoard(actor: WorkspaceActor, input: { clinicId?: numbe
   const now = new Date();
   const cards = rows.map((r) => {
     const tsField = STATUS_TIMESTAMP[r.status as keyof typeof STATUS_TIMESTAMP];
+    // Video / telehealth visits: providers can start the video visit with Doximity (the number is only sent for these).
+    const telehealth = isTelehealthVisit(r.visitType, r.reason);
     return {
       ...r,
+      phoneNumber: telehealth ? r.phoneNumber : null,
+      telehealth,
       provider: r.providerDisplay ?? r.providerName ?? "—",
       statusSince: tsField ? ((r as Record<string, unknown>)[tsField] as Date | null) : null,
     };

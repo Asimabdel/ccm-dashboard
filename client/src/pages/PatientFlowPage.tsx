@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, DoorOpen, Loader2, MoreHorizontal, Upload, CalendarX2, ArrowRight, Timer, History, CalendarCheck, Users, Hourglass, CheckCircle2, UserX } from "lucide-react";
+import { ChevronLeft, ChevronRight, DoorOpen, Loader2, MoreHorizontal, Upload, CalendarX2, ArrowRight, Timer, History, CalendarCheck, Users, Hourglass, CheckCircle2, UserX, Video } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { DoximityButtons } from "@/components/phone/DoximityButtons";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { useUrlParams, useWorkspace } from "@/components/workspace/useWorkspace";
 import { ScheduleImportDialog } from "@/components/workspace/ScheduleImportDialog";
@@ -294,6 +295,12 @@ function FlowCard({ card, canMove, onMove, onDragStart, onDragEnd, busy }: { car
         )}
       </div>
       <p className="mt-1 text-xs text-slate-500 dark:text-slate-400 truncate">{card.provider}{card.visitType ? ` · ${card.visitType}` : ""}</p>
+      {card.telehealth && (
+        <p className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] font-semibold text-sky-700 dark:text-sky-300">
+          <Video size={11} /> Video visit
+          <DoximityButtons phone={card.phoneNumber} kinds={["video"]} />
+        </p>
+      )}
       {card.reason && <p className="mt-0.5 text-xs text-slate-400 truncate" title={card.reason}>{card.reason}</p>}
       <div className="mt-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
