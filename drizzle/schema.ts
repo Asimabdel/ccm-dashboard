@@ -1905,6 +1905,35 @@ export const chatMessages = mysqlTable("chatMessages", {
 }));
 
 /**
+ * Injections given in the office (2026-10-02), logged by staff for the providers' daily reports.
+ * seriesNumber is the patient's Nth injection of that kind ("WL #11"), filled in automatically.
+ */
+export const injections = mysqlTable("injections", {
+  id: int("id").autoincrement().primaryKey(),
+  subjectKey: varchar("subjectKey", { length: 120 }).notNull(),
+  patientId: int("patientId").references(() => patients.id),
+  patientName: varchar("patientName", { length: 255 }).notNull(),
+  dob: varchar("dob", { length: 10 }),
+  clinicId: int("clinicId").references(() => clinics.id),
+  /** The provider the patient saw (whose daily report it counts on). */
+  providerId: int("providerId").references(() => providers.id),
+  /** wl | b12 | testosterone | toradol | other */
+  kind: varchar("kind", { length: 20 }).notNull(),
+  /** For "other": what it was. */
+  label: varchar("label", { length: 80 }),
+  seriesNumber: int("seriesNumber"),
+  givenOn: varchar("givenOn", { length: 10 }).notNull(),
+  note: varchar("note", { length: 255 }),
+  givenByUserId: int("givenByUserId").references(() => users.id).notNull(),
+  removedAt: datetime("removedAt"),
+  removedByUserId: int("removedByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  dayIdx: index("injections_day_idx").on(t.givenOn),
+  subjectIdx: index("injections_subject_idx").on(t.subjectKey, t.kind),
+}));
+
+/**
  * Faxes sent from MyPCP through RingCentral (2026-10-02), from the sending clinic's fax number. The files
  * themselves aren't copied: uploads stay in the private documents bucket, the rest are read from where
  * they live (folder files, signed documents, received faxes) — so a fax can be sent again.

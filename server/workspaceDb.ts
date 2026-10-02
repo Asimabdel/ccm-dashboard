@@ -915,6 +915,7 @@ export async function flowBoard(actor: WorkspaceActor, input: { clinicId?: numbe
       visitType: appointments.visitType,
       reason: appointments.reason,
       phoneNumber: appointments.phoneNumber,
+      providerId: appointments.providerId,
       status: appointments.status,
       room: appointments.room,
       clinicId: appointments.clinicId,
@@ -940,6 +941,7 @@ export async function flowBoard(actor: WorkspaceActor, input: { clinicId?: numbe
       ...r,
       phoneNumber: telehealth ? r.phoneNumber : null,
       telehealth,
+      subjectKey: subjectKeyFor(r.patientId, r.patientName, r.dateOfBirth),
       provider: r.providerDisplay ?? r.providerName ?? "—",
       statusSince: tsField ? ((r as Record<string, unknown>)[tsField] as Date | null) : null,
     };

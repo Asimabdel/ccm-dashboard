@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, DoorOpen, Loader2, MoreHorizontal, Upload, CalendarX2, ArrowRight, Timer, History, CalendarCheck, Users, Hourglass, CheckCircle2, UserX, Video } from "lucide-react";
+import { ChevronLeft, ChevronRight, DoorOpen, Loader2, MoreHorizontal, Upload, CalendarX2, ArrowRight, Timer, History, CalendarCheck, Users, Hourglass, CheckCircle2, UserX, Video, Syringe } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { DoximityButtons } from "@/components/phone/DoximityButtons";
+import { InjectionDialog } from "@/components/injections/InjectionDialog";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { useUrlParams, useWorkspace } from "@/components/workspace/useWorkspace";
 import { ScheduleImportDialog } from "@/components/workspace/ScheduleImportDialog";
@@ -50,6 +51,7 @@ export default function PatientFlowPage() {
   const [room, setRoom] = useState("");
   const [dragId, setDragId] = useState<number | null>(null);
   const [overCol, setOverCol] = useState<string | null>(null);
+  const [injectionFor, setInjectionFor] = useState<Card | null>(null);
   const [, setTick] = useState(0);
   const utils = trpc.useUtils();
 
@@ -183,7 +185,7 @@ export default function PatientFlowPage() {
                   </header>
                   <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-2">
                     {cards.map((c) => (
-                      <FlowCard key={c.id} card={c} canMove={canMove} onMove={requestMove} onDragStart={() => setDragId(c.id)} onDragEnd={() => { setDragId(null); setOverCol(null); }} busy={move.isPending && move.variables?.appointmentId === c.id} />
+                      <FlowCard key={c.id} card={c} canMove={canMove} onMove={requestMove} onDragStart={() => setDragId(c.id)} onDragEnd={() => { setDragId(null); setOverCol(null); }} busy={move.isPending && move.variables?.appointmentId === c.id} onInjection={caps?.injections ? setInjectionFor : undefined} />
                     ))}
                     {cards.length === 0 && <p className="text-center text-xs text-slate-400 py-6">No patients</p>}
                   </div>
@@ -251,11 +253,12 @@ export default function PatientFlowPage() {
       </AlertDialog>
 
       <ScheduleImportDialog open={importOpen} onOpenChange={(o) => { setImportOpen(o); if (!o && params.get("import")) setParams({ import: null }); }} onImported={(first) => { if (first && first !== date) setParams({ date: first === today ? null : first, import: null }); }} />
+      {injectionFor && <InjectionDialog open onOpenChange={(o) => !o && setInjectionFor(null)} subjectKey={injectionFor.subjectKey} patientName={injectionFor.patientName} date={date} />}
     </CCMDashboardLayout>
   );
 }
 
-function FlowCard({ card, canMove, onMove, onDragStart, onDragEnd, busy }: { card: Card; canMove: boolean; onMove: (c: Card, to: FlowStatus) => void; onDragStart: () => void; onDragEnd: () => void; busy: boolean }) {
+function FlowCard({ card, canMove, onMove, onDragStart, onDragEnd, busy, onInjection }: { card: Card; canMove: boolean; onMove: (c: Card, to: FlowStatus) => void; onDragStart: () => void; onDragEnd: () => void; busy: boolean; onInjection?: (c: Card) => void }) {
   const idx = FLOW_COLUMNS.indexOf(card.status as (typeof FLOW_COLUMNS)[number]);
   const next = idx >= 0 && idx < FLOW_COLUMNS.length - 1 ? FLOW_COLUMNS[idx + 1] : null;
   return (
@@ -290,6 +293,12 @@ function FlowCard({ card, canMove, onMove, onDragStart, onDragEnd, busy }: { car
               <DropdownMenuSeparator />
               {card.status === "scheduled" && <DropdownMenuItem className="text-rose-600" onClick={() => onMove(card, "no_show")}>No-show</DropdownMenuItem>}
               <DropdownMenuItem className="text-slate-500" onClick={() => onMove(card, "cancelled")}>Cancelled</DropdownMenuItem>
+              {onInjection && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => onInjection(card)}><Syringe size={14} className="mr-2" /> Injection given…</DropdownMenuItem>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}

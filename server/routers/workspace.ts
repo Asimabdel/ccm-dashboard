@@ -40,6 +40,8 @@ import * as carePlans from "../carePlansDb";
 import * as chat from "../chatDb";
 import * as outreach from "../outreachDb";
 import * as faxOut from "../faxSendDb";
+import * as daily from "../dailyReportDb";
+import { INJECTION_KIND_LIST, type InjectionKind } from "../../shared/dailyReport";
 import { LIST_SORTS, OUTREACH_STATUS_LIST } from "../../shared/outreach";
 
 const listSort = { sort: z.enum(LIST_SORTS).default("suggested"), dir: z.enum(["asc", "desc"]).default("asc") };
@@ -1281,6 +1283,32 @@ export const workspaceRouter = router({
         const actor = await oppActor(ctx, "opportunitiesAct");
         return run(() => ws.actOnOpportunities(actor, input as Parameters<typeof ws.actOnOpportunities>[1]));
       }),
+  }),
+
+  /** Providers' daily reports (admins; office managers for their office). */
+  dailyReports: router({
+    get: protectedProcedure.input(z.object({ date: dateStr, clinicId })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "dailyReports");
+      return run(() => daily.dailyReports(actor, input));
+    }),
+  }),
+
+  /** Injections given in the office (they count on the provider's daily report). */
+  injections: router({
+    context: protectedProcedure.input(z.object({ subjectKey: patientKey, date: dateStr })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "injections");
+      return run(() => daily.injectionContext(actor, input));
+    }),
+    log: protectedProcedure
+      .input(z.object({ subjectKey: patientKey, kind: z.enum(INJECTION_KIND_LIST as [InjectionKind, ...InjectionKind[]]), label: z.string().max(80).nullish(), seriesNumber: z.number().int().min(1).max(999).nullish(), givenOn: dateStr, providerId: z.number().int().positive().nullish(), note: z.string().max(255).nullish() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "injections");
+        return run(() => daily.logInjection(actor, input));
+      }),
+    remove: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "injections");
+      return run(() => daily.removeInjection(actor, input.id));
+    }),
   }),
 
   /** Sending faxes through RingCentral, from each clinic's fax number. */

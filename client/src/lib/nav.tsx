@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, ClipboardList, UserCog, AlertTriangle, Receipt,
   BarChart3, PhoneCall, CalendarClock, ShieldCheck, Building2, Stethoscope, Target,
   UserMinus, Ban, Pill, PhoneOutgoing, Activity, Sunrise, CalendarDays, BriefcaseBusiness,
-  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature, FileSignature, Wallet, HeartPulse, ClipboardCheck, FlaskConical, Link2, NotebookPen, MessagesSquare,
+  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature, FileSignature, Wallet, HeartPulse, ClipboardCheck, FlaskConical, Link2, NotebookPen, MessagesSquare, FileBarChart,
 } from "lucide-react";
 
 export interface NavItem {
@@ -89,6 +89,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
         { label: "Providers", path: "/providers", icon: Stethoscope },
         { label: "Clinics", path: "/clinics", icon: Building2 },
         { label: "Team progress", path: "/team-progress", icon: Gauge },
+        { label: "Daily reports", path: "/daily-reports", icon: FileBarChart },
         { label: "Workforce", path: "/workforce", icon: BriefcaseBusiness },
         { label: "Team & Access", path: "/team", icon: UserCog },
         { label: "Integrations", path: "/integrations", icon: PlugZap },
@@ -106,6 +107,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
       items: [
         { label: "Workforce", path: "/workforce", icon: BriefcaseBusiness },
         { label: "Team progress", path: "/team-progress", icon: Gauge },
+        { label: "Daily reports", path: "/daily-reports", icon: FileBarChart },
         { label: "Staff logins", path: "/team", icon: UserCog },
       ],
     },
