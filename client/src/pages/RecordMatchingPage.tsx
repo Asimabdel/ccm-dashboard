@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { ArrowLeftRight, CheckCircle2, Link2, Loader2, Search, X } from "lucide-react";
+import { ArrowLeftRight, CheckCircle2, Copy, Link2, Loader2, Merge, Search, X } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { useUrlParams } from "@/components/workspace/useWorkspace";
@@ -12,7 +12,8 @@ import { nameKey } from "@shared/workspace";
 
 type Overview = RouterOutputs["workspace"]["recordMatching"]["list"];
 type Pair = Overview["confirm"][number];
-type Roster = Omit<Overview["none"][number], "duplicateOfRosterId"> & { duplicateOfRosterId?: number | null };
+type NoneRow = Overview["none"][number];
+type Roster = Omit<NoneRow, "duplicateOfRosterId" | "duplicate"> & { duplicateOfRosterId?: number | null; duplicate?: NoneRow["duplicate"] };
 type PfInfo = Overview["several"][number]["candidates"][number];
 type Tab = "confirm" | "several" | "none";
 
@@ -32,6 +33,7 @@ export default function RecordMatchingPage() {
   const list = trpc.workspace.recordMatching.list.useQuery(undefined, { enabled: user?.role === "admin" });
   const confirm = trpc.workspace.recordMatching.confirm.useMutation();
   const reject = trpc.workspace.recordMatching.reject.useMutation();
+  const merge = trpc.workspace.recordMatching.mergeDuplicate.useMutation();
   const [busy, setBusy] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
@@ -60,6 +62,21 @@ export default function RecordMatchingPage() {
     } finally {
       setBusy(false);
       setPicked(new Set());
+      refresh();
+    }
+  };
+
+  /** The same person on the roster twice: merge the unlinked copy into the one linked to Practice Fusion. */
+  const runMerge = async (r: Roster, into: { rosterId: number; name: string }) => {
+    if (!window.confirm(`Merge "${r.rosterName}" and "${into.name}" into one record?\n\nThe record keeps the name "${into.name}" (as in Practice Fusion) and both copies' CCM history, conditions and enrollments. The extra copy is kept for the record, marked "merged".`)) return;
+    setBusy(true);
+    try {
+      const res = await merge.mutateAsync({ rosterId: r.rosterId, intoId: into.rosterId });
+      toast.success(res.billingTask ? "Merged. Both copies were billed for the same program and month, so billing got a task to review it." : "Merged into one record.");
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
       refresh();
     }
   };
@@ -164,9 +181,9 @@ export default function RecordMatchingPage() {
       {d && tab === "none" && (
         shown.none.length === 0 ? <div className={cardCls}><EmptyState icon={CheckCircle2} title="None" /></div> : (
           <>
-            <p className="mb-3 text-sm text-slate-500">No Practice Fusion patient has a matching name. The name may be spelled differently, or they may not be in Practice Fusion's export (e.g. no longer a patient). Use <b>Find in Practice Fusion</b> to search and link by hand.</p>
+            <p className="mb-3 text-sm text-slate-500">No unlinked Practice Fusion patient has a matching name. Some are a <b>second copy</b> of a patient already on the roster and linked (shown in amber): merge them. For the rest, the name may be spelled differently or they may not be in Practice Fusion's export (e.g. no longer a patient): use <b>Find in Practice Fusion</b> to search and link by hand.</p>
             <div className="space-y-2">
-              {shown.none.map((r) => <NoMatchRow key={r.rosterId} r={r} busy={busy} onLink={(pfId) => runPairs([{ rosterId: r.rosterId, pfId, rosterName: r.rosterName }], "link")} />)}
+              {shown.none.map((r) => <NoMatchRow key={r.rosterId} r={r} busy={busy} onLink={(pfId) => runPairs([{ rosterId: r.rosterId, pfId, rosterName: r.rosterName }], "link")} onMerge={(into) => runMerge(r, into)} />)}
             </div>
           </>
         )
@@ -202,7 +219,7 @@ function PfSide({ p }: { p: Omit<PfInfo, never> }) {
 }
 
 /** A roster patient with no automatic match: search the unlinked Practice Fusion records and link by hand. */
-function NoMatchRow({ r, busy, onLink }: { r: Roster; busy: boolean; onLink: (pfId: string) => void }) {
+function NoMatchRow({ r, busy, onLink, onMerge }: { r: Roster; busy: boolean; onLink: (pfId: string) => void; onMerge: (into: { rosterId: number; name: string }) => void }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -212,13 +229,19 @@ function NoMatchRow({ r, busy, onLink }: { r: Roster; busy: boolean; onLink: (pf
     <section className={cn(cardCls, "px-4 py-3")}>
       <div className="flex flex-wrap items-center gap-3">
         <RosterSide r={r} />
-        {r.duplicateOfRosterId && (
-          <p className="w-full text-xs font-medium text-amber-700 dark:text-amber-300 sm:w-auto sm:max-w-xs">
-            Probably a duplicate: <a className="underline" href={`/patients/${r.duplicateOfRosterId}`} target="_blank" rel="noreferrer">another CCM record with this name</a> is already linked to Practice Fusion.
-          </p>
-        )}
         {!open && <Btn size="sm" variant="secondary" onClick={() => { setOpen(true); setQ(r.rosterName.split(/[\s,]+/).filter(Boolean).pop() ?? ""); }}><Search size={14} /> Find in Practice Fusion</Btn>}
       </div>
+      {r.duplicate && (
+        <div className="mt-2 flex flex-wrap items-center gap-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-500/10 dark:text-amber-100">
+          <Copy size={14} className="shrink-0" />
+          <p className="min-w-[12rem] flex-1">
+            <b>{r.duplicate.spelledDifferently ? "Probably the same person, name spelled differently:" : "Same person is already on the roster:"}</b>{" "}
+            <a className="underline" href={`/patients/${r.duplicate.rosterId}`} target="_blank" rel="noreferrer">{r.duplicate.name}</a>
+            {r.duplicate.dob ? ` · DOB ${fmtDob(r.duplicate.dob)}` : ""}{r.duplicate.ccm ? ` · CCM ${r.duplicate.ccm}` : ""} · linked to Practice Fusion
+          </p>
+          <Btn size="sm" disabled={busy} onClick={() => onMerge({ rosterId: r.duplicate!.rosterId, name: r.duplicate!.name })}><Merge size={14} /> Same person: merge</Btn>
+        </div>
+      )}
       {open && (
         <div className="mt-3 border-t border-slate-100 pt-3 dark:border-slate-700">
           <div className="flex items-center gap-2">

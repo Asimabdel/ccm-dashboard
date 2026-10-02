@@ -12,7 +12,7 @@ import { billingRecords, ccmNotes, ccmTasks, patients, users } from "../drizzle/
 import { classifyDiagnosis } from "../shared/programRules";
 import { localDateStr } from "../shared/workforce";
 import { clearDirectoryCache } from "./directoryDb";
-import { createTask, clearScheduleCache, type WorkspaceActor } from "./workspaceDb";
+import { WorkspaceError, audit, createTask, clearScheduleCache, type WorkspaceActor } from "./workspaceDb";
 
 async function db() {
   const d = await getDb();
@@ -109,8 +109,11 @@ function mergedFields(k: P, o: P) {
   };
 }
 
-/** Merge one pair. Returns what couldn't move (monthly items for a month the kept record already has). */
-export async function mergePair(actor: WorkspaceActor, aId: number, bId: number, history: Map<number, number>) {
+/**
+ * Merge one pair. Returns what couldn't move (monthly items for a month the kept record already has).
+ * `nameFromId`: the record whose spelling of the name is kept (the one linked to Practice Fusion).
+ */
+export async function mergePair(actor: WorkspaceActor, aId: number, bId: number, history: Map<number, number>, opts: { nameFromId?: number } = {}) {
   const d = await db();
   const rows = await d.select().from(patients).where(inArray(patients.id, [aId, bId]));
   const a = rows.find((r) => r.id === aId), b = rows.find((r) => r.id === bId);
@@ -131,7 +134,8 @@ export async function mergePair(actor: WorkspaceActor, aId: number, bId: number,
   const doubled = claims.filter((c) => c.pid === drop.id && (c.status === "billed" || c.status === "ready_for_billing") && billedKeep.has(`${c.month}|${c.program}`));
 
   await d.transaction(async (tx) => {
-    await tx.update(patients).set(mergedFields(keep, drop)).where(eq(patients.id, keep.id));
+    const nameFrom = opts.nameFromId === drop.id ? drop : null;
+    await tx.update(patients).set({ ...mergedFields(keep, drop), ...(nameFrom ? { name: nameFrom.name.replace(MERGED_RE, "").trim() } : {}) }).where(eq(patients.id, keep.id));
     if (movable.length) {
       await tx.update(ccmTasks).set({ patientId: keep.id }).where(inArray(ccmTasks.id, movable));
       await tx.update(ccmNotes).set({ patientId: keep.id }).where(inArray(ccmNotes.ccmTaskId, movable));
@@ -189,17 +193,14 @@ export async function mergeActor(): Promise<WorkspaceActor> {
 export async function mergeDuplicates(actor: WorkspaceActor, opts: { apply: boolean; deadline: number }) {
   const { duplicatePairs } = await import("./rosterMatch");
   const pairs = await duplicatePairs();
-  const d = await db();
-  const ids = Array.from(new Set(pairs.flat()));
-  const hist = ids.length ? await d.select({ pid: ccmTasks.patientId, n: sql<number>`count(*)` }).from(ccmTasks).where(and(inArray(ccmTasks.patientId, ids), inArray(ccmTasks.status, ["completed", "ready_for_billing", "billed"]))).groupBy(ccmTasks.patientId) : [];
-  const history = new Map(hist.map((h) => [h.pid, Number(h.n)]));
+  const history = await ccmHistory(Array.from(new Set(pairs.flat())));
   if (!opts.apply) return { pairs: pairs.length, merged: 0, done: true };
   let merged = 0, moved = 0, stayed = 0, billingTasks = 0, skipped = 0, done = true;
   const used = new Set<number>();
   for (const [a, b] of pairs) {
     if (Date.now() > opts.deadline) { done = false; break; }
     if (used.has(a) || used.has(b)) { done = false; continue; } // a third copy: next run
-    const r = await mergePair(actor, a, b, history);
+    const r = await mergePair(actor, a, b, history, { nameFromId: b });
     if ("skipped" in r) { skipped++; continue; }
     used.add(a); used.add(b);
     merged++; moved += r.movedItems; stayed += r.stayedItems; if (r.billingTask) billingTasks++;
@@ -209,4 +210,31 @@ export async function mergeDuplicates(actor: WorkspaceActor, opts: { apply: bool
   const summary = { pairs: pairs.length, merged, monthlyItemsMoved: moved, monthlyItemsKeptOnRetiredCopy: stayed, billingTasks, skipped, done };
   console.log(`[merge-duplicates] ${JSON.stringify(summary)}`);
   return summary;
+}
+
+/** Completed CCM months per patient (the copy with more history is the one kept). */
+async function ccmHistory(ids: number[]): Promise<Map<number, number>> {
+  if (!ids.length) return new Map();
+  const hist = await (await db()).select({ pid: ccmTasks.patientId, n: sql<number>`count(*)` }).from(ccmTasks)
+    .where(and(inArray(ccmTasks.patientId, ids), inArray(ccmTasks.status, ["completed", "ready_for_billing", "billed"]))).groupBy(ccmTasks.patientId);
+  return new Map(hist.map((h) => [h.pid, Number(h.n)]));
+}
+
+/**
+ * An admin confirms on Record matching that an unlinked roster record is the same person as a roster
+ * patient already linked to Practice Fusion (e.g. the name was misspelled): merge them, keeping the
+ * linked record's spelling.
+ */
+export async function mergeIntoLinked(actor: WorkspaceActor, rosterId: number, intoId: number) {
+  if (rosterId === intoId) throw new WorkspaceError("Pick two different records.");
+  const { linkedRosterIds } = await import("./rosterMatch");
+  const linked = await linkedRosterIds();
+  if (linked.has(rosterId)) throw new WorkspaceError("This record is already linked to Practice Fusion.");
+  if (!linked.has(intoId)) throw new WorkspaceError("The other record isn't linked to Practice Fusion.");
+  const r = await mergePair(actor, rosterId, intoId, await ccmHistory([rosterId, intoId]), { nameFromId: intoId });
+  if ("skipped" in r) throw new WorkspaceError(r.skipped === "missing" ? "Record not found." : "One of these records was already merged.");
+  clearDirectoryCache();
+  clearScheduleCache();
+  await audit(actor, "update_patient", { entityType: "patient", entityId: r.keep, description: `Duplicate roster record #${r.drop} merged into #${r.keep} (confirmed on Record matching)` });
+  return r;
 }

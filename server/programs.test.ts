@@ -128,6 +128,8 @@ describe("program suggestions from diagnoses", () => {
     expect(firstClose("maria", "mario")).toBe(false);
     await expect(appRouter.createCaller(ctxFor("staff")).workspace.recordMatching.list()).rejects.toThrow(/admin/);
     await expect(appRouter.createCaller(ctxFor("office_manager")).workspace.recordMatching.confirm({ rosterId: 1, pfId: "x" })).rejects.toThrow(/admin/);
+    await expect(appRouter.createCaller(ctxFor("office_manager")).workspace.recordMatching.mergeDuplicate({ rosterId: 1, intoId: 2 })).rejects.toThrow(/admin/);
+    expect(similarSpelling("rebecca", "rebceca")).toBe(true); // two letters swapped in a longer name
   });
 
   it("only admins move the start date (patients seen since …)", async () => {

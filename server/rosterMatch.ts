@@ -63,7 +63,7 @@ export type Bucket =
   | "linked_dob_name" | "linked_dob_first_variant" | "linked_dob_double_surname" | "linked_dob_phone" | "linked_dob_off_by_one"
   | "linked_no_dob_name_phone" | "linked_no_dob_name_only" | "linked_no_dob_compound_surname"
   | "review_close_name" | "review_reversed_name" | "review_duplicate_roster_name" | "review_similar_spelling" | "review_dob_differs_same_name"
-  | "duplicate_of_linked_roster"
+  | "duplicate_of_linked_roster" | "possible_duplicate_of_linked_roster"
   | "ambiguous" | "no_match_no_dob" | "no_match";
 export const AUTO_LINK: Bucket[] = ["linked_dob_name", "linked_dob_first_variant", "linked_dob_double_surname", "linked_dob_phone", "linked_dob_off_by_one", "linked_no_dob_name_phone", "linked_no_dob_name_only", "linked_no_dob_compound_surname"];
 const REVIEW: Bucket[] = ["review_close_name", "review_reversed_name", "review_duplicate_roster_name", "review_similar_spelling"];
@@ -111,20 +111,48 @@ async function loadMatching() {
     push(byFirst, p.t.first, p);
     for (const l of p.t.lasts) push(byKey, `${p.t.first}|${l}`, p);
   }
-  // Practice Fusion records already linked to a roster patient, by name: a "no match" may be a duplicate roster record.
-  const linkedByName = new Map<string, number>();
+  // Roster patients already linked to Practice Fusion, under both names (Practice Fusion's and the roster's):
+  // a "no match" may be a second roster record for one of them.
+  const linkedPeople: { rosterId: number; t: ReturnType<typeof tok>; dob: string | null }[] = [];
   for (const p of pfRows) {
     const m = /^p:(\d+)$/.exec(p.key);
-    if (!m || !p.name) continue;
-    const t = tok(p.name);
-    for (const l of t.lasts) linkedByName.set(`${t.first}|${l}`, Number(m[1]));
+    if (m && p.name) linkedPeople.push({ rosterId: Number(m[1]), t: tok(p.name), dob: p.dob });
   }
+  for (const r of roster) if (linkedRoster.has(r.id)) linkedPeople.push({ rosterId: r.id, t: tok(r.name), dob: ymd(r.dob) });
   // A roster name that appears more than once (duplicate records) is never linked by name alone.
   const rosterNameCount = new Map<string, number>();
   for (const r of roster) { const t = tok(r.name); rosterNameCount.set(`${t.first}|${t.last}`, (rosterNameCount.get(`${t.first}|${t.last}`) ?? 0) + 1); }
   const notSame = await notSamePairs();
 
   const one = (list: Pf[]) => (list.length === 1 ? list[0]! : null);
+  /**
+   * The already-linked roster patient this record is probably a second copy of. "same": same name (any surname
+   * variant) and no conflicting birthday, or a one/two-letter typo with the same birthday. "possible": a typo
+   * with no birthday to compare, so a person confirms. Two different patients would fit equally: none.
+   */
+  const dupOf = (r: RosterRow): { id: number; how: "same" | "possible" } | null => {
+    const t = tok(r.name);
+    const dob = ymd(r.dob);
+    const sameDob = (b: string | null) => !!dob && !!b && (b === dob || b === addDays(dob, -1) || b === addDays(dob, 1));
+    const noConflict = (b: string | null) => !dob || !b || sameDob(b);
+    const same = new Set<number>(), possible = new Set<number>();
+    for (const L of linkedPeople) {
+      if (L.rosterId === r.id) continue;
+      const lastEq = t.lasts.some((l) => L.t.lasts.includes(l));
+      if (t.first === L.t.first && lastEq) { if (noConflict(L.dob)) same.add(L.rosterId); continue; }
+      const typo = (t.first === L.t.first && similarSpelling(t.last, L.t.last)) || (lastEq && similarSpelling(t.first, L.t.first));
+      if (!typo) continue;
+      if (sameDob(L.dob)) same.add(L.rosterId);
+      else if (noConflict(L.dob)) possible.add(L.rosterId);
+    }
+    if (same.size === 1) return { id: Array.from(same)[0]!, how: "same" };
+    if (same.size === 0 && possible.size === 1) return { id: Array.from(possible)[0]!, how: "possible" };
+    return null;
+  };
+  const dupBucket = (r: RosterRow): Bucket | null => {
+    const dup = dupOf(r);
+    return dup ? (dup.how === "same" ? "duplicate_of_linked_roster" : "possible_duplicate_of_linked_roster") : null;
+  };
   const decide = (r: RosterRow): { bucket: Bucket; pf: Pf | null } => {
     const t = tok(r.name);
     const dob = ymd(r.dob);
@@ -147,7 +175,7 @@ async function loadMatching() {
       if (shifted) return { bucket: "linked_dob_off_by_one", pf: shifted };
       const named = (byName.get(`${t.first}|${t.last}`) ?? []).filter(ok);
       if (named.length) return { bucket: "review_dob_differs_same_name", pf: named.length === 1 ? named[0]! : null };
-      return { bucket: "no_match", pf: null };
+      return { bucket: dupBucket(r) ?? "no_match", pf: null };
     }
     const named = (byName.get(`${t.first}|${t.last}`) ?? []).filter(ok);
     if (named.length === 1 && (rosterNameCount.get(`${t.first}|${t.last}`) ?? 0) === 1) {
@@ -170,9 +198,8 @@ async function loadMatching() {
       ...(byLast.get(t.last) ?? []).filter((c) => similarSpelling(c.t.first, t.first)),
     ].filter(ok).map((c) => [c.fhirId, c])).values()));
     if (typo) return { bucket: "review_similar_spelling", pf: typo };
-    // Same name as a roster patient whose Practice Fusion record is already linked: a duplicate roster record.
-    if (t.lasts.some((l) => linkedByName.has(`${t.first}|${l}`))) return { bucket: "duplicate_of_linked_roster", pf: null };
-    return { bucket: "no_match_no_dob", pf: null };
+    // Same name (or a typo of it) as a roster patient already linked to Practice Fusion: a duplicate roster record.
+    return { bucket: dupBucket(r) ?? "no_match_no_dob", pf: null };
   };
   /** Several Practice Fusion records fit equally well (same name, and the same birthday when there is one). */
   const candidates = (r: RosterRow): Pf[] => {
@@ -182,9 +209,14 @@ async function loadMatching() {
     return dob ? (byDob.get(dob) ?? []).filter(same) : (byName.get(`${t.first}|${t.last}`) ?? []).filter(same);
   };
   const unlinked = roster.filter((r) => !linkedRoster.has(r.id));
-  /** The roster record whose Practice Fusion record has this name (when this one is probably its duplicate). */
-  const duplicateOf = (r: RosterRow) => { const t = tok(r.name); for (const l of t.lasts) { const id = linkedByName.get(`${t.first}|${l}`); if (id && id !== r.id) return id; } return null; };
+  /** The already-linked roster record this one is probably a duplicate of. */
+  const duplicateOf = (r: RosterRow) => dupOf(r)?.id ?? null;
   return { roster, pfRows, linkedRoster, unlinked, decide, candidates, free, duplicateOf };
+}
+
+/** Roster patients linked to a Practice Fusion record. */
+export async function linkedRosterIds(): Promise<Set<number>> {
+  return (await loadMatching()).linkedRoster;
 }
 
 /** Link one roster patient to one Practice Fusion record (fills a missing / day-shifted birthday and a missing phone). */
@@ -219,7 +251,7 @@ export async function matchRosterToPf(opts: { apply: boolean; name?: string | nu
     // One Practice Fusion record goes to one roster record only.
     if (pf && AUTO_LINK.includes(bucket) && !claimed.has(pf.fhirId)) { claimed.add(pf.fhirId); plan.push({ rosterId: r.id, pf, bucket }); }
   }
-  let lookup: { rosterMatches: number; results: { alreadyLinked: boolean; ccm: string | null; hasDob: boolean; bucket: string | null; pfRecordsWithSameName: number }[] } | null = null;
+  let lookup: { rosterMatches: number; results: Record<string, unknown>[] } | null = null;
   if (opts.name) {
     const words = nameKey(opts.name).split(" ").filter(Boolean);
     const hits = roster.filter((r) => words.every((w) => nameKey(r.name).includes(w)));
@@ -230,6 +262,16 @@ export async function matchRosterToPf(opts: { apply: boolean; name?: string | nu
         return {
           alreadyLinked: linkedRoster.has(r.id), ccm: r.ccm, hasDob: !!r.dob, bucket: linkedRoster.has(r.id) ? null : decide(r).bucket,
           pfRecordsWithSameName: pfRows.filter((p) => { const pt = tok(p.name); return pt.first === t.first && pt.last === t.last; }).length,
+          // Practice Fusion records with the same last name: free or already linked, and how close the first name is.
+          pfSameLast: pfRows.filter((p) => tok(p.name).last === t.last).map((p) => {
+            const pt = tok(p.name);
+            const linkedTo = /^p:(\d+)$/.exec(p.key)?.[1];
+            const other = linkedTo ? roster.find((x) => x.id === Number(linkedTo)) : undefined;
+            return {
+              linked: !!linkedTo, firstNameDistance: editDistance(pt.first, t.first), sameDob: !!p.dob && p.dob === ymd(r.dob),
+              linkedRosterNameDistance: other ? editDistance(tok(other.name).first, t.first) : null, linkedRosterCcm: other?.ccm ?? null,
+            };
+          }),
         };
       }),
     };
@@ -260,7 +302,8 @@ export async function matchRosterToPf(opts: { apply: boolean; name?: string | nu
  * records (pick one), and roster patients with no Practice Fusion match at all (search by hand).
  */
 export async function matchingOverview() {
-  const { unlinked, decide, candidates, duplicateOf } = await loadMatching();
+  const { roster, unlinked, decide, candidates, duplicateOf } = await loadMatching();
+  const rosterById = new Map(roster.map((r) => [r.id, r]));
   const d = await db();
   const clinicName = new Map((await d.select({ id: clinics.id, name: clinics.name }).from(clinics)).map((c) => [c.id, c.name]));
   const staffName = new Map((await d.select({ id: users.id, name: users.name }).from(users)).map((u) => [u.id, u.name]));
@@ -281,9 +324,13 @@ export async function matchingOverview() {
     const { bucket, pf } = decide(r);
     if (pf && REVIEW.includes(bucket)) confirm.push({ ...rosterInfo(r), ...pfInfo(pf), reason: REVIEW_LABELS[bucket] ?? bucket });
     else if (bucket === "ambiguous") several.push({ ...rosterInfo(r), candidates: candidates(r).map(pfInfo) });
-    else if (bucket === "no_match" || bucket === "no_match_no_dob" || bucket === "duplicate_of_linked_roster") {
-      const dup = bucket === "duplicate_of_linked_roster" ? duplicateOf(r) : null;
-      none.push({ ...rosterInfo(r), duplicateOfRosterId: dup });
+    else if (bucket === "no_match" || bucket === "no_match_no_dob" || bucket === "duplicate_of_linked_roster" || bucket === "possible_duplicate_of_linked_roster") {
+      const dupId = bucket === "no_match" || bucket === "no_match_no_dob" ? null : duplicateOf(r);
+      const dup = dupId ? rosterById.get(dupId) : undefined;
+      none.push({
+        ...rosterInfo(r), duplicateOfRosterId: dup ? dup.id : null,
+        duplicate: dup ? { rosterId: dup.id, name: dup.name, dob: ymd(dup.dob), ccm: dup.ccm, spelledDifferently: bucket === "possible_duplicate_of_linked_roster" } : null,
+      });
     }
   }
   const byName = <T extends { rosterName: string }>(a: T, b: T) => a.rosterName.localeCompare(b.rosterName);
@@ -367,4 +414,20 @@ export async function duplicateRosterReport() {
     if (ca && cb && Array.from(ca).some((k) => cb.has(k))) sameMonthBilled++;
   }
   return { duplicatePairs: pairs.length, bothCcmActive: bothActive, onlyDuplicateActive: dupActiveOnly, duplicateHasBilledClaims: dupHasClaims, billedSameProgramSameMonthOnBoth: sameMonthBilled };
+}
+
+/** IAM-only check: are Practice Fusion links consistent (key and patient id agree)? And what is the import doing? Counts only. */
+export async function pfLinkConsistency() {
+  const d = await db();
+  const { sql: s } = await import("drizzle-orm");
+  const q = async (x: ReturnType<typeof s>) => Number(((((await d.execute(x)) as unknown as [{ n: number }[]])[0])[0] ?? { n: 0 }).n);
+  const idNoKey = await q(s`SELECT COUNT(*) n FROM fhirPatients WHERE patientId IS NOT NULL AND subjectKey NOT LIKE 'p:%'`);
+  const keyNoId = await q(s`SELECT COUNT(*) n FROM fhirPatients WHERE subjectKey LIKE 'p:%' AND (patientId IS NULL OR CONCAT('p:', patientId) <> subjectKey)`);
+  const idNoKeyPrefix = (((await d.execute(s`SELECT LEFT(subjectKey, 2) k, COUNT(*) n FROM fhirPatients WHERE patientId IS NOT NULL AND subjectKey NOT LIKE 'p:%' GROUP BY LEFT(subjectKey, 2)`)) as unknown as [{ k: string; n: number }[]])[0]).map((r) => `${r.k}${r.n}`);
+  const [state] = (((await d.execute(s`SELECT value FROM appSettings WHERE \`key\` = 'pf_fhir_sync'`)) as unknown as [{ value: unknown }[]])[0]);
+  const v = (typeof state?.value === "string" ? JSON.parse(state.value) : state?.value) as { phase?: string; mode?: string; files?: { status: string }[]; lastSuccessAt?: string; startedAt?: string; enabled?: boolean } | undefined;
+  return {
+    patientIdButNotRosterKey: idNoKey, byKeyPrefix: idNoKeyPrefix, rosterKeyButWrongPatientId: keyNoId,
+    pfImport: v ? { phase: v.phase, mode: v.mode, nightly: v.enabled, startedAt: v.startedAt, lastSuccessAt: v.lastSuccessAt, files: v.files?.length ?? 0, loaded: v.files?.filter((f) => f.status === "loaded").length ?? 0 } : null,
+  };
 }

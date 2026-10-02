@@ -125,6 +125,11 @@ export const handler = async (event: any, context: any) => {
     const { mergeDuplicates, mergeActor } = await import("../rosterMerge");
     return mergeDuplicates(await mergeActor(), { apply: event.apply === true, deadline: Date.now() + 22_000 });
   }
+  // Are Practice Fusion links consistent, and what is the import doing? (IAM-only; counts only)
+  if (event && event.__job === "pf-link-consistency" && !event.requestContext && !event.version) {
+    const { pfLinkConsistency } = await import("../rosterMatch");
+    return pfLinkConsistency();
+  }
   // Duplicate roster records (same name as an already-linked roster patient): counts only.
   if (event && event.__job === "duplicate-roster-report" && !event.requestContext && !event.version) {
     const { duplicateRosterReport } = await import("../rosterMatch");

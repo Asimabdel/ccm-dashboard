@@ -35,6 +35,7 @@ import * as programs from "../programsDb";
 import * as officeTests from "../officeTestingDb";
 import * as seenSince from "../seenSince";
 import * as rosterMatch from "../rosterMatch";
+import * as rosterMerge from "../rosterMerge";
 import { OFFICE_TESTS } from "../../shared/officeTests";
 import { SUGGEST_PROGRAMS } from "../../shared/programRules";
 import { DIRECTORY_PROGRAMS, DIRECTORY_SORTS, DIRECTORY_STATUSES } from "../../shared/directory";
@@ -1340,6 +1341,12 @@ export const workspaceRouter = router({
       if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can match records." });
       const actor = await actorFor(ctx, "flowView");
       return run(() => rosterMatch.rejectPair(actor, input.rosterId, input.pfId));
+    }),
+    /** The same person on the roster twice (one copy linked to Practice Fusion): merge them into one record. */
+    mergeDuplicate: protectedProcedure.input(z.object({ rosterId: z.number().int().positive(), intoId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can merge records." });
+      const actor = await actorFor(ctx, "flowView");
+      return run(() => rosterMerge.mergeIntoLinked(actor, input.rosterId, input.intoId));
     }),
   }),
 
