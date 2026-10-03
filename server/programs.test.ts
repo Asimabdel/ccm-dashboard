@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { NOT_ON_ROSTER, classifyDiagnosis, countChronicConditions, diagnosesFingerprint, icd10Of, suggestPrograms, type MatchedDiagnosis } from "../shared/programRules";
-import { computeApcmLevel } from "./db";
+import { apcmPriority, computeApcmLevel } from "./db";
 import { firstClose, similarSpelling, tok } from "./rosterMatch";
 import { conditionsToAdd } from "./conditionSync";
 import { pickKeep } from "./rosterMerge";
@@ -143,5 +143,16 @@ describe("program suggestions from diagnoses", () => {
     await expect(appRouter.createCaller(ctxFor("billing")).workspace.programs.list({})).rejects.toThrow();
     await expect(appRouter.createCaller(ctxFor("staff")).workspace.programs.decide({ decisions: [{ subjectKey: "p:1", approve: ["ccm"], reject: [] }] })).rejects.toThrow();
     await expect(appRouter.createCaller(ctxFor("admin")).workspace.programs.decide({ decisions: [{ subjectKey: "bogus", approve: ["ccm"], reject: [] }] })).rejects.toThrow();
+  });
+});
+
+describe("APCM priority", () => {
+  it("puts patients we completed a CCM with this year first, then reached, then not reached", () => {
+    expect(apcmPriority({ ccmDoneThisMonth: false, ccmCompletedThisYear: 3, reachedThisYear: true })).toBe(1);
+    expect(apcmPriority({ ccmDoneThisMonth: false, ccmCompletedThisYear: 0, reachedThisYear: true })).toBe(2);
+    expect(apcmPriority({ ccmDoneThisMonth: false, ccmCompletedThisYear: 0, reachedThisYear: false })).toBe(3);
+  });
+  it("leaves out a patient whose CCM was completed that month (it bills CCM, not APCM)", () => {
+    expect(apcmPriority({ ccmDoneThisMonth: true, ccmCompletedThisYear: 5, reachedThisYear: true })).toBe(null);
   });
 });

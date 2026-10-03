@@ -1300,6 +1300,7 @@ export const appRouter = router({
       .input(z.object({
         month: z.string().optional(),
         category: z.enum(["ready", "needs_setup", "ccm_done"]).optional(),
+        priority: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
         assignedStaffId: z.number().optional(),
         search: z.string().optional(),
         limit: z.number().optional(),

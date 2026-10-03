@@ -9,6 +9,29 @@ import {
 } from "@/lib/ccm";
 import { buildStandardApcmCarePlan } from "@shared/carePlan";
 
+/** Who goes first: completed a CCM with us this year, then reached this year, then not reached. */
+const PRIORITY: Record<number, { label: string; short: string; cls: string }> = {
+  1: { label: "Completed a CCM this year", short: "1 · CCM done this year", cls: "bg-emerald-100 text-emerald-800" },
+  2: { label: "Reached this year, no CCM yet", short: "2 · Reached, no CCM", cls: "bg-sky-100 text-sky-800" },
+  3: { label: "Not reached this year", short: "3 · Not reached", cls: "bg-slate-100 text-slate-600" },
+};
+
+/** "2026-09" → "September 2026". */
+function monthLabel(m: string) {
+  const [y, mo] = m.split("-").map(Number);
+  return new Date(y, mo - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+}
+function lastMonthStr() {
+  const d = new Date();
+  d.setDate(1);
+  d.setMonth(d.getMonth() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function monthFromUrl() {
+  const m = new URLSearchParams(window.location.search).get("month");
+  return m && /^\d{4}-\d{2}$/.test(m) ? m : currentMonthStr();
+}
+
 const CATEGORY: Record<string, { label: string; cls: string }> = {
   ready: { label: "Ready to bill", cls: "bg-emerald-100 text-emerald-800" },
   needs_setup: { label: "Needs setup", cls: "bg-amber-100 text-amber-800" },
@@ -18,13 +41,21 @@ const CATEGORY: Record<string, { label: string; cls: string }> = {
 export default function ApcmPage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
   const utils = trpc.useUtils();
-  const [month] = useState(currentMonthStr());
+  const [month, setMonthState] = useState(monthFromUrl);
   const [category, setCategory] = useState<"" | "ready" | "needs_setup" | "ccm_done">("");
+  const [priority, setPriority] = useState<0 | 1 | 2 | 3>(0);
+  const setMonth = (m: string) => {
+    setMonthState(m);
+    setLimit(100);
+    const u = new URL(window.location.href);
+    if (m === currentMonthStr()) u.searchParams.delete("month"); else u.searchParams.set("month", m);
+    window.history.replaceState(null, "", u.toString());
+  };
   const [search, setSearch] = useState("");
   const [limit, setLimit] = useState(100);
   const [carePlanFor, setCarePlanFor] = useState<any | null>(null);
 
-  const filters = useMemo(() => ({ month, category: category || undefined, search: search.trim() || undefined, limit }), [month, category, search, limit]);
+  const filters = useMemo(() => ({ month, category: category || undefined, priority: priority || undefined, search: search.trim() || undefined, limit }), [month, category, priority, search, limit]);
   const q = trpc.apcm.overview.useQuery(filters, { enabled: !!user });
   const mut = trpc.patients.updateAPCM.useMutation({
     onSuccess: () => { utils.apcm.overview.invalidate(); },
@@ -46,11 +77,18 @@ export default function ApcmPage() {
   const setupPct = s && s.total ? Math.round(((s.total - s.needsSetup - s.ccmDone) / Math.max(1, s.total - s.ccmDone)) * 100) : 0;
 
   return (
-    <CCMDashboardLayout title={`APCM — ${month}`}>
+    <CCMDashboardLayout title={`APCM — ${monthLabel(month)}`}>
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <input type="month" value={month} max={currentMonthStr()} onChange={(e) => e.target.value && setMonth(e.target.value)}
+          aria-label="Month" className="px-3 py-1.5 rounded-xl border border-slate-200 text-sm" />
+        {month !== lastMonthStr() && <button onClick={() => setMonth(lastMonthStr())} className="px-3 py-1.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50">Last month</button>}
+        {month !== currentMonthStr() && <button onClick={() => setMonth(currentMonthStr())} className="px-3 py-1.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50">This month</button>}
+      </div>
       <p className="text-sm text-slate-500 font-light max-w-3xl mb-5">
         Advanced Primary Care Management covers every active CCM patient automatically. It bills the monthly complexity G-code
-        (G0556/57/58) for anyone who <b>didn't</b> get a completed CCM this month — once their <b>consent + care plan</b> are on file.
-        Complete a CCM and the patient drops off APCM for the month.
+        (G0556/57/58) for anyone who <b>didn't</b> get a completed CCM that month — once their <b>consent + care plan</b> are on file.
+        Complete a CCM and the patient drops off APCM for the month. The list puts patients we <b>completed a CCM with this year</b> first,
+        then patients we reached this year, then patients not reached yet.
       </p>
 
       {/* Stats */}
@@ -59,7 +97,19 @@ export default function ApcmPage() {
           <StatCard label="APCM Covered" value={s.total} sub="active CCM patients" accent="text-slate-900" />
           <StatCard label="Ready to bill" value={s.ready} sub="consent · visit · care plan met" accent="text-emerald-600" />
           <StatCard label="Needs setup" value={s.needsSetup} sub={`${s.consented} consented · ${s.withCarePlan} w/ care plan`} accent="text-amber-600" />
-          <StatCard label="CCM this month" value={s.ccmDone} sub="billing CCM, off APCM" accent="text-slate-500" />
+          <StatCard label={month === currentMonthStr() ? "CCM this month" : "CCM that month"} value={s.ccmDone} sub="billing CCM, off APCM" accent="text-slate-500" />
+        </div>
+      )}
+      {s && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
+          {([1, 2, 3] as const).map((p) => (
+            <button key={p} onClick={() => { setPriority(priority === p ? 0 : p); setLimit(100); }} aria-pressed={priority === p}
+              className={`text-left bg-white rounded-2xl border p-4 transition ${priority === p ? "border-indigo-400 ring-2 ring-indigo-200" : "border-slate-100 hover:border-slate-200"}`}>
+              <p className="text-xs font-medium text-slate-400 uppercase tracking-wide">Priority {p}</p>
+              <p className="text-2xl font-bold mt-0.5 font-mono tabular-nums text-slate-900">{(p === 1 ? s.tier1 : p === 2 ? s.tier2 : s.tier3).toLocaleString()}</p>
+              <p className="text-xs text-slate-500 mt-0.5">{PRIORITY[p].label}</p>
+            </button>
+          ))}
         </div>
       )}
 
@@ -102,6 +152,7 @@ export default function ApcmPage() {
               <thead>
                 <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
                   <th className="px-4 py-3 font-medium">Patient</th>
+                  <th className="px-4 py-3 font-medium">Priority</th>
                   <th className="px-4 py-3 font-medium">Level / G-code</th>
                   <th className="px-4 py-3 font-medium text-center">QMB</th>
                   <th className="px-4 py-3 font-medium">Consent</th>
@@ -120,7 +171,15 @@ export default function ApcmPage() {
                     <tr key={r.id} className="border-b border-slate-50 hover:bg-slate-50/60">
                       <td className="px-4 py-3">
                         <a href={`/patients/${r.id}`} className="font-semibold text-slate-800 hover:text-indigo-700 hover:underline">{r.name}</a>
-                        <div className="text-xs text-slate-400">{r.staffName || "Unassigned"}</div>
+                        <div className="text-xs text-slate-400">{r.staffName || "Unassigned"}{r.ccmEnrollmentStatus && r.ccmEnrollmentStatus !== "active" ? " · no longer in CCM" : ""}</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        {r.priority ? (
+                          <>
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${PRIORITY[r.priority].cls}`}>{PRIORITY[r.priority].short}</span>
+                            {r.ccmCompletedThisYear > 0 && <div className="text-[11px] text-slate-400 mt-0.5">{r.ccmCompletedThisYear} CCM{r.ccmCompletedThisYear === 1 ? "" : "s"} · last {monthLabel(r.lastCcmCompleted)}</div>}
+                          </>
+                        ) : <span className="text-[11px] text-slate-400">Billed as CCM</span>}
                       </td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold ${apcmLevelBadgeClass(level)}`}>{APCM_LEVEL_LABELS[level]}</span>
@@ -152,7 +211,7 @@ export default function ApcmPage() {
           </div>
           {total > rows.length && (
             <div className="p-4 text-center border-t border-slate-100">
-              <button onClick={() => setLimit((l) => Math.min(l + 100, 500))} disabled={q.isFetching}
+              <button onClick={() => setLimit((l) => Math.min(l + 200, 2000))} disabled={q.isFetching}
                 className="px-4 py-2 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">
                 {q.isFetching ? "Loading…" : `Load more (${rows.length} of ${total.toLocaleString()})`}
               </button>

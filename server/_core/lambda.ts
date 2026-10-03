@@ -154,6 +154,13 @@ export const handler = async (event: any, context: any) => {
     return cleanupRosterConditions({ apply: event.apply === true, deadline: Date.now() + 22_000 });
   }
   // Which exact diagnoses CCM patients have (IAM-only; counts only, no names).
+  // APCM panel counts for a month (IAM-only; counts only, no names).
+  if (event && event.__job === "apcm-month-stats" && !event.requestContext && !event.version) {
+    const { getApcmOverview } = await import("../db");
+    const month = typeof event.month === "string" && /^\d{4}-\d{2}$/.test(event.month) ? event.month : new Date().toISOString().slice(0, 7);
+    const r = await getApcmOverview(month, { limit: 1 });
+    return { month, ...r.stats };
+  }
   if (event && event.__job === "ccm-dx-stats" && !event.requestContext && !event.version) {
     const { ccmDiagnosisStats } = await import("../diagnosisStats");
     return ccmDiagnosisStats();
