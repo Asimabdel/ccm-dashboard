@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
@@ -35,6 +35,25 @@ function readCollapsed() {
     return localStorage.getItem(COLLAPSE_KEY) === "1";
   } catch {
     return false;
+  }
+}
+
+// Every page draws its own layout, so the sidebar is rebuilt on each click. Remember how far
+// it was scrolled (kept for the tab's session) and put it back, so it doesn't jump to the top.
+const NAV_SCROLL_KEY = "ws.sidebarScroll";
+let navScrollTop = (() => {
+  try {
+    return Number(sessionStorage.getItem(NAV_SCROLL_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+})();
+function saveNavScroll(top: number) {
+  navScrollTop = top;
+  try {
+    sessionStorage.setItem(NAV_SCROLL_KEY, String(Math.round(top)));
+  } catch {
+    /* ignore */
   }
 }
 
@@ -111,6 +130,24 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
 
   useEffect(() => setMobileOpen(false), [location]);
 
+  // Restore the sidebar's scroll before the page paints; if the current page's item would be
+  // out of sight (e.g. opened from search), bring it to the middle.
+  const navRef = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const el = navRef.current;
+    if (!el) return;
+    el.scrollTop = navScrollTop;
+    const active = el.querySelector<HTMLElement>('[aria-current="page"]');
+    if (active) {
+      const a = active.getBoundingClientRect();
+      const n = el.getBoundingClientRect();
+      if (a.top < n.top || a.bottom > n.bottom) {
+        active.scrollIntoView({ block: "center" });
+        saveNavScroll(el.scrollTop);
+      }
+    }
+  }, [location, !!user, collapsed, isMobile, mobileOpen, programApprover]);
+
   if (!user) return null;
 
   const currentRole = (user.role in NAV_GROUPS ? user.role : "admin") as Role;
@@ -164,7 +201,7 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
         )}
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5 [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.14)_transparent]">
+      <nav ref={navRef} onScroll={(e) => saveNavScroll(e.currentTarget.scrollTop)} className="flex-1 overflow-y-auto px-3 py-4 space-y-5 [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.14)_transparent]">
         {groups.map((g) => (
           <div key={g.label}>
             {!rail && <p className="px-3 mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">{g.label}</p>}
