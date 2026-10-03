@@ -154,6 +154,16 @@ export const handler = async (event: any, context: any) => {
     return cleanupRosterConditions({ apply: event.apply === true, deadline: Date.now() + 22_000 });
   }
   // Which exact diagnoses CCM patients have (IAM-only; counts only, no names).
+  // Recent roster imports by provider (IAM-only; counts only, no names).
+  if (event && event.__job === "recent-import-report" && !event.requestContext && !event.version) {
+    const { recentImportReport } = await import("../importReset");
+    return recentImportReport(typeof event.sinceHours === "number" ? event.sinceHours : 48);
+  }
+  // Make an imported batch "new" (IAM-only): {providerId?, staffId?, from, to?, clearLastCalled?, dryRun?}; dry run unless dryRun:false.
+  if (event && event.__job === "reset-imported-as-new" && !event.requestContext && !event.version) {
+    const { resetImportedAsNew } = await import("../importReset");
+    return resetImportedAsNew({ providerId: event.providerId ? Number(event.providerId) : undefined, staffId: event.staffId ? Number(event.staffId) : undefined, from: String(event.from), to: event.to ? String(event.to) : undefined, clearLastCalled: !!event.clearLastCalled, dryRun: event.dryRun !== false });
+  }
   // APCM panel counts for a month (IAM-only; counts only, no names).
   if (event && event.__job === "apcm-month-stats" && !event.requestContext && !event.version) {
     const { getApcmOverview } = await import("../db");
