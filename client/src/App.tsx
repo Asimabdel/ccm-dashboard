@@ -40,6 +40,7 @@ import IntegrationsPage from "./pages/IntegrationsPage";
 import PatientEmailsPage from "./pages/PatientEmailsPage";
 import MessagesPage from "./pages/MessagesPage";
 import DailyReportsPage from "./pages/DailyReportsPage";
+import WellnessPage from "./pages/WellnessPage";
 import InsuranceCheckerPage from "./pages/InsuranceCheckerPage";
 import TeamProgressPage from "./pages/TeamProgressPage";
 import FaxInboxPage from "./pages/FaxInboxPage";
@@ -114,6 +115,7 @@ function Router() {
       <Route path="/patient-emails" component={PatientEmailsPage} />
       <Route path="/messages" component={MessagesPage} />
       <Route path="/daily-reports" component={DailyReportsPage} />
+      <Route path="/wellness" component={WellnessPage} />
       <Route path="/insurance" component={InsuranceCheckerPage} />
       <Route path="/team-progress" component={TeamProgressPage} />
       <Route path="/faxes" component={FaxInboxPage} />
@@ -133,6 +135,7 @@ function Router() {
       <Route path="/learn" component={LearnPage} />
       <Route path="/learn/print" component={LearnPage} />
       <Route path="/learn/s/:code" component={LearnPage} />
+      <Route path="/learn/flyer/:slug" component={LearnPage} />
       <Route path="/learn/:slug" component={LearnPage} />
       <Route path="/billing" component={BillingPage} />
       <Route path="/follow-ups" component={FollowUpsPage} />

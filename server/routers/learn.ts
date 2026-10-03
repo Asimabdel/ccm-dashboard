@@ -13,6 +13,8 @@ export const learnRouter = router({
     if (!t) throw new TRPCError({ code: "NOT_FOUND", message: "This page isn't available." });
     return t;
   }),
+  /** Clinic name, address and phone for printed flyers (public information, as on the website). */
+  clinics: publicProcedure.query(() => carePlans.publicClinics()),
   sent: publicProcedure.input(z.object({ code: z.string().max(20) })).query(async ({ input }) => {
     const s = await carePlans.publicSent(input.code);
     if (!s) throw new TRPCError({ code: "NOT_FOUND", message: "This link isn't valid." });

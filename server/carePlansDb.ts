@@ -8,6 +8,8 @@
 //   copy). Signing also refreshes the patient's plan text (the APCM care plan field).
 // - Education: handouts sent by text / email / link (a random code: the link names no condition),
 //   printed, or covered on the CCM call, all logged on the patient.
+import { WELLNESS_KEYS, WELLNESS_TOPICS, isWellnessKey } from "../shared/wellness";
+import { approvedWellness, wellnessLabel } from "./wellnessDb";
 import { randomBytes } from "node:crypto";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getDb } from "./db";
@@ -34,6 +36,19 @@ async function db() {
 }
 
 const LIBRARY_SET = new Set(LIBRARY_KEYS);
+/** Condition handouts and prevention & wellness handouts share sending, printing and the public pages. */
+const isTopic = (k: string) => LIBRARY_SET.has(k) || isWellnessKey(k);
+const topicLabel = (k: string) => (isWellnessKey(k) ? wellnessLabel(k) : itemLabel(k));
+
+/** The approved content of each topic, condition or wellness, with its kind. */
+async function approvedTopics(keys: string[]) {
+  const out = new Map<string, { kind: "condition" | "wellness"; education: unknown; version: number; approvedAt: Date | null }>();
+  const cond = await approvedContent(keys.filter((k) => LIBRARY_SET.has(k)));
+  for (const [k, a] of Array.from(cond)) out.set(k, { kind: "condition", education: a.entry.education, version: a.version, approvedAt: a.approvedAt });
+  const well = await approvedWellness(keys.filter(isWellnessKey));
+  for (const [k, a] of Array.from(well)) out.set(k, { kind: "wellness", education: a.entry.education, version: a.version, approvedAt: a.approvedAt });
+  return out;
+}
 const assertKey = (key: string) => { if (!LIBRARY_SET.has(key)) throw new WorkspaceError("Unknown condition.", "NOT_FOUND"); };
 
 // ---------------------------------------------------------------------------
@@ -470,7 +485,7 @@ export async function educationFor(actor: WorkspaceActor, subjectKey: string) {
       const a = approved.get(c.key);
       return { ...c, approved: !!a, titles: a ? { en: a.entry.education.en.title, es: a.entry.education.es.title } : null };
     }),
-    history: sends.map((s) => ({ ...s, labels: (s.keys as string[]).map(itemLabel) })),
+    history: sends.map((s) => ({ ...s, labels: (s.keys as string[]).map(topicLabel) })),
   };
 }
 
@@ -481,18 +496,18 @@ async function patientIdOf(subjectKey: string) {
 
 /** Log handouts given to a patient. Text / email / link sends get a code (the link the patient opens). */
 export async function recordEducation(actor: WorkspaceActor, input: { subjectKey: string; keys: string[]; language: LibraryLang; channel: "text" | "email" | "link" | "print" | "call"; ccmTaskId?: number | null }) {
-  const keys = Array.from(new Set(input.keys)).filter((k) => LIBRARY_SET.has(k));
+  const keys = Array.from(new Set(input.keys)).filter(isTopic);
   if (!keys.length) throw new WorkspaceError("Pick at least one topic.");
-  const approved = await approvedContent(keys);
+  const approved = await approvedTopics(keys);
   const missing = keys.filter((k) => !approved.has(k));
-  if (missing.length && input.channel !== "call") throw new WorkspaceError(`There is no handout yet for: ${missing.map(itemLabel).join(", ")}.`);
+  if (missing.length && input.channel !== "call") throw new WorkspaceError(`There is no approved handout yet for: ${missing.map(topicLabel).join(", ")}.`);
   const code = input.channel === "text" || input.channel === "email" || input.channel === "link" ? newCode() : null;
   const versions = Object.fromEntries(keys.filter((k) => approved.has(k)).map((k) => [k, approved.get(k)!.version]));
   await (await db()).insert(educationSends).values({
     code, subjectKey: input.subjectKey, patientId: await patientIdOf(input.subjectKey), conditionKeys: keys, versions, language: input.language,
     channel: input.channel, ccmTaskId: input.ccmTaskId ?? null, sentByUserId: actor.id,
   });
-  await audit(actor, "update_patient", { entityType: "education", description: `Education ${input.channel === "print" ? "printed" : input.channel === "call" ? "covered on call" : `sent (${input.channel})`}: ${keys.map(itemLabel).join(", ")}` });
+  await audit(actor, "update_patient", { entityType: "education", description: `Education ${input.channel === "print" ? "printed" : input.channel === "call" ? "covered on call" : `sent (${input.channel})`}: ${keys.map(topicLabel).join(", ")}` });
   return { code };
 }
 
@@ -534,18 +549,28 @@ export async function emailEducation(actor: WorkspaceActor, input: { subjectKey:
 // Public pages (no login): approved handouts only, never a patient's name
 // ---------------------------------------------------------------------------
 
+export async function publicClinics() {
+  return (await db()).select({ id: clinics.id, name: clinics.name, address: clinics.address, phone: clinics.phone }).from(clinics).orderBy(clinics.name);
+}
+
 export async function publicTopics() {
   const approved = await approvedContent(LIBRARY_KEYS);
-  return LIBRARY_ITEMS.filter((c) => approved.has(c.key)).map((c) => {
+  const conditions = LIBRARY_ITEMS.filter((c) => approved.has(c.key)).map((c) => {
     const e = approved.get(c.key)!.entry;
-    return { key: c.key, titles: { en: e.education.en.title, es: e.education.es.title } };
+    return { key: c.key, kind: "condition" as const, group: null as string | null, titles: { en: e.education.en.title, es: e.education.es.title } };
   });
+  const well = await approvedWellness(WELLNESS_KEYS);
+  const wellness = WELLNESS_TOPICS.filter((t) => well.has(t.key)).map((t) => {
+    const e = well.get(t.key)!.entry;
+    return { key: t.key, kind: "wellness" as const, group: t.group as string | null, titles: { en: e.education.en.title, es: e.education.es.title } };
+  });
+  return [...conditions, ...wellness];
 }
 
 export async function publicTopic(key: string) {
-  if (!LIBRARY_SET.has(key)) return null;
-  const a = (await approvedContent([key])).get(key);
-  return a ? { key, education: a.entry.education, approvedAt: a.approvedAt } : null;
+  if (!isTopic(key)) return null;
+  const a = (await approvedTopics([key])).get(key);
+  return a ? { key, kind: a.kind, education: a.education, approvedAt: a.approvedAt } : null;
 }
 
 /** A sent set (/learn/s/<code>): its handouts and the clinic phone. Marks it opened the first time. */
@@ -556,10 +581,10 @@ export async function publicSent(code: string) {
   if (!s) return null;
   if (!s.openedAt) await d.update(educationSends).set({ openedAt: new Date() }).where(eq(educationSends.id, s.id));
   const keys = s.conditionKeys as string[];
-  const approved = await approvedContent(keys);
+  const approved = await approvedTopics(keys);
   return {
     language: (s.language === "es" ? "es" : "en") as LibraryLang,
-    topics: keys.filter((k) => approved.has(k)).map((k) => ({ key: k, education: approved.get(k)!.entry.education })),
+    topics: keys.filter((k) => approved.has(k)).map((k) => ({ key: k, kind: approved.get(k)!.kind, education: approved.get(k)!.education })),
     phone: await phoneFor(s.subjectKey),
   };
 }

@@ -16,6 +16,22 @@ const educationDoc = z.object({
   call911: lines(10),
 });
 
+/** A prevention & wellness handout (shared/wellness/types.ts). */
+const wellnessDoc = z.object({
+  title: z.string().trim().min(1).max(160),
+  summary: para,
+  whoFor: lines(10),
+  howOften: z.string().trim().max(400),
+  whatToDo: lines(15),
+  whatToExpect: lines(10),
+  talkToUs: lines(10),
+});
+export const wellnessEntrySchema = z.object({
+  key: z.string().max(40),
+  education: z.object({ en: wellnessDoc, es: wellnessDoc }),
+  basis: lines(10),
+});
+
 export const carePlanTemplateSchema = z.object({
   problem: z.string().trim().min(1).max(400),
   expectedOutcome: para,

@@ -45,7 +45,8 @@ import { INJECTION_KIND_LIST, type InjectionKind } from "../../shared/dailyRepor
 import { LIST_SORTS, OUTREACH_STATUS_LIST } from "../../shared/outreach";
 
 const listSort = { sort: z.enum(LIST_SORTS).default("suggested"), dir: z.enum(["asc", "desc"]).default("asc") };
-import { libraryEntrySchema, planSchema } from "../carePlanSchemas";
+import { libraryEntrySchema, planSchema, wellnessEntrySchema } from "../carePlanSchemas";
+import * as wellness from "../wellnessDb";
 import { LIBRARY_LANGS } from "../../shared/conditionLibrary/types";
 import { OFFICE_TESTS } from "../../shared/officeTests";
 import { SUGGEST_PROGRAMS } from "../../shared/programRules";
@@ -1539,6 +1540,32 @@ export const workspaceRouter = router({
   }),
 
   /** Patient education handouts: send (text / email / link), print, see what was given. */
+  /** Prevention & wellness handouts: everyone with patient access sees approved ones; the admin edits and approves. */
+  wellness: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "education");
+      return wellness.wellnessList(actor);
+    }),
+    get: protectedProcedure.input(z.object({ key: z.string().max(40) })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "education");
+      return run(() => wellness.wellnessGet(actor, input.key));
+    }),
+    save: protectedProcedure.input(z.object({ key: z.string().max(40), entry: wellnessEntrySchema })).mutation(async ({ ctx, input }) => {
+      adminOnly(ctx, "edit wellness handouts");
+      const actor = await actorFor(ctx, "education");
+      return run(() => wellness.wellnessSave(actor, input.key, input.entry as Parameters<typeof wellness.wellnessSave>[2]));
+    }),
+    approve: protectedProcedure.input(z.object({ key: z.string().max(40) })).mutation(async ({ ctx, input }) => {
+      adminOnly(ctx, "approve wellness handouts");
+      const actor = await actorFor(ctx, "education");
+      return run(() => wellness.wellnessApprove(actor, input.key));
+    }),
+    forPatient: protectedProcedure.input(z.object({ subjectKey: patientKey })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "education");
+      return run(() => wellness.wellnessForPatient(actor, input.subjectKey));
+    }),
+  }),
+
   education: router({
     forPatient: protectedProcedure.input(z.object({ subjectKey: patientKey })).query(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "education");
