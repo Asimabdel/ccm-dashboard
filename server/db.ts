@@ -28,6 +28,7 @@ import {
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { buildStandardApcmCarePlan } from "../shared/carePlan";
+import { apcmPriority, isAutoApcmMonth } from "../shared/apcmRules";
 
 let _db: MySql2Database<Record<string, never>> | null = null;
 
@@ -1980,29 +1981,19 @@ const CCM_DONE_STATUSES = ["completed", "ready_for_billing", "billed"] as const;
 const CCM_REACHED_STATUSES = ["called_no_answer", "voicemail_left", "wrong_number", "needs_callback", "in_progress", "completed", "needs_provider_review", "needs_appointment", "documentation_incomplete", "ready_for_billing", "billed", "unable_to_reach", "declined_ccm"] as const;
 
 /**
- * APCM priority for a month (lower goes first): 1 = we completed a CCM with them this year,
- * 2 = we reached out this year but no CCM completed yet, 3 = not reached this year.
- * Patients whose CCM was completed THIS month bill CCM, not APCM (no tier).
- */
-export function apcmPriority(r: { ccmDoneThisMonth: boolean; ccmCompletedThisYear: number; reachedThisYear: boolean }): 1 | 2 | 3 | null {
-  if (r.ccmDoneThisMonth) return null;
-  if (r.ccmCompletedThisYear > 0) return 1;
-  return r.reachedThisYear ? 2 : 3;
-}
-
-/**
  * APCM management overview for a month: every APCM-covered patient (active CCM, APCM-only
  * consented, or anyone with an APCM task that month) with their complexity level,
  * consent/care-plan/visit setup, the month's APCM task + billing state, whether a completed
- * CCM takes the month, and their priority (completed a CCM this year first). Returns a
- * filtered/paginated page plus whole-panel stats.
+ * CCM takes the month, and their priority (shared/apcmRules.ts: did a CCM in an earlier month
+ * first; from August 2026 those are the automatic APCM list). Returns a filtered/paginated
+ * page plus whole-panel stats.
  */
 export async function getApcmOverview(
   month: string,
   filters: { category?: "ready" | "needs_setup" | "ccm_done"; priority?: 1 | 2 | 3; assignedStaffId?: number; search?: string; limit?: number; offset?: number } = {}
 ) {
   const db = await getDb();
-  if (!db) return { rows: [], total: 0, stats: { total: 0, ready: 0, needsSetup: 0, ccmDone: 0, consented: 0, withCarePlan: 0, tier1: 0, tier2: 0, tier3: 0 } };
+  if (!db) return { rows: [], total: 0, stats: { total: 0, ready: 0, needsSetup: 0, ccmDone: 0, consented: 0, withCarePlan: 0, tier1: 0, tier2: 0, tier3: 0, autoApcm: 0, autoReady: 0, autoConsented: 0 } };
   const staffAlias = alias(users, "apcmStaff");
   const apcmT = alias(ccmTasks, "apcmOT");
   const ccmT = alias(ccmTasks, "apcmCT");
@@ -2043,19 +2034,19 @@ export async function getApcmOverview(
     .where(and(...conds))
     .orderBy(patients.name);
 
-  // This year's CCM history up to and including the month: completed CCMs and any outreach.
+  // CCM history: completed CCMs in any EARLIER month, and outreach this year up to the month.
   const year = month.slice(0, 4);
   const done = sql.join(CCM_DONE_STATUSES.map((x) => sql`${x}`), sql`, `);
   const reached = sql.join(CCM_REACHED_STATUSES.map((x) => sql`${x}`), sql`, `);
   const history = await db
     .select({
       patientId: ccmTasks.patientId,
-      completed: sql<number>`SUM(CASE WHEN ${ccmTasks.status} IN (${done}) THEN 1 ELSE 0 END)`,
-      lastCompleted: sql<string | null>`MAX(CASE WHEN ${ccmTasks.status} IN (${done}) THEN ${ccmTasks.month} END)`,
-      reached: sql<number>`MAX(CASE WHEN ${ccmTasks.status} IN (${reached}) OR ${ccmTasks.dateContacted} IS NOT NULL OR ${ccmTasks.noAnswerCount} > 0 THEN 1 ELSE 0 END)`,
+      completed: sql<number>`SUM(CASE WHEN ${ccmTasks.month} < ${month} AND ${ccmTasks.status} IN (${done}) THEN 1 ELSE 0 END)`,
+      lastCompleted: sql<string | null>`MAX(CASE WHEN ${ccmTasks.month} < ${month} AND ${ccmTasks.status} IN (${done}) THEN ${ccmTasks.month} END)`,
+      reached: sql<number>`MAX(CASE WHEN ${ccmTasks.month} >= ${`${year}-01`} AND (${ccmTasks.status} IN (${reached}) OR ${ccmTasks.dateContacted} IS NOT NULL OR ${ccmTasks.noAnswerCount} > 0) THEN 1 ELSE 0 END)`,
     })
     .from(ccmTasks)
-    .where(and(eq(ccmTasks.program, "ccm"), gte(ccmTasks.month, `${year}-01`), lte(ccmTasks.month, month)))
+    .where(and(eq(ccmTasks.program, "ccm"), lte(ccmTasks.month, month)))
     .groupBy(ccmTasks.patientId);
   const historyOf = new Map(history.map((h) => [h.patientId, h]));
 
@@ -2069,12 +2060,13 @@ export async function getApcmOverview(
     const ready = r.billingStatus === "ready_for_billing";
     const category: "ready" | "needs_setup" | "ccm_done" = ccmDone ? "ccm_done" : ready ? "ready" : "needs_setup";
     const h = historyOf.get(r.id);
-    const ccmCompletedThisYear = Number(h?.completed ?? 0);
+    const ccmCompletedBefore = Number(h?.completed ?? 0);
     const reachedThisYear = Number(h?.reached ?? 0) > 0;
-    const priority = apcmPriority({ ccmDoneThisMonth: ccmDone, ccmCompletedThisYear, reachedThisYear });
-    return { ...r, hasCarePlan, consented, hasVisit, category, ccmCompletedThisYear, lastCcmCompleted: h?.lastCompleted ?? null, reachedThisYear, priority };
+    const priority = apcmPriority({ ccmDoneThisMonth: ccmDone, ccmCompletedBefore, reachedThisYear });
+    const autoApcm = priority === 1 && isAutoApcmMonth(month);
+    return { ...r, hasCarePlan, consented, hasVisit, category, ccmCompletedBefore, lastCcmCompleted: h?.lastCompleted ?? null, reachedThisYear, priority, autoApcm };
   });
-  // Completed a CCM this year first, then reached, then not reached; CCM-this-month last.
+  // Did a CCM before first, then reached this year, then not reached; CCM-that-month last.
   enrich.sort((a, b) => (a.priority ?? 9) - (b.priority ?? 9) || a.name.localeCompare(b.name));
 
   const stats = {
@@ -2087,6 +2079,10 @@ export async function getApcmOverview(
     tier1: enrich.filter((r) => r.priority === 1).length,
     tier2: enrich.filter((r) => r.priority === 2).length,
     tier3: enrich.filter((r) => r.priority === 3).length,
+    // The automatic APCM list (tier 1 from August 2026): how many are set up to bill.
+    autoApcm: enrich.filter((r) => r.autoApcm).length,
+    autoReady: enrich.filter((r) => r.autoApcm && r.category === "ready").length,
+    autoConsented: enrich.filter((r) => r.autoApcm && r.consented).length,
   };
 
   let filtered = enrich;

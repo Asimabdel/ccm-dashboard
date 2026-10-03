@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { NOT_ON_ROSTER, classifyDiagnosis, countChronicConditions, diagnosesFingerprint, icd10Of, suggestPrograms, type MatchedDiagnosis } from "../shared/programRules";
-import { apcmPriority, computeApcmLevel } from "./db";
+import { computeApcmLevel } from "./db";
+import { APCM_AUTO_START, apcmPriority, autoApcmMonths, isAutoApcmMonth } from "../shared/apcmRules";
 import { firstClose, similarSpelling, tok } from "./rosterMatch";
 import { conditionsToAdd } from "./conditionSync";
 import { pickKeep } from "./rosterMerge";
@@ -147,12 +148,22 @@ describe("program suggestions from diagnoses", () => {
 });
 
 describe("APCM priority", () => {
-  it("puts patients we completed a CCM with this year first, then reached, then not reached", () => {
-    expect(apcmPriority({ ccmDoneThisMonth: false, ccmCompletedThisYear: 3, reachedThisYear: true })).toBe(1);
-    expect(apcmPriority({ ccmDoneThisMonth: false, ccmCompletedThisYear: 0, reachedThisYear: true })).toBe(2);
-    expect(apcmPriority({ ccmDoneThisMonth: false, ccmCompletedThisYear: 0, reachedThisYear: false })).toBe(3);
+  it("puts patients who did a CCM before first, then reached, then not reached", () => {
+    expect(apcmPriority({ ccmDoneThisMonth: false, ccmCompletedBefore: 3, reachedThisYear: true })).toBe(1);
+    expect(apcmPriority({ ccmDoneThisMonth: false, ccmCompletedBefore: 1, reachedThisYear: false })).toBe(1);
+    expect(apcmPriority({ ccmDoneThisMonth: false, ccmCompletedBefore: 0, reachedThisYear: true })).toBe(2);
+    expect(apcmPriority({ ccmDoneThisMonth: false, ccmCompletedBefore: 0, reachedThisYear: false })).toBe(3);
   });
   it("leaves out a patient whose CCM was completed that month (it bills CCM, not APCM)", () => {
-    expect(apcmPriority({ ccmDoneThisMonth: true, ccmCompletedThisYear: 5, reachedThisYear: true })).toBe(null);
+    expect(apcmPriority({ ccmDoneThisMonth: true, ccmCompletedBefore: 5, reachedThisYear: true })).toBe(null);
+  });
+  it("starts the automatic APCM list in August 2026", () => {
+    expect(APCM_AUTO_START).toBe("2026-08");
+    expect(isAutoApcmMonth("2026-07")).toBe(false);
+    expect(isAutoApcmMonth("2026-08")).toBe(true);
+    expect(isAutoApcmMonth("2027-01")).toBe(true);
+    expect(autoApcmMonths("2026-10")).toEqual(["2026-08", "2026-09", "2026-10"]);
+    expect(autoApcmMonths("2027-01")).toEqual(["2026-08", "2026-09", "2026-10", "2026-11", "2026-12", "2027-01"]);
+    expect(autoApcmMonths("2026-07")).toEqual([]);
   });
 });
