@@ -654,7 +654,8 @@ function Bubble({ m, showName, canOpenPatient, receipt, highlighted, canPin, can
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
-  const flow = m.kind === "flow" && !m.deleted;
+  const flow = (m.kind === "flow" || m.kind === "bot") && !m.deleted;
+  const bot = m.kind === "bot";
   const mineSide = m.mine && !flow;
   const pieces = m.body ? splitMentions(m.body, m.mentions.map((x) => x.name ?? "")) : [];
   const chip = m.patient && (
@@ -676,7 +677,7 @@ function Bubble({ m, showName, canOpenPatient, receipt, highlighted, canPin, can
     <div id={`msg-${m.id}`} className={cn("group -mx-2 mb-1.5 flex rounded-xl px-2 transition-colors duration-700", mineSide ? "justify-end" : "justify-start", highlighted && "bg-amber-100/80 dark:bg-amber-500/15")}>
       <div className={cn("flex max-w-[85%] items-end gap-1 md:max-w-[70%]", mineSide && "flex-row-reverse")}>
         <div className="min-w-0">
-          {(showName || flow) && <p className="mb-0.5 ml-1 mt-2 text-xs font-semibold text-slate-600 dark:text-slate-300">{m.mine ? "You" : m.from}{flow ? " · Patient Flow" : ""}</p>}
+          {(showName || flow) && <p className="mb-0.5 ml-1 mt-2 text-xs font-semibold text-slate-600 dark:text-slate-300">{bot ? "MyPCP" : m.mine ? "You" : m.from}{flow && !bot ? " · Patient Flow" : ""}</p>}
           {m.replyTo && !m.deleted && (
             <button onClick={() => onJump(m.replyTo!.id)} className={cn("mb-0.5 flex max-w-full items-center gap-1 truncate rounded-lg border-l-2 border-slate-300 bg-slate-50 px-2 py-1 text-left text-[11px] text-slate-500 hover:bg-slate-100 dark:border-slate-500 dark:bg-slate-800/60 dark:text-slate-400 dark:hover:bg-slate-700", mineSide && "ml-auto")}>
               <Reply size={11} className="shrink-0" />
@@ -707,7 +708,7 @@ function Bubble({ m, showName, canOpenPatient, receipt, highlighted, canPin, can
                 </div>
               ) : m.body ? (
                 <p className="whitespace-pre-wrap break-words">
-                  {flow && <DoorOpen size={14} className="mr-1.5 inline -mt-0.5" />}
+                  {flow && !bot && <DoorOpen size={14} className="mr-1.5 inline -mt-0.5" />}
                   {pieces.map((p, i) => p.mention ? <span key={i} className={cn("font-semibold", m.mine && !flow && !m.requiresAck ? "underline decoration-white/50" : m.mine ? "underline decoration-white/50" : "text-brand")}>{p.text}</span> : <span key={i}>{p.text}</span>)}
                 </p>
               ) : null}
@@ -732,7 +733,7 @@ function Bubble({ m, showName, canOpenPatient, receipt, highlighted, canPin, can
               {(m.mine || canSeeAcks) && <button onClick={onShowAcks} className="font-semibold text-slate-500 hover:text-slate-800 hover:underline dark:text-slate-400">Read by {m.ack.count} of {m.ack.of}</button>}
             </div>
           )}
-          {flow && !m.mine && (
+          {flow && !bot && !m.mine && (
             <div className="mt-1 flex flex-wrap gap-1">
               {FLOW_QUICK_REPLIES.map((r) => (
                 <button key={r} onClick={() => onQuickReply(r)} className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">{r}</button>

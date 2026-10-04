@@ -28,7 +28,7 @@ async function clinicNames(): Promise<Map<number, string>> {
 const nameFor = (names: Map<number, string>) => (id: number | null) => (id ? names.get(id) ?? "clinic" : REMOTE_LABEL);
 
 /** Who approves this person's changes: their home clinic's office manager (not themselves), else the time-off approver, else the admins. */
-async function approverFor(userId: number): Promise<{ userIds: number[]; assignedUserId: number | null }> {
+export async function approverFor(userId: number): Promise<{ userIds: number[]; assignedUserId: number | null }> {
   const d = await db();
   const [p] = await d.select({ clinicId: staffProfiles.homeClinicId }).from(staffProfiles).where(eq(staffProfiles.userId, userId)).limit(1);
   if (p?.clinicId) {

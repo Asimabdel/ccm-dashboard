@@ -179,7 +179,7 @@ export function TimesheetsTab() {
                                     <td className="py-1.5 font-medium text-slate-700">{fmtDay(x.workDate)}</td>
                                     <td className="py-1.5 text-slate-500">{x.clinicName ?? "—"}</td>
                                     <td className="py-1.5 text-slate-700">{clockTime(x.clockInAt)}{x.minutesLate > 0 && <span className="ml-1 text-amber-600">({x.minutesLate}m late)</span>}</td>
-                                    <td className="py-1.5 text-slate-700">{x.clockOutAt ? clockTime(x.clockOutAt) : x.missingClockOut ? <span className="font-semibold text-rose-600">Missing</span> : <span className="text-emerald-700">On the clock</span>}</td>
+                                    <td className="py-1.5 text-slate-700">{x.clockOutAt ? <>{clockTime(x.clockOutAt)}{x.lunch && <span className="ml-1 text-[11px] font-semibold text-amber-600">lunch</span>}</> : x.missingClockOut ? <span className="font-semibold text-rose-600">Missing</span> : <span className="text-emerald-700">On the clock</span>}</td>
                                     <td className="py-1.5 text-right tabular-nums text-slate-700">{x.clockOutAt ? fmtDuration(x.minutes) : "—"}</td>
                                     <td className="py-1.5 pl-4 text-slate-500 truncate max-w-[200px]">{x.note}{x.edited && <span className="ml-1 text-[10px] text-slate-400">(edited)</span>}</td>
                                     <td className="py-1.5 text-right whitespace-nowrap">

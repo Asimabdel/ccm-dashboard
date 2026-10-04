@@ -8,6 +8,7 @@ import {
 import { MESSAGES, NAV_GROUPS, PROGRAM_APPROVALS, ROLES, ROLE_HOME, type Role } from "@/lib/nav";
 import { useUnreadMessages } from "@/components/messages/useUnreadMessages";
 import { useUnreadTexts } from "@/components/texts/useUnreadTexts";
+import { ClockBanner } from "@/components/workforce/ClockBanner";
 import { useTheme } from "@/contexts/ThemeContext";
 import { CommandPalette } from "@/components/CommandPalette";
 import { useIdleLogout } from "@/hooks/useIdleLogout";
@@ -436,6 +437,8 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
           </div>
         </header>
 
+        {/* Time clock reminders (people on the clock only; providers and the billing company never are) */}
+        {!["provider", "billing", "user"].includes(user.role) && <ClockBanner />}
         <main className="flex-1 overflow-auto p-4 md:p-6">
           <div className="animate-fade-in-up max-w-[1500px] mx-auto">
             {pageTitle && (

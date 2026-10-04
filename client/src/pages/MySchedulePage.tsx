@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Loader2, MapPin, CalendarPlus, X } from "lucide-react";
 import { fmtDay, fmtTime, localDateStr } from "@shared/workforce";
 import { MyWeekCard } from "@/components/workforce/MyWeekCard";
+import { MyPunchesCard, ReminderTextsCard } from "@/components/workforce/ClockCards";
 
 export const TIME_OFF_TYPE: Record<string, string> = { pto: "PTO", sick: "Sick", unpaid: "Unpaid", other: "Other" };
 export const TIME_OFF_STATUS: Record<string, string> = {
@@ -40,6 +41,8 @@ export default function MySchedulePage() {
     <CCMDashboardLayout title="My Schedule">
       <div className="grid lg:grid-cols-2 gap-5">
         <MyWeekCard />
+        <MyPunchesCard />
+        <ReminderTextsCard />
         <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-soft">
           <h2 className="text-lg font-bold tracking-tight text-slate-900">Next 4 weeks</h2>
           {sched.isLoading && <Loader2 className="animate-spin text-slate-400 mt-4" />}

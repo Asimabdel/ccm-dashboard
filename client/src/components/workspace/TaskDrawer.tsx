@@ -58,6 +58,37 @@ function TimeOffDecision({ requestId, onDone }: { requestId: number; onDone: () 
   );
 }
 
+/** Approve / Deny a "fix my punch" request (shown on its task); approving changes the punch. */
+function PunchFixDecision({ requestId, onDone }: { requestId: number; onDone: () => void }) {
+  const utils = trpc.useUtils();
+  const q = trpc.workforce.punchRequests.get.useQuery(requestId, { retry: false });
+  const [note, setNote] = useState("");
+  const decide = trpc.workforce.punchRequests.decide.useMutation({
+    onSuccess: (res) => { void utils.workforce.invalidate(); onDone(); toast.success(res.approved ? "Approved. Their timesheet is updated, and they've been told." : "Denied. They've been told."); },
+    onError: (e) => toast.error(e.message),
+  });
+  if (q.isLoading) return <Loading />;
+  if (q.error) return <p className="text-xs text-slate-500">{q.error.message}</p>;
+  const r = q.data;
+  if (!r) return null;
+  if (r.status !== "pending") return <p className="rounded-xl bg-slate-50 dark:bg-slate-800 p-3 text-sm text-slate-600 dark:text-slate-300">This request was {r.status}.</p>;
+  return (
+    <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
+      <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">{r.userName}: fix a punch on {r.workDate}</p>
+      <div className="grid gap-3 sm:grid-cols-2 text-xs">
+        <div><p className="font-semibold text-slate-500">Now</p><p className="mt-1 text-slate-600 dark:text-slate-300">{r.current ? `${r.current.clockIn} → ${r.current.clockOut}` : "No punch that day"}</p></div>
+        <div><p className="font-semibold text-slate-500">Asking for</p><p className="mt-1 text-slate-800 dark:text-slate-100">{[r.requested.clockIn ? `in ${r.requested.clockIn}` : null, r.requested.clockOut ? `out ${r.requested.clockOut}` : null].filter(Boolean).join(", ")}</p></div>
+      </div>
+      <p className="text-xs text-slate-600 dark:text-slate-300">Reason: {r.reason}</p>
+      <input className={inputCls} placeholder="Note back to them (optional)" value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
+      <div className="grid grid-cols-2 gap-2">
+        <Btn disabled={decide.isPending} onClick={() => decide.mutate({ id: r.id, approve: true, managerNote: note.trim() || null })}><ThumbsUp size={14} /> Approve</Btn>
+        <Btn variant="secondary" disabled={decide.isPending} onClick={() => decide.mutate({ id: r.id, approve: false, managerNote: note.trim() || null })}><ThumbsDown size={14} /> Deny</Btn>
+      </div>
+    </div>
+  );
+}
+
 /** Approve / Deny a staff member's change to their usual week (shown on its task). */
 function ScheduleChangeDecision({ requestId, onDone }: { requestId: number; onDone: () => void }) {
   const utils = trpc.useUtils();
@@ -125,6 +156,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: number | null; onClose
   const closed = t?.status === "completed" || t?.status === "cancelled";
   const timeOff = t?.sourceType === "time_off" && !!t.sourceRef;
   const scheduleChange = t?.sourceType === "schedule_change" && !!t.sourceRef;
+  const punchFix = t?.sourceType === "punch_fix" && !!t.sourceRef;
   const inQueue = !!t && !t.assignedUserId && !!t.assignedRole;
   const queueName = t ? t.queueLabel ?? (t.assignedRole ? `${WORKSPACE_ROLE_LABELS[t.assignedRole] ?? t.assignedRole} queue` : null) : null;
 
@@ -152,6 +184,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: number | null; onClose
             <div className="shrink-0 px-6 py-5 space-y-5">
               {!closed && timeOff && <TimeOffDecision requestId={Number(t.sourceRef)} onDone={refresh} />}
               {!closed && scheduleChange && <ScheduleChangeDecision requestId={Number(t.sourceRef)} onDone={refresh} />}
+              {!closed && punchFix && <PunchFixDecision requestId={Number(t.sourceRef)} onDone={refresh} />}
               {!closed && inQueue && user && (
                 <Btn variant="secondary" className="w-full" onClick={() => update.mutate({ id: t.id, assignedUserId: user.id })} disabled={update.isPending}>
                   <Hand size={15} /> Take it (sent to {queueName})

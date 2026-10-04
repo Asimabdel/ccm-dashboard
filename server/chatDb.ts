@@ -180,7 +180,7 @@ export async function myConversations(user: Person) {
       /** What goes on the badge: everything new, or only @mentions of me when muted. */
       counted: muted ? m?.n ?? 0 : u,
       lastMentionId: m?.lastId ?? null,
-      last: l ? { id: l.id, from: l.fromId === user.id ? "You" : l.from, fromId: l.fromId, kind: l.kind, text: l.deletedAt ? "Message removed" : l.body.slice(0, 120), at: l.createdAt } : null,
+      last: l ? { id: l.id, from: l.kind === "bot" ? "MyPCP" : l.fromId === user.id ? "You" : l.from, fromId: l.fromId, kind: l.kind, text: l.deletedAt ? "Message removed" : l.body.slice(0, 120), at: l.createdAt } : null,
       lastAt: c.lastMessageAt ?? c.createdAt,
     };
   }).sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime());
@@ -201,7 +201,7 @@ export async function unreadSummary(user: Person) {
   const [mention] = await d.select({ id: chatMentions.id }).from(chatMentions).where(and(eq(chatMentions.messageId, pick.id), eq(chatMentions.userId, user.id))).limit(1);
   return {
     total,
-    newest: m ? { conversationId: pick.c.id, messageId: pick.id, from: m.from, at: m.at, mention: !!mention, flow: m.kind === "flow" } : null,
+    newest: m ? { conversationId: pick.c.id, messageId: pick.id, from: m.kind === "bot" ? "MyPCP" : m.from, at: m.at, mention: !!mention, flow: m.kind === "flow" } : null,
   };
 }
 
@@ -279,7 +279,7 @@ export async function conversationDetail(user: Person, id: number, focusId?: num
       const reactions = REACTIONS.map((emoji) => rs.filter((r) => r.emoji === emoji)).filter((g) => g.length)
         .map((g) => ({ emoji: g[0]!.emoji, count: g.length, mine: g.some((r) => r.userId === user.id), names: g.map((r) => r.name ?? "") }));
       return {
-        id: m.id, fromId: m.userId, from, mine: m.userId === user.id, at: m.createdAt, kind: m.kind,
+        id: m.id, fromId: m.userId, from: m.kind === "bot" ? "MyPCP" : from, mine: m.userId === user.id && m.kind !== "bot", at: m.createdAt, kind: m.kind,
         body: m.deletedAt ? null : m.body, deleted: !!m.deletedAt,
         mentions: m.deletedAt ? [] : ms.map((x) => ({ id: x.userId, name: x.name })),
         mentionsMe: !m.deletedAt && ms.some((x) => x.userId === user.id),
@@ -588,6 +588,22 @@ export async function postFlowPing(actor: WorkspaceActor, a: { providerId: numbe
   if (p?.userId && p.userId !== actor.id) await addMentions(conv.id, insertId(res), now, [p.userId]);
   await d.update(chatConversations).set({ lastMessageAt: now }).where(eq(chatConversations.id, conv.id));
   return { conversationId: conv.id };
+}
+
+/**
+ * A message from MyPCP itself (e.g. the Monday perfect-attendance shout-out) in a built-in channel. It's
+ * stored under the first admin (every message needs a sender) but always shows as "MyPCP".
+ */
+export async function postBotMessage(uniqueKey: string, body: string) {
+  await ensureSystemConversations();
+  const d = await db();
+  const [conv] = await d.select().from(chatConversations).where(eq(chatConversations.uniqueKey, uniqueKey)).limit(1);
+  const [admin] = await d.select({ id: users.id }).from(users).where(eq(users.role, "admin")).orderBy(asc(users.id)).limit(1);
+  if (!conv || !admin) return null;
+  const now = new Date();
+  const res = await d.insert(chatMessages).values({ conversationId: conv.id, userId: admin.id, body: body.slice(0, MAX_BODY), kind: "bot", createdAt: now });
+  await d.update(chatConversations).set({ lastMessageAt: now }).where(eq(chatConversations.id, conv.id));
+  return { id: insertId(res), conversationId: conv.id };
 }
 
 /** Open (or create) the direct message with one person. */

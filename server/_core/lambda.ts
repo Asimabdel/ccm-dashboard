@@ -154,6 +154,24 @@ export const handler = async (event: any, context: any) => {
     return cleanupRosterConditions({ apply: event.apply === true, deadline: Date.now() + 22_000 });
   }
   // Which exact diagnoses CCM patients have (IAM-only; counts only, no names).
+  // One-time (2026-10-04): the first overtime alerts were about a finished week but worded "heading into".
+  if (event && event.__job === "fix-first-ot-alerts" && !event.requestContext && !event.version) {
+    const { getDb } = await import("../db");
+    const { sql } = await import("drizzle-orm");
+    const d = await getDb();
+    const [r] = (await d!.execute(sql`UPDATE workTasks SET
+        title = REPLACE(title, 'Heading into overtime: ', 'Overtime, week of Sep 28: '),
+        description = CONCAT('Week of Sep 28 – Oct 4: over 40 hours on the clock, so overtime pay applies. Check the punches on Workforce → Timesheets (lunch breaks weren''t on the clock before Oct 5).', CHAR(10), CHAR(10), 'From the time clock.')
+      WHERE sourceType = 'attendance' AND sourceRef LIKE '%:2026-09-28:ot' AND title LIKE 'Heading into overtime:%'`)) as unknown as [{ affectedRows: number }];
+    return { fixed: r.affectedRows };
+  }
+  // Time clock reminders, manager alerts and the Monday shout-out (every 5 minutes, IAM-only).
+  if (event && event.__job === "workforce-alerts" && !event.requestContext && !event.version) {
+    const { runWorkforceAlerts } = await import("../workforceAlerts");
+    const r = await runWorkforceAlerts();
+    if (r.reminders || r.alerts || r.shoutout) console.log("[workforce-alerts]", JSON.stringify(r));
+    return r;
+  }
   // Patient texts: bring in new texts from RingCentral and send after-hours replies (every minute, IAM-only).
   if (event && event.__job === "sms-sync" && !event.requestContext && !event.version) {
     const { syncTexts } = await import("../textsDb");

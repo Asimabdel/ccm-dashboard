@@ -5,6 +5,7 @@ import { isValidDateStr, isValidTimeStr, localDateStr, addDays } from "../../sha
 import * as wf from "../workforceDb";
 import { officeClinicIds, officeStaff } from "../workspaceDb";
 import * as sched from "../scheduleRequestsDb";
+import * as punchFix from "../punchRequestsDb";
 
 // Managing the workforce (schedules, approvals, time clock, scorecards) is for admins (everyone)
 // and office managers (the staff whose home clinic is their office, at that clinic). Job-role
@@ -55,7 +56,7 @@ const weekPattern = z.object({ mon: dayPlan, tue: dayPlan, wed: dayPlan, thu: da
 /** Schedule-request errors are the user's to fix. */
 async function schedRun<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } catch (e) {
-    if (e instanceof sched.ScheduleError) throw new TRPCError({ code: "BAD_REQUEST", message: e.message });
+    if (e instanceof sched.ScheduleError || e instanceof punchFix.PunchRequestError) throw new TRPCError({ code: "BAD_REQUEST", message: e.message });
     throw e;
   }
 }
@@ -308,6 +309,23 @@ export const workforceRouter = router({
     today: protectedProcedure.query(async ({ ctx }) => wf.getMyDay(ctx.user.id)),
     clockIn: protectedProcedure.mutation(async ({ ctx }) => unwrap(await wf.clockIn(ctx.user.id))),
     clockOut: protectedProcedure.mutation(async ({ ctx }) => unwrap(await wf.clockOut(ctx.user.id))),
+    /** Lunch: Start lunch clocks out for a break; End lunch clocks back in (not counted late). */
+    startLunch: protectedProcedure.mutation(async ({ ctx }) => unwrap(await wf.clockOut(ctx.user.id, "lunch"))),
+    endLunch: protectedProcedure.mutation(async ({ ctx }) => unwrap(await wf.clockIn(ctx.user.id))),
+    /** Shift reminder texts to my own cell (I turn them on myself). */
+    reminders: protectedProcedure.query(async ({ ctx }) => wf.getMyReminders(ctx.user.id)),
+    saveReminders: protectedProcedure
+      .input(z.object({ mobilePhone: z.string().max(20).nullable(), textReminders: z.boolean() }))
+      .mutation(async ({ input, ctx }) => unwrap(await wf.saveMyReminders(ctx.user.id, input))),
+    /** On time this week / last week. */
+    attendance: protectedProcedure.query(async ({ ctx }) => wf.getMyAttendance(ctx.user.id)),
+    /** Fix my punch: my punches on a day, my requests, ask, cancel. */
+    punchDay: protectedProcedure.input(z.object({ date: dateStr })).query(async ({ input, ctx }) => punchFix.myPunchDay(ctx.user.id, input.date)),
+    punchRequests: protectedProcedure.query(async ({ ctx }) => punchFix.myPunchRequests(ctx.user.id)),
+    requestPunchFix: protectedProcedure
+      .input(z.object({ workDate: dateStr, punchId: z.number().int().positive().nullish(), clockIn: timeStr.nullish(), clockOut: timeStr.nullish(), reason: z.string().max(500) }))
+      .mutation(async ({ input, ctx }) => schedRun(() => punchFix.requestPunchFix({ id: ctx.user.id, name: ctx.user.name ?? null, role: ctx.user.role }, input))),
+    cancelPunchRequest: protectedProcedure.input(z.number().int().positive()).mutation(async ({ input, ctx }) => schedRun(async () => { await punchFix.cancelPunchRequest(ctx.user.id, input); return { success: true }; })),
     toggleDuty: protectedProcedure
       .input(z.object({ dutyId: z.number(), done: z.boolean() }))
       .mutation(async ({ input, ctx }) => unwrap(await wf.toggleDuty(ctx.user.id, input.dutyId, input.done))),
@@ -330,6 +348,26 @@ export const workforceRouter = router({
       .input(z.object({ pattern: weekPattern, effectiveFrom: dateStr, note: z.string().max(500).nullish() }))
       .mutation(async ({ input, ctx }) => schedRun(() => sched.submitWeek({ id: ctx.user.id, name: ctx.user.name ?? null, role: ctx.user.role }, input))),
     cancelWeekRequest: protectedProcedure.input(z.number().int().positive()).mutation(async ({ input, ctx }) => schedRun(async () => { await sched.cancelRequest(ctx.user.id, input); return { success: true }; })),
+  }),
+
+  // ---- Fix-my-punch requests (manager side) ----
+  punchRequests: router({
+    get: protectedProcedure.input(z.number().int().positive()).query(async ({ input, ctx }) => {
+      const m = await requireManager(ctx);
+      const r = await punchFix.getPunchRequest(input);
+      if (!r) throw new TRPCError({ code: "NOT_FOUND", message: "Request not found." });
+      needPerson(m, r.userId);
+      return r;
+    }),
+    decide: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), approve: z.boolean(), managerNote: z.string().max(500).nullish() }))
+      .mutation(async ({ input, ctx }) => {
+        const m = await requireManager(ctx);
+        const r = await punchFix.getPunchRequest(input.id);
+        if (!r) throw new TRPCError({ code: "NOT_FOUND", message: "Request not found." });
+        needPerson(m, r.userId);
+        return schedRun(() => punchFix.decidePunchRequest({ ...input, decidedBy: { id: ctx.user.id, name: (ctx.user as { name?: string | null }).name ?? null } }));
+      }),
   }),
 
   // ---- Staff schedule change requests (manager side) ----

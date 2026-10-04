@@ -149,6 +149,21 @@ export async function textingNumbers() {
   return out.sort((a, b) => a.extensionName.localeCompare(b.extensionName));
 }
 
+/**
+ * A shift reminder to a staff member's own cell (they turned reminder texts on themselves). Not kept as a
+ * patient conversation; nothing happens while patient texting is off.
+ */
+export async function sendStaffText(phone: string, text: string): Promise<{ sent: boolean; error?: string }> {
+  const s = await textingSettings();
+  if (!s.enabled || !s.number) return { sent: false, error: "texting is off" };
+  try {
+    await sendRaw(s, phone, text.slice(0, MAX_TEXT_LENGTH));
+    return { sent: true };
+  } catch (e) {
+    return { sent: false, error: (e as Error).message };
+  }
+}
+
 async function sendRaw(s: TextingSettings, to: string, text: string) {
   const { token, ext } = await sender(s);
   return rc<{ id: number | string; messageStatus?: string }>(token, `/restapi/v1.0/account/~/extension/${ext}/sms`, {
@@ -268,6 +283,9 @@ async function pull(s: TextingSettings, from: Date | null) {
   const known = new Map((records.length ? await d.select({ id: textMessages.id, rc: textMessages.rcMessageId, status: textMessages.status }).from(textMessages)
     .where(inArray(textMessages.rcMessageId, records.map((r) => String(r.id)))) : []).map((m) => [m.rc!, m]));
   let book: Map<string, Person[]> | undefined;
+  // Staff cells (shift reminder texts and their replies) never become patient conversations.
+  const { staffMobilePhones } = await import("./workforceDb");
+  const staff = await staffMobilePhones();
   let newest = from ?? since;
   let received = 0;
   const inbound: { threadId: number; at: Date; body: string }[] = [];
@@ -285,7 +303,7 @@ async function pull(s: TextingSettings, from: Date | null) {
     // Only texts on the practice's texting number.
     const ours = dir === "in" ? (r.to ?? []).some((t) => normalizePhone(t.phoneNumber ?? null) === s.number) : normalizePhone(r.from?.phoneNumber ?? null) === s.number;
     const phone = normalizePhone(dir === "in" ? r.from?.phoneNumber ?? null : r.to?.[0]?.phoneNumber ?? null);
-    if (!ours || !phone || phone === s.number) continue;
+    if (!ours || !phone || phone === s.number || staff.has(phone)) continue;
     book ??= await phoneBook();
     const thread = await ensureThread(phone, null, book);
     const body = (r.subject ?? "").slice(0, 4000);

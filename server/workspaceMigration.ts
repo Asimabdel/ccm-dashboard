@@ -1101,6 +1101,36 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     INDEX \`textMessages_status_idx\` (\`status\`, \`at\`),
     CONSTRAINT \`textMessages_threadId_fk\` FOREIGN KEY (\`threadId\`) REFERENCES \`textThreads\`(\`id\`),
     CONSTRAINT \`textMessages_sentByUserId_fk\` FOREIGN KEY (\`sentByUserId\`) REFERENCES \`users\`(\`id\`))` },
+  // Time clock: fix-my-punch requests, and reminders / manager alerts already sent (added 2026-10-04).
+  { label: "punchRequests", sql: `CREATE TABLE IF NOT EXISTS \`punchRequests\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`userId\` int NOT NULL,
+    \`workDate\` varchar(10) NOT NULL,
+    \`punchId\` int NULL,
+    \`clockInAt\` datetime NULL,
+    \`clockOutAt\` datetime NULL,
+    \`reason\` varchar(500) NOT NULL,
+    \`status\` varchar(10) NOT NULL DEFAULT 'pending',
+    \`approverUserId\` int NULL,
+    \`decidedByUserId\` int NULL,
+    \`decidedAt\` datetime NULL,
+    \`managerNote\` varchar(500) NULL,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    INDEX \`punchRequests_user_idx\` (\`userId\`, \`createdAt\`),
+    INDEX \`punchRequests_status_idx\` (\`status\`),
+    CONSTRAINT \`punchRequests_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`),
+    CONSTRAINT \`punchRequests_punchId_fk\` FOREIGN KEY (\`punchId\`) REFERENCES \`timePunches\`(\`id\`),
+    CONSTRAINT \`punchRequests_approverUserId_fk\` FOREIGN KEY (\`approverUserId\`) REFERENCES \`users\`(\`id\`),
+    CONSTRAINT \`punchRequests_decidedByUserId_fk\` FOREIGN KEY (\`decidedByUserId\`) REFERENCES \`users\`(\`id\`))` },
+  { label: "workforceAlerts", sql: `CREATE TABLE IF NOT EXISTS \`workforceAlerts\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`userId\` int NOT NULL,
+    \`date\` varchar(10) NOT NULL,
+    \`ref\` varchar(40) NOT NULL,
+    \`taskId\` int NULL,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    UNIQUE KEY \`workforceAlerts_one_unique\` (\`userId\`, \`date\`, \`ref\`),
+    CONSTRAINT \`workforceAlerts_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`))` },
 ];
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
@@ -1238,6 +1268,10 @@ const INTAKE_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: "chatMessages", column: "pinnedByUserId", ddl: "`pinnedByUserId` int NULL AFTER `pinnedAt`" },
   { table: "chatMessages", column: "requiresAck", ddl: "`requiresAck` boolean NOT NULL DEFAULT false AFTER `pinnedByUserId`" },
   { table: "chatConversations", column: "postingRestricted", ddl: "`postingRestricted` boolean NOT NULL DEFAULT false AFTER `lastMessageAt`" },
+  // Added 2026-10-04: time clock — lunch breaks, and staff's own cell for reminder texts.
+  { table: "timePunches", column: "outReason", ddl: "`outReason` varchar(10) NULL AFTER `minutesLate`" },
+  { table: "staffProfiles", column: "mobilePhone", ddl: "`mobilePhone` varchar(10) NULL AFTER `hireDate`" },
+  { table: "staffProfiles", column: "textReminders", ddl: "`textReminders` boolean NOT NULL DEFAULT false AFTER `mobilePhone`" },
 ];
 async function upgradeIntake(db: Db): Promise<string[]> {
   const applied: string[] = [];

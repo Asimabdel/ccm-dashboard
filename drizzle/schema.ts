@@ -618,6 +618,9 @@ export const staffProfiles = mysqlTable("staffProfiles", {
   clockStartDate: varchar("clockStartDate", { length: 10 }),
   hoursPerWeek: int("hoursPerWeek").default(40),
   hireDate: varchar("hireDate", { length: 10 }),
+  /** Their own cell (10 digits), for shift reminder texts — only if they turned textReminders on themselves. */
+  mobilePhone: varchar("mobilePhone", { length: 10 }),
+  textReminders: boolean("textReminders").default(false).notNull(),
   active: boolean("active").default(true).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -680,6 +683,8 @@ export const timePunches = mysqlTable("timePunches", {
   clockOutAt: datetime("clockOutAt"),
   // Minutes past the scheduled start at clock-in (0 if on time / unscheduled).
   minutesLate: int("minutesLate").default(0).notNull(),
+  /** Why the punch ended: "lunch" (Start lunch) or null (clocked out). */
+  outReason: varchar("outReason", { length: 10 }),
   note: text("note"),
   // Set when a manager corrected this punch (missed clock-out, etc.).
   editedByUserId: int("editedByUserId").references(() => users.id),
@@ -2114,4 +2119,43 @@ export const textMessages = mysqlTable("textMessages", {
 }, (t) => ({
   threadIdx: index("textMessages_thread_idx").on(t.threadId, t.id),
   statusIdx: index("textMessages_status_idx").on(t.status, t.at),
+}));
+
+/**
+ * "Fix my punch" (2026-10-04): an employee asks to correct a punch (a forgotten clock-out, a wrong time,
+ * or a day they forgot to clock in at all); their office manager (else the time-off approver, else the
+ * admins) approves it on a task, and the punch is changed then.
+ */
+export const punchRequests = mysqlTable("punchRequests", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").references(() => users.id).notNull(),
+  workDate: varchar("workDate", { length: 10 }).notNull(),
+  /** The punch to change; null = add one they forgot entirely. */
+  punchId: int("punchId").references(() => timePunches.id),
+  clockInAt: datetime("clockInAt"),
+  clockOutAt: datetime("clockOutAt"),
+  reason: varchar("reason", { length: 500 }).notNull(),
+  /** pending | approved | denied | cancelled */
+  status: varchar("status", { length: 10 }).default("pending").notNull(),
+  approverUserId: int("approverUserId").references(() => users.id),
+  decidedByUserId: int("decidedByUserId").references(() => users.id),
+  decidedAt: datetime("decidedAt"),
+  managerNote: varchar("managerNote", { length: 500 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  userIdx: index("punchRequests_user_idx").on(t.userId, t.createdAt),
+  statusIdx: index("punchRequests_status_idx").on(t.status),
+}));
+
+/** Reminders and manager alerts already sent (so each goes once): one row per person, day and kind. */
+export const workforceAlerts = mysqlTable("workforceAlerts", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").references(() => users.id).notNull(),
+  date: varchar("date", { length: 10 }).notNull(),
+  /** e.g. "in:123" (clock-in reminder for shift 123), "late:123", "nolunch", "ot" … */
+  ref: varchar("ref", { length: 40 }).notNull(),
+  taskId: int("taskId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  oneIdx: uniqueIndex("workforceAlerts_one_unique").on(t.userId, t.date, t.ref),
 }));

@@ -537,12 +537,59 @@ export async function clockIn(userId: number): Promise<{ id: number; minutesLate
   return { id: res?.[0]?.insertId as number, minutesLate };
 }
 
-export async function clockOut(userId: number): Promise<{ success: true } | { error: string }> {
+/** Clock out, or start lunch (the punch ends as "lunch"; End lunch clocks back in and isn't counted late). */
+export async function clockOut(userId: number, reason: "lunch" | null = null): Promise<{ success: true } | { error: string }> {
   const db = await requireDb();
   const open = await getOpenPunch(userId);
   if (!open) return { error: "You're not clocked in." };
-  await db.update(timePunches).set({ clockOutAt: new Date() }).where(eq(timePunches.id, open.id));
+  await db.update(timePunches).set({ clockOutAt: new Date(), outReason: reason }).where(eq(timePunches.id, open.id));
   return { success: true };
+}
+
+/** My shift reminder texts: my own cell and whether I want them (staff turn this on themselves). */
+export async function getMyReminders(userId: number) {
+  const db = await requireDb();
+  const [p] = await db.select({ mobilePhone: staffProfiles.mobilePhone, textReminders: staffProfiles.textReminders, usesTimeClock: staffProfiles.usesTimeClock }).from(staffProfiles).where(eq(staffProfiles.userId, userId)).limit(1);
+  return { mobilePhone: p?.mobilePhone ?? null, textReminders: !!p?.textReminders, usesTimeClock: !!p?.usesTimeClock, hasProfile: !!p };
+}
+
+export async function saveMyReminders(userId: number, input: { mobilePhone: string | null; textReminders: boolean }): Promise<{ success: true } | { error: string }> {
+  const db = await requireDb();
+  const digits = (input.mobilePhone ?? "").replace(/\D/g, "");
+  const phone = digits.length >= 10 ? digits.slice(-10) : null;
+  if (input.textReminders && !phone) return { error: "Enter your cell number (10 digits) to get reminder texts." };
+  const [p] = await db.select({ id: staffProfiles.id }).from(staffProfiles).where(eq(staffProfiles.userId, userId)).limit(1);
+  if (!p) return { error: "Your workforce profile isn't set up yet. Ask your manager." };
+  await db.update(staffProfiles).set({ mobilePhone: phone, textReminders: input.textReminders && !!phone }).where(eq(staffProfiles.id, p.id));
+  return { success: true };
+}
+
+/** Everyone's cell numbers on file (so reminder texts never show up in the patient texts inbox). */
+export async function staffMobilePhones(): Promise<Set<string>> {
+  const db = await requireDb();
+  return new Set((await db.select({ phone: staffProfiles.mobilePhone }).from(staffProfiles).where(isNotNull(staffProfiles.mobilePhone))).map((r) => r.phone!).filter(Boolean));
+}
+
+/** On time this week and last week (shifts whose start has passed; called-out shifts don't count). */
+export async function getMyAttendance(userId: number) {
+  const db = await requireDb();
+  const today = localDateStr();
+  const nowMin = localMinutes();
+  const thisWeek = weekStart(today), lastWeek = addDays(thisWeek, -7);
+  const [profile] = await db.select().from(staffProfiles).where(eq(staffProfiles.userId, userId)).limit(1);
+  if (!profile?.usesTimeClock) return null;
+  const myShifts = await db.select().from(shifts).where(and(eq(shifts.userId, userId), gte(shifts.date, lastWeek), lte(shifts.date, today), eq(shifts.status, "scheduled")));
+  const punches = await db.select().from(timePunches).where(and(eq(timePunches.userId, userId), gte(timePunches.workDate, lastWeek), lte(timePunches.workDate, today)));
+  const week = (from: string, to: string) => {
+    const due = myShifts.filter((s) => s.date >= from && s.date <= to && attendanceTracked(profile, s.date) && (s.date < today || timeToMinutes(s.startTime) + LATE_GRACE_MINUTES < nowMin));
+    let onTime = 0;
+    for (const s of due) {
+      const first = punches.filter((p) => p.shiftId === s.id).sort((a, b) => +a.clockInAt - +b.clockInAt)[0];
+      if (first && first.minutesLate === 0) onTime++;
+    }
+    return { onTime, due: due.length };
+  };
+  return { thisWeek: week(thisWeek, today), lastWeek: week(lastWeek, addDays(thisWeek, -1)) };
 }
 
 export async function listPunches(from: string, to: string, userId?: number) {
@@ -904,7 +951,7 @@ export async function getTimesheet(from: string, to: string) {
           onTheClock: mine.some((r) => !r.p.clockOutAt && r.p.workDate === today),
           punches: mine.map(({ p, clinicName }) => ({
             id: p.id, workDate: p.workDate, clockInAt: p.clockInAt, clockOutAt: p.clockOutAt, minutes: punchMinutes(p),
-            minutesLate: p.minutesLate, note: p.note, edited: !!p.editedByUserId, clinicName,
+            minutesLate: p.minutesLate, note: p.note, edited: !!p.editedByUserId, clinicName, lunch: p.outReason === "lunch",
             missingClockOut: !p.clockOutAt && p.workDate < today,
           })),
         };

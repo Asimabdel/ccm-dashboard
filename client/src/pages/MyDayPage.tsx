@@ -4,8 +4,10 @@ import { trpc } from "@/lib/trpc";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "wouter";
-import { Loader2, LogIn, LogOut, CheckCircle2, Circle, MapPin, Clock, ClipboardCheck, BookOpen, AlertTriangle, UsersRound } from "lucide-react";
-import { fmtDay, fmtDuration, fmtTime, type DutyFrequency } from "@shared/workforce";
+import { Loader2, LogIn, LogOut, CheckCircle2, Circle, MapPin, Clock, ClipboardCheck, BookOpen, AlertTriangle, UsersRound, Coffee, Wrench } from "lucide-react";
+import { fmtDay, fmtDuration, fmtTime, localMinutes, timeToMinutes, type DutyFrequency } from "@shared/workforce";
+import { dayWork } from "@shared/attendance";
+import { FixPunchDialog } from "@/components/workforce/FixPunchDialog";
 
 const FREQ_LABEL: Record<DutyFrequency, string> = {
   daily: "Today", weekly: "This week", monthly: "This month", as_needed: "As needed",
@@ -31,6 +33,9 @@ export default function MyDayPage() {
     onSuccess: () => { refresh(); toast.success("Clocked out"); },
     onError: (e) => toast.error(e.message),
   });
+  const startLunch = trpc.workforce.me.startLunch.useMutation({ onSuccess: () => { refresh(); toast.success("Enjoy your lunch. Tap End lunch when you're back."); }, onError: (e) => toast.error(e.message) });
+  const endLunch = trpc.workforce.me.endLunch.useMutation({ onSuccess: () => { refresh(); toast.success("Welcome back. You're on the clock."); }, onError: (e) => toast.error(e.message) });
+  const [fixing, setFixing] = useState<{ date: string; punchId?: number } | null>(null);
   const toggle = trpc.workforce.me.toggleDuty.useMutation({
     // Optimistic check-off so the list feels instant on a busy clinic floor.
     onMutate: async ({ dutyId, done }) => {
@@ -64,7 +69,10 @@ export default function MyDayPage() {
   const dailyDone = daily.filter((x) => x.done).length;
   const pct = daily.length ? Math.round((dailyDone / daily.length) * 100) : 0;
   const reference = (d?.duties || []).filter((x) => x.frequency === "as_needed");
-  const busy = clockIn.isPending || clockOut.isPending;
+  const busy = clockIn.isPending || clockOut.isPending || startLunch.isPending || endLunch.isPending;
+  // On lunch: the last punch ended with Start lunch, and today's shift isn't over.
+  const lastEnd = Math.max(0, ...(d?.shifts || []).filter((s) => s.status === "scheduled").map((s) => timeToMinutes(s.endTime)));
+  const onLunch = !open && !!dayWork(d?.punches || []).onLunchSince && localMinutes() < lastEnd;
 
   return (
     <CCMDashboardLayout title="My Day">
@@ -87,10 +95,15 @@ export default function MyDayPage() {
           {(d?.missedClockOuts || []).length > 0 && (
             <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
               <p className="flex items-center gap-1.5 font-semibold"><AlertTriangle size={14} /> You didn't clock out</p>
-              <ul className="mt-1 text-xs space-y-0.5">
-                {d!.missedClockOuts.map((m) => <li key={m.id}>{fmtDay(m.workDate)} — clocked in at {clockTime(m.clockInAt)}</li>)}
+              <ul className="mt-1 text-xs space-y-1">
+                {d!.missedClockOuts.map((m) => (
+                  <li key={m.id} className="flex items-center justify-between gap-2">
+                    <span>{fmtDay(m.workDate)} — clocked in at {clockTime(m.clockInAt)}</span>
+                    <button onClick={() => setFixing({ date: m.workDate, punchId: m.id })} className="inline-flex items-center gap-1 font-semibold underline"><Wrench size={11} /> Fix it</button>
+                  </li>
+                ))}
               </ul>
-              <p className="mt-1 text-xs">Tell your manager what time you left so they can fix your hours.</p>
+              <p className="mt-1 text-xs">Send the time you left; your manager approves it.</p>
             </div>
           )}
 
@@ -101,16 +114,23 @@ export default function MyDayPage() {
             </div>
           ) : (
           <>
-          <button
-            onClick={() => (open ? clockOut.mutate() : clockIn.mutate())}
-            disabled={busy}
-            className={`mt-5 w-full inline-flex items-center justify-center gap-2 px-5 py-4 rounded-2xl text-white text-lg font-bold active:scale-[0.98] transition disabled:opacity-60 ${open ? "bg-slate-900 hover:bg-slate-800" : "bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700"}`}
-          >
-            {busy ? <Loader2 size={20} className="animate-spin" /> : open ? <LogOut size={20} /> : <LogIn size={20} />}
-            {open ? "Clock out" : "Clock in"}
-          </button>
+          {open ? (
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <button onClick={() => startLunch.mutate()} disabled={busy} className="inline-flex items-center justify-center gap-2 px-4 py-4 rounded-2xl text-white text-lg font-bold bg-amber-500 hover:bg-amber-600 active:scale-[0.98] transition disabled:opacity-60"><Coffee size={20} /> Start lunch</button>
+              <button onClick={() => clockOut.mutate()} disabled={busy} className="inline-flex items-center justify-center gap-2 px-4 py-4 rounded-2xl text-white text-lg font-bold bg-slate-900 hover:bg-slate-800 active:scale-[0.98] transition disabled:opacity-60">{busy ? <Loader2 size={20} className="animate-spin" /> : <LogOut size={20} />} Clock out</button>
+            </div>
+          ) : (
+            <button
+              onClick={() => (onLunch ? endLunch.mutate() : clockIn.mutate())}
+              disabled={busy}
+              className="mt-5 w-full inline-flex items-center justify-center gap-2 px-5 py-4 rounded-2xl text-white text-lg font-bold active:scale-[0.98] transition disabled:opacity-60 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700"
+            >
+              {busy ? <Loader2 size={20} className="animate-spin" /> : <LogIn size={20} />}
+              {onLunch ? "End lunch" : "Clock in"}
+            </button>
+          )}
           <p className="mt-3 text-center text-sm text-slate-500">
-            {open ? <>On the clock since <b className="text-slate-800">{clockTime(open.clockInAt)}</b></> : workedMin > 0 ? "You're clocked out." : "Not clocked in yet."}
+            {open ? <>On the clock since <b className="text-slate-800">{clockTime(open.clockInAt)}</b></> : onLunch ? "On lunch." : workedMin > 0 ? "You're clocked out." : "Not clocked in yet."}
             {workedMin > 0 && <> · <b className="text-slate-800">{fmtDuration(workedMin)}</b> today</>}
           </p>
           </>
@@ -119,13 +139,17 @@ export default function MyDayPage() {
             <ul className="mt-3 pt-3 border-t border-slate-100 space-y-1 text-xs text-slate-500">
               {d!.punches.map((p) => (
                 <li key={p.id} className="flex justify-between">
-                  <span>{clockTime(p.clockInAt)} → {p.clockOutAt ? clockTime(p.clockOutAt) : "now"}</span>
+                  <span>{clockTime(p.clockInAt)} → {p.clockOutAt ? clockTime(p.clockOutAt) : "now"}{p.outReason === "lunch" ? " · lunch" : ""}</span>
                   {p.minutesLate > 0 && <span className="text-amber-600 font-medium">{p.minutesLate} min late</span>}
                 </li>
               ))}
             </ul>
           )}
-          <Link href="/team-schedule" className="mt-4 inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-900"><UsersRound size={13} /> See who's working today →</Link>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+            <Link href="/team-schedule" className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-900"><UsersRound size={13} /> See who's working today →</Link>
+            {d?.clockEnabled && <button onClick={() => setFixing({ date: d.today })} className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-900"><Wrench size={13} /> Fix a punch</button>}
+          </div>
+          <FixPunchDialog open={!!fixing} onClose={() => setFixing(null)} date={fixing?.date} punchId={fixing?.punchId} />
         </div>
 
         {/* ---- Checklist ---- */}
