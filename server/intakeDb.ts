@@ -510,6 +510,21 @@ function answersOf(sig: { consentKind: string | null; decision: string; choices:
   return out;
 }
 
+/** The newest Yes / No a person gave on any form for one kind of consent (e.g. texting), or null if never asked. */
+export async function latestConsentAnswer(subjectKey: string, kind: ConsentKind): Promise<{ answer: ChoiceAnswer; at: Date } | null> {
+  const d = await db();
+  const pid = /^p:(\d+)$/.exec(subjectKey)?.[1];
+  const who = pid ? or(eq(intakePackets.subjectKey, subjectKey), eq(intakePackets.patientId, Number(pid))) : eq(intakePackets.subjectKey, subjectKey);
+  const sigs = await d.select({ kind: intakeSignatures.consentKind, decision: intakeSignatures.decision, choices: intakeSignatures.choices, at: intakeSignatures.signedAt })
+    .from(intakeSignatures).innerJoin(intakePackets, eq(intakePackets.id, intakeSignatures.packetId))
+    .where(and(who, sql`(${intakeSignatures.consentKind} IS NOT NULL OR ${intakeSignatures.choices} IS NOT NULL)`)).orderBy(desc(intakeSignatures.signedAt)).limit(50);
+  for (const s of sigs) {
+    const a = answersOf({ consentKind: s.kind, decision: s.decision, choices: s.choices }).find((x) => x.kind === kind);
+    if (a) return { answer: a.answer, at: s.at };
+  }
+  return null;
+}
+
 /**
  * Everything the patient agreed to or declined in this packet → their consent status, and (for Yes) enrollment
  * when they qualify. Only for packets that belong to someone: an unverified website form waits for staff to link it.

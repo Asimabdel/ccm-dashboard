@@ -2061,3 +2061,57 @@ export const chatReactions = mysqlTable("chatReactions", {
 }, (t) => ({
   oneIdx: uniqueIndex("chatReactions_one_unique").on(t.messageId, t.userId, t.emoji),
 }));
+
+/**
+ * Patient texts (2026-10-04): one conversation per patient phone number on the practice's main texting
+ * number. It goes to the matched patient's clinic; a number shared by more than one patient waits for
+ * staff to pick who it is (candidates). STOP / START from the patient is remembered (optedOutAt).
+ */
+export const textThreads = mysqlTable("textThreads", {
+  id: int("id").autoincrement().primaryKey(),
+  /** The patient's number, 10 digits. */
+  phone: varchar("phone", { length: 10 }).notNull().unique(),
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  patientId: int("patientId").references(() => patients.id),
+  patientName: varchar("patientName", { length: 255 }),
+  /** Whose inbox it's in (the patient's clinic). Null = not matched yet: every texting person sees it. */
+  clinicId: int("clinicId").references(() => clinics.id),
+  /** More than one patient has this number: who it might be ({ key, name }[]). */
+  candidates: json("candidates").$type<{ key: string; name: string }[]>(),
+  assignedUserId: int("assignedUserId").references(() => users.id),
+  /** open | closed (a new text from the patient reopens it). */
+  status: varchar("status", { length: 10 }).default("open").notNull(),
+  lastMessageAt: datetime("lastMessageAt"),
+  lastInboundAt: datetime("lastInboundAt"),
+  /** When someone at the practice last read it (shared: the inbox is a team inbox). */
+  readAt: datetime("readAt"),
+  optedOutAt: datetime("optedOutAt"),
+  lastAutoReplyAt: datetime("lastAutoReplyAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  clinicIdx: index("textThreads_clinic_idx").on(t.clinicId, t.status, t.lastMessageAt),
+  subjectIdx: index("textThreads_subject_idx").on(t.subjectKey),
+}));
+
+export const textMessages = mysqlTable("textMessages", {
+  id: int("id").autoincrement().primaryKey(),
+  threadId: int("threadId").references(() => textThreads.id).notNull(),
+  /** in (from the patient) | out (to the patient) | note (staff only, never sent). */
+  direction: varchar("direction", { length: 4 }).notNull(),
+  body: text("body").notNull(),
+  /** sending | sent | delivered | failed | received (shared/texts.ts). */
+  status: varchar("status", { length: 10 }).notNull(),
+  rcMessageId: varchar("rcMessageId", { length: 40 }).unique(),
+  /** Who sent it from MyPCP (null: the automatic reply, or sent from the RingCentral app). */
+  sentByUserId: int("sentByUserId").references(() => users.id),
+  autoReply: boolean("autoReply").default(false).notNull(),
+  /** A picture message (MMS): the picture stays in RingCentral. */
+  hasMedia: boolean("hasMedia").default(false).notNull(),
+  error: varchar("error", { length: 255 }),
+  /** When it was sent / received. */
+  at: datetime("at").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  threadIdx: index("textMessages_thread_idx").on(t.threadId, t.id),
+  statusIdx: index("textMessages_status_idx").on(t.status, t.at),
+}));

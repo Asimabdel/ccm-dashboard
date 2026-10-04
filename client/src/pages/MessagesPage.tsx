@@ -16,6 +16,7 @@ import { popupsSupported } from "@/components/messages/useUnreadMessages";
 import { PresenceDot, PresenceLabel, usePresence } from "@/components/messages/presence";
 import { MessageFiles, PendingFiles, useChatUploads } from "@/components/messages/attachments";
 import { AckList, MessageSearchResults } from "@/components/messages/MessageSearch";
+import { TextsInbox } from "@/components/texts/TextsInbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { CLINIC_TZ } from "@shared/workforce";
@@ -66,8 +67,30 @@ export default function MessagesPage() {
   return <Messages />;
 }
 
+/** Team messages | Patient texts (for people who handle the practice's texts). */
+function InboxTabs({ active, onChange }: { active: "team" | "texts"; onChange: (t: "team" | "texts") => void }) {
+  const team = trpc.workspace.chat.unread.useQuery(undefined, { staleTime: 10_000 });
+  const texts = trpc.workspace.texts.unread.useQuery(undefined, { refetchInterval: 20_000, staleTime: 10_000 });
+  const tab = (t: "team" | "texts", label: string, n: number) => (
+    <button onClick={() => onChange(t)} aria-pressed={active === t}
+      className={cn("flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-semibold", active === t ? "bg-white text-slate-900 shadow-sm dark:bg-slate-600 dark:text-white" : "text-slate-500 hover:text-slate-800 dark:text-slate-400")}>
+      {label}
+      {n > 0 && <span className="rounded-full bg-brand px-1.5 text-[10px] font-bold tabular-nums text-white">{n > 99 ? "99+" : n}</span>}
+    </button>
+  );
+  return (
+    <div className="flex gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-700/60" role="group" aria-label="Inbox">
+      {tab("team", "Team", team.data?.total ?? 0)}
+      {tab("texts", "Patient texts", texts.data?.total ?? 0)}
+    </div>
+  );
+}
+
 function Messages() {
   const [params, setParams] = useUrlParams();
+  const { caps } = useWorkspace();
+  const tab: "team" | "texts" = caps?.texts && params.get("tab") === "texts" ? "texts" : "team";
+  const tabs = caps?.texts ? <InboxTabs active={tab} onChange={(t) => setParams({ tab: t === "texts" ? "texts" : null, c: null, m: null, t: null })} /> : null;
   const selected = Number(params.get("c")) || null;
   const focus = Number(params.get("m")) || null;
   const [filter, setFilter] = useState("");
@@ -82,12 +105,23 @@ function Messages() {
   const current = (list.data ?? []).find((c) => c.id === selected) ?? null;
   const searching = filter.trim().length >= 3;
 
+  if (tab === "texts") {
+    return (
+      <CCMDashboardLayout title="Messages" pageTitle={false}>
+        <div className={cn(cardCls, "flex overflow-hidden dark:bg-slate-800 h-[calc(100dvh-5.5rem)] md:h-[calc(100dvh-6.5rem)]")}>
+          <TextsInbox threadId={Number(params.get("t")) || null} onOpen={(t) => setParams({ t })} tabs={tabs} />
+        </div>
+      </CCMDashboardLayout>
+    );
+  }
+
   return (
     <CCMDashboardLayout title="Messages" pageTitle={false}>
       <div className={cn(cardCls, "flex overflow-hidden dark:bg-slate-800 h-[calc(100dvh-5.5rem)] md:h-[calc(100dvh-6.5rem)]")}>
         {/* Conversation list (on phones: hidden while a conversation is open) */}
         <aside className={cn("flex w-full flex-col border-r border-slate-200 dark:border-slate-700 md:w-80 md:shrink-0", selected && "hidden md:flex")}>
-          <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+          <div className="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+          <div className="flex items-center justify-between gap-2">
             <h1 className="text-lg font-bold tracking-tight text-slate-900 dark:text-slate-50">Messages</h1>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -99,6 +133,8 @@ function Messages() {
                 <DropdownMenuItem onClick={() => setNewMode("patient")}><HeartPulse size={14} className="mr-2" /> About a patient</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+          </div>
+          {tabs && <div className="mt-2">{tabs}</div>}
           </div>
           <div className="border-b border-slate-200 p-3 dark:border-slate-700">
             <div className="relative">

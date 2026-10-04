@@ -61,6 +61,8 @@ export const WORKSPACE_CAPS = {
   sendFax: ["admin", "office_manager", "staff", "provider", "front_desk", "medical_assistant"],
   /** Internal messages: direct messages, groups, clinic / team channels, conversations about a patient. */
   messages: ["admin", "office_manager", "staff", "provider", "billing", "front_desk", "medical_assistant"],
+  /** Patient texts (the practice's main number): each person sees their clinic's conversations (2026-10-04). */
+  texts: ["admin", "office_manager", "staff", "front_desk", "medical_assistant"],
   /** Edit the condition library (handouts, talking points, care-plan templates); approving is for providers. */
   libraryEdit: ["admin", "provider"],
 } as const satisfies Record<string, readonly WorkspaceRole[]>;

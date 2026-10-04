@@ -25,6 +25,7 @@ import { PatientPaymentsPanel } from "@/components/payments/PatientPaymentsPanel
 import { BookOpen, ClipboardCheck, FolderOpen, MessagesSquare, Wallet } from "lucide-react";
 import { PatientMessagesPanel } from "@/components/messages/PatientMessagesPanel";
 import { SendFaxDialog } from "@/components/fax/SendFaxDialog";
+import { TextPatientButton } from "@/components/texts/TextPatientButton";
 import { InjectionDialog } from "@/components/injections/InjectionDialog";
 import { Syringe } from "lucide-react";
 import { Printer } from "lucide-react";
@@ -137,6 +138,7 @@ function Patient360({ subjectKey, id }: { subjectKey: string; id: number | null 
               </div>
               <div className="flex flex-wrap gap-2">
                 <Btn onClick={() => setTaskOpen(true)}><ListPlus size={15} /> Create task</Btn>
+                {caps?.texts && <TextPatientButton subjectKey={subjectKey} />}
                 {caps?.sendFax && <Btn variant="secondary" onClick={() => setFaxOpen(true)}><Printer size={15} /> Send fax</Btn>}
                 {caps?.injections && <Btn variant="secondary" onClick={() => setInjectionOpen(true)}><Syringe size={15} /> Injection</Btn>}
               </div>

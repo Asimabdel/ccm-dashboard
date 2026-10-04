@@ -48,7 +48,7 @@ async function settings(): Promise<FaxSendSettings> {
 
 const tokens = new Map<string, { token: string; exp: number }>();
 
-async function tokenFor(cfg: { clientId: string; clientSecret: string; jwt: string }): Promise<string> {
+export async function tokenFor(cfg: { clientId: string; clientSecret: string; jwt: string }): Promise<string> {
   const k = createHash("sha256").update(`${cfg.clientId}:${cfg.jwt}`).digest("hex");
   const hit = tokens.get(k);
   if (hit && hit.exp > Date.now() + 60_000) return hit.token;
@@ -63,7 +63,7 @@ async function tokenFor(cfg: { clientId: string; clientSecret: string; jwt: stri
   return body.access_token;
 }
 
-async function serverCredentials() {
+export async function serverCredentials() {
   const creds = await loadCredentials();
   if (!creds) throw new WorkspaceError("RingCentral isn't connected yet. An admin adds the RingCentral server app in Admin → Integrations.");
   return creds;

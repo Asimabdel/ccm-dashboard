@@ -9,6 +9,7 @@ import { CallLogSyncCard } from "@/components/phone/CallLogSyncCard";
 import { GmailCard } from "@/components/email/GmailCard";
 import { FaxCard } from "@/components/email/FaxCard";
 import { FaxSendCard } from "@/components/fax/FaxSendCard";
+import { TextingCard } from "@/components/texts/TextingCard";
 import { PracticeFusionCard } from "@/components/pf/PracticeFusionCard";
 import { AvailityCard } from "@/components/insurance/AvailityCard";
 import { SquareCard } from "@/components/payments/SquareCard";
@@ -95,6 +96,7 @@ export default function IntegrationsPage() {
           <GmailCard />
           <FaxCard />
           <FaxSendCard />
+          <TextingCard />
           <PracticeFusionCard />
           <AvailityCard />
           <SquareCard />

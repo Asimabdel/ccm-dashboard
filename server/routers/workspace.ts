@@ -38,6 +38,8 @@ import * as rosterMatch from "../rosterMatch";
 import * as rosterMerge from "../rosterMerge";
 import * as carePlans from "../carePlansDb";
 import * as chat from "../chatDb";
+import * as texts from "../textsDb";
+import { TEXT_FILTERS, type TextFilter } from "../../shared/texts";
 import * as outreach from "../outreachDb";
 import * as faxOut from "../faxSendDb";
 import * as daily from "../dailyReportDb";
@@ -1582,6 +1584,82 @@ export const workspaceRouter = router({
     printed: protectedProcedure.input(z.object({ subjectKey: patientKey, keys: z.array(z.string().max(40)).min(1).max(30), language: z.enum(LIBRARY_LANGS) })).mutation(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "education");
       return run(() => carePlans.recordEducation(actor, { ...input, channel: "print" }));
+    }),
+  }),
+
+  /** Patient texts on the practice's main number: each person sees their clinic's conversations (and unmatched ones). */
+  texts: router({
+    status: protectedProcedure.query(async ({ ctx }) => {
+      if (!can(ctx.user.role, "texts")) return { enabled: false, number: null, canUse: false };
+      return { ...(await texts.textingStatus()), canUse: true };
+    }),
+    /** The inbox (brings in new texts first, at most every 15 seconds). */
+    list: protectedProcedure.input(z.object({ filter: z.enum(Object.keys(TEXT_FILTERS) as [TextFilter, ...TextFilter[]]), q: z.string().max(80).nullish() })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "texts");
+      await texts.syncTexts().catch(() => null);
+      return texts.listThreads(actor, input);
+    }),
+    unread: protectedProcedure.query(async ({ ctx }) => {
+      if (!can(ctx.user.role, "texts")) return { total: 0, newest: null };
+      return texts.unreadTexts(await actorFor(ctx, "texts"));
+    }),
+    get: protectedProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "texts");
+      return run(() => texts.threadDetail(actor, input.id));
+    }),
+    send: protectedProcedure.input(z.object({ threadId: z.number().int().positive().nullish(), subjectKey: patientKey.nullish(), body: z.string().max(1000) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "texts");
+      return run(() => texts.sendText(actor, input));
+    }),
+    note: protectedProcedure.input(z.object({ threadId: z.number().int().positive(), body: z.string().max(2000) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "texts");
+      return run(() => texts.addNote(actor, input.threadId, input.body));
+    }),
+    assign: protectedProcedure.input(z.object({ threadId: z.number().int().positive(), userId: z.number().int().positive().nullable() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "texts");
+      return run(() => texts.assignThread(actor, input.threadId, input.userId));
+    }),
+    setStatus: protectedProcedure.input(z.object({ threadId: z.number().int().positive(), status: z.enum(["open", "closed"]) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "texts");
+      return run(() => texts.setThreadStatus(actor, input.threadId, input.status));
+    }),
+    match: protectedProcedure.input(z.object({ threadId: z.number().int().positive(), subjectKey: patientKey })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "texts");
+      return run(() => texts.matchThread(actor, input.threadId, input.subjectKey));
+    }),
+    /** Open (or start) the conversation with a patient (Patient 360 / New text). */
+    openForPatient: protectedProcedure.input(z.object({ subjectKey: patientKey })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "texts");
+      return run(() => texts.openForPatient(actor, input.subjectKey));
+    }),
+    forPatient: protectedProcedure.input(z.object({ subjectKey: patientKey })).query(async ({ ctx, input }) => {
+      if (!can(ctx.user.role, "texts")) return null;
+      return texts.threadForSubject(await actorFor(ctx, "texts"), input.subjectKey);
+    }),
+    // Admin → Integrations
+    setup: protectedProcedure.query(async ({ ctx }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can set up patient texting." });
+      return texts.textingSetup();
+    }),
+    numbers: protectedProcedure.query(async ({ ctx }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can set up patient texting." });
+      return run(() => texts.textingNumbers());
+    }),
+    save: protectedProcedure.input(z.object({
+      enabled: z.boolean(), extensionId: z.string().max(40).nullish(), extensionName: z.string().max(120).nullish(), number: z.string().max(20).nullish(),
+      jwt: z.string().max(5000).nullish(), clearKey: z.boolean().optional(),
+      hours: z.object({ days: z.array(z.number().int().min(0).max(6)).max(7), start: z.string().max(5), end: z.string().max(5) }),
+      autoReply: z.object({ enabled: z.boolean(), en: z.string().max(1000), es: z.string().max(1000) }),
+    })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "texts");
+      return run(() => texts.saveTextingSettings(actor, input));
+    }),
+    syncNow: protectedProcedure.mutation(async ({ ctx }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can do this." });
+      return run(async () => {
+        const r = await texts.syncTexts({ force: true });
+        return { received: "received" in r ? r.received : 0, note: "skipped" in r ? r.skipped : null };
+      });
     }),
   }),
 

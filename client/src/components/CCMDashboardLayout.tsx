@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { MESSAGES, NAV_GROUPS, PROGRAM_APPROVALS, ROLES, ROLE_HOME, type Role } from "@/lib/nav";
 import { useUnreadMessages } from "@/components/messages/useUnreadMessages";
+import { useUnreadTexts } from "@/components/texts/useUnreadTexts";
 import { useTheme } from "@/contexts/ThemeContext";
 import { CommandPalette } from "@/components/CommandPalette";
 import { useIdleLogout } from "@/hooks/useIdleLogout";
@@ -108,7 +109,8 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
   const { programApprover } = useWorkspace();
   const approvals = trpc.workspace.programs.count.useQuery(undefined, { enabled: !!user && programApprover, refetchInterval: 5 * 60_000 });
   // Internal messages: unread count (top bar + sidebar) and the browser pop-up.
-  const unreadMessages = useUnreadMessages(!!user && can(user.role, "messages"));
+  // The Messages badge: team messages plus unread patient texts (for people who handle texts).
+  const unreadMessages = useUnreadMessages(!!user && can(user.role, "messages")) + useUnreadTexts(!!user && can(user.role, "texts"));
   const markRead = trpc.notifications.markRead.useMutation({
     onSuccess: () => utils.notifications.list.invalidate(),
   });

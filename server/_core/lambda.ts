@@ -154,6 +154,14 @@ export const handler = async (event: any, context: any) => {
     return cleanupRosterConditions({ apply: event.apply === true, deadline: Date.now() + 22_000 });
   }
   // Which exact diagnoses CCM patients have (IAM-only; counts only, no names).
+  // Patient texts: bring in new texts from RingCentral and send after-hours replies (every minute, IAM-only).
+  if (event && event.__job === "sms-sync" && !event.requestContext && !event.version) {
+    const { syncTexts } = await import("../textsDb");
+    const r = await syncTexts({ force: true }).catch((e: Error) => ({ error: e.message }));
+    if ("received" in r && (r.received || r.autoReplies)) console.log("[sms-sync]", JSON.stringify({ received: r.received, autoReplies: r.autoReplies }));
+    if ("error" in r) console.error("[sms-sync] failed:", r.error);
+    return r;
+  }
   // Recent roster imports by provider (IAM-only; counts only, no names).
   if (event && event.__job === "recent-import-report" && !event.requestContext && !event.version) {
     const { recentImportReport } = await import("../importReset");
