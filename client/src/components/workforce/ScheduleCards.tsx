@@ -135,7 +135,7 @@ export function PayPeriodCard() {
         {q.data.slice().reverse().map((p) => (
           <div key={p.start} className="rounded-2xl border border-slate-200 px-4 py-3 dark:border-slate-600">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">{fmtDay(p.start, { month: "short", day: "numeric" })} – {fmtDay(p.end, { month: "short", day: "numeric" })}{p.current ? " (now)" : ""}</p>
+              <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">{fmtDay(p.start, { month: "short", day: "numeric" })} – {fmtDay(p.end, { month: "short", day: "numeric" })}{p.current && !p.ended ? " (now)" : ""}</p>
               <p className="text-sm font-bold tabular-nums text-slate-900 dark:text-slate-50">{fmtDuration(p.totalMinutes)}{p.overtimeMinutes ? <span className="ml-1 text-xs font-semibold text-amber-600">incl. {fmtDuration(p.overtimeMinutes)} overtime</span> : null}</p>
             </div>
             {p.days.length > 0 && <p className="mt-1 text-xs text-slate-500">{p.days.map((x) => `${fmtDay(x.date, { weekday: "short", day: "numeric" })} ${fmtDuration(x.minutes)}`).join(" · ")}</p>}

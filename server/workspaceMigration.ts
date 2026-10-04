@@ -1460,6 +1460,12 @@ export async function runWorkspaceMigration(): Promise<string[]> {
     await db.execute(sql`UPDATE chatMembers SET lastReadMessageId = 0 WHERE lastReadAt IS NOT NULL AND lastReadMessageId IS NULL`);
     applied.push("chatMembers read messages filled in");
   }
+  // Once (2026-10-04, the practice's pay calendar: Oct 5–17, Oct 19–31, …): a start saved before then on the
+  // old Sep 28 cycle moves to Oct 5, unless a period has already been closed for payroll.
+  const [moved] = await db.execute(sql`UPDATE appSettings SET value = JSON_SET(value, '$.anchor', '2026-10-05')
+    WHERE \`key\` = 'pay_periods' AND JSON_UNQUOTE(JSON_EXTRACT(value, '$.anchor')) = '2026-09-28'
+      AND COALESCE(JSON_LENGTH(JSON_EXTRACT(value, '$.locked')), 0) = 0 AND updatedAt < '2026-10-05'`);
+  if ((moved as unknown as { affectedRows?: number }).affectedRows) applied.push("pay periods moved to the Oct 5 cycle");
   applied.push(...(await ensureMetricIndexes(db)));
   const seeded = await seedPlaybooksIfEmpty(db);
   if (seeded) applied.push(seeded);

@@ -59,9 +59,10 @@ export function PayPeriodsPanel() {
         </select>
         {d.locked && <span className="inline-flex items-center gap-1 rounded-full bg-slate-900 px-2.5 py-1 text-xs font-semibold text-white"><Lock size={12} /> Closed for payroll</span>}
         {!d.ended && <span className="text-xs text-slate-500">This period hasn't ended yet.</span>}
+        {admin && d.ended && !d.closable && <span className="text-xs text-slate-500">It can be closed for payroll on Monday.</span>}
         <div className="ml-auto flex flex-wrap gap-2">
           {d.ended && !d.locked && ready.length > 0 && <button onClick={() => void approveAll()} disabled={approve.isPending} className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700"><ThumbsUp size={14} /> Approve {ready.length} confirmed</button>}
-          {admin && d.ended && (d.locked
+          {admin && d.closable && (d.locked
             ? <button onClick={() => lock.mutate({ start: d.period.start, locked: false })} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"><LockOpen size={14} /> Reopen</button>
             : <button onClick={() => { if (approvedAll || window.confirm("Not everyone's hours are approved. Close the period anyway?")) lock.mutate({ start: d.period.start, locked: true }); }} className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"><Lock size={14} /> Close for payroll</button>)}
           <button onClick={quickbooks} className="inline-flex items-center gap-1.5 rounded-xl bg-[hsl(17_66%_52%)] px-3 py-2 text-sm font-semibold text-white hover:brightness-110"><Download size={14} /> QuickBooks sheet</button>
@@ -100,7 +101,7 @@ export function PayPeriodsPanel() {
       </div>
       {admin && !d.periods.some((p) => p.locked) && (
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-          Pay periods start every other Monday from {fmtDay(d.anchor, { month: "short", day: "numeric", year: "numeric" })}. Different start?
+          Pay periods run every other Monday to Saturday, from {fmtDay(d.anchor, { month: "short", day: "numeric", year: "numeric" })}. Different start?
           <input type="date" className="rounded-lg border border-slate-200 px-2 py-1" value={anchor} onChange={(e) => setAnchor(e.target.value)} aria-label="First day of a pay period" />
           <button onClick={() => anchor && saveAnchor.mutate({ anchor })} disabled={!anchor || saveAnchor.isPending} className="rounded-lg border border-slate-200 px-2.5 py-1 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40">Use this Monday</button>
         </div>

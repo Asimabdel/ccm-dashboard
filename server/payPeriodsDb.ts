@@ -43,7 +43,8 @@ export async function setLocked(userId: number, start: string, locked: boolean) 
   const s = await paySettings();
   const period = payPeriodOf(start, s.anchor);
   if (period.start !== start) throw new PayPeriodError("That isn't the first day of a pay period.");
-  if (locked && period.end >= localDateStr()) throw new PayPeriodError("A pay period can be closed once it has ended.");
+  // Closing waits for the Sunday after (its hours count in this period) so a weekend shift isn't frozen out.
+  if (locked && period.through >= localDateStr()) throw new PayPeriodError("A pay period can be closed from the Monday after it ends.");
   const set = new Set(s.locked);
   if (locked) set.add(start); else set.delete(start);
   await savePaySettings({ ...s, locked: Array.from(set).sort() }, userId);
@@ -53,18 +54,18 @@ export async function setLocked(userId: number, start: string, locked: boolean) 
 export async function periodSummary(start: string, scope: (userId: number) => boolean) {
   const s = await paySettings();
   const period = payPeriodOf(start, s.anchor);
-  const sheet = await getTimesheet(period.start, period.end);
+  const sheet = await getTimesheet(period.start, period.through);
   const people = sheet.people.filter((p) => p.usesTimeClock || p.totalMinutes > 0).filter((p) => scope(p.userId));
   const d = await db();
   const ids = people.map((p) => p.userId);
   const [signoffs, pending, approvers] = await Promise.all([
     ids.length ? d.select().from(payPeriodSignoffs).where(and(inArray(payPeriodSignoffs.userId, ids), eq(payPeriodSignoffs.periodStart, period.start))) : [],
-    ids.length ? d.select({ userId: punchRequests.userId }).from(punchRequests).where(and(inArray(punchRequests.userId, ids), eq(punchRequests.status, "pending"), gte(punchRequests.workDate, period.start), lte(punchRequests.workDate, period.end))) : [],
+    ids.length ? d.select({ userId: punchRequests.userId }).from(punchRequests).where(and(inArray(punchRequests.userId, ids), eq(punchRequests.status, "pending"), gte(punchRequests.workDate, period.start), lte(punchRequests.workDate, period.through))) : [],
     d.select({ id: users.id, name: users.name }).from(users),
   ]);
   const nameOf = new Map(approvers.map((u) => [u.id, u.name]));
   return {
-    period, locked: s.locked.includes(period.start), ended: period.end < localDateStr(), anchor: s.anchor,
+    period, locked: s.locked.includes(period.start), ended: period.end < localDateStr(), closable: period.through < localDateStr(), anchor: s.anchor,
     periods: recentPayPeriods(localDateStr(), s.anchor, 8).map((p) => ({ ...p, locked: s.locked.includes(p.start) })),
     people: people.map((p) => {
       const so = signoffs.find((x) => x.userId === p.userId);
@@ -81,8 +82,8 @@ export async function periodSummary(start: string, scope: (userId: number) => bo
   };
 }
 
-async function personTotals(userId: number, period: { start: string; end: string }) {
-  const sheet = await getTimesheet(period.start, period.end);
+async function personTotals(userId: number, period: { start: string; through: string }) {
+  const sheet = await getTimesheet(period.start, period.through);
   return sheet.people.find((p) => p.userId === userId) ?? null;
 }
 
@@ -117,7 +118,7 @@ export async function confirmMyHours(userId: number, start: string) {
   const t = await personTotals(userId, period);
   if (t?.missedClockOuts) throw new PayPeriodError("A day is missing its clock-out. Use Fix a punch first.");
   const d = await db();
-  const pending = await d.select({ id: punchRequests.id }).from(punchRequests).where(and(eq(punchRequests.userId, userId), eq(punchRequests.status, "pending"), gte(punchRequests.workDate, period.start), lte(punchRequests.workDate, period.end))).limit(1);
+  const pending = await d.select({ id: punchRequests.id }).from(punchRequests).where(and(eq(punchRequests.userId, userId), eq(punchRequests.status, "pending"), gte(punchRequests.workDate, period.start), lte(punchRequests.workDate, period.through))).limit(1);
   if (pending.length) throw new PayPeriodError("A punch fix is still waiting for your manager. Confirm once it's decided.");
   const minutes = t?.totalMinutes ?? 0;
   await d.insert(payPeriodSignoffs).values({ userId, periodStart: start, confirmedAt: new Date(), confirmedMinutes: minutes })

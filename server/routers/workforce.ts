@@ -418,8 +418,9 @@ export const workforceRouter = router({
       const m = await requireManager(ctx);
       const s = await pay.paySettings();
       const { recentPayPeriods } = await import("../../shared/payPeriods");
-      // Default: the last finished period.
-      const start = input.start ?? recentPayPeriods(localDateStr(), s.anchor, 2)[1]!.start;
+      // Default: the last finished period (on a Sunday, the one whose Saturday just passed).
+      const today = localDateStr();
+      const start = input.start ?? recentPayPeriods(today, s.anchor, 2).find((p) => p.end < today)!.start;
       return pay.periodSummary(start, (userId) => manages(m, userId));
     }),
     approve: protectedProcedure.input(z.object({ userId: z.number().int().positive(), start: dateStr })).mutation(async ({ input, ctx }) => {
