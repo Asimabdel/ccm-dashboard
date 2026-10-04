@@ -621,6 +621,8 @@ export const staffProfiles = mysqlTable("staffProfiles", {
   /** Their own cell (10 digits), for shift reminder texts — only if they turned textReminders on themselves. */
   mobilePhone: varchar("mobilePhone", { length: 10 }),
   textReminders: boolean("textReminders").default(false).notNull(),
+  /** The secret in their personal calendar link (/api/calendar/<token>.ics); null until they turn it on. */
+  calendarToken: varchar("calendarToken", { length: 40 }).unique(),
   active: boolean("active").default(true).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -2158,4 +2160,46 @@ export const workforceAlerts = mysqlTable("workforceAlerts", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (t) => ({
   oneIdx: uniqueIndex("workforceAlerts_one_unique").on(t.userId, t.date, t.ref),
+}));
+
+/**
+ * A shift up for grabs (2026-10-04): offered by the person who holds it (swap), or after they called out
+ * (callout). A coworker with the same job takes it (claimed); the manager approves (the shift moves to them
+ * for a swap; for a call-out they get a coverage shift) or denies (it's open again).
+ */
+export const shiftOffers = mysqlTable("shiftOffers", {
+  id: int("id").autoincrement().primaryKey(),
+  shiftId: int("shiftId").references(() => shifts.id).notNull(),
+  /** swap | callout */
+  kind: varchar("kind", { length: 8 }).notNull(),
+  offeredByUserId: int("offeredByUserId").references(() => users.id).notNull(),
+  note: varchar("note", { length: 300 }),
+  /** open | claimed | approved | denied | cancelled */
+  status: varchar("status", { length: 10 }).default("open").notNull(),
+  claimedByUserId: int("claimedByUserId").references(() => users.id),
+  claimedAt: datetime("claimedAt"),
+  decidedByUserId: int("decidedByUserId").references(() => users.id),
+  decidedAt: datetime("decidedAt"),
+  managerNote: varchar("managerNote", { length: 300 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  shiftIdx: index("shiftOffers_shift_idx").on(t.shiftId),
+  statusIdx: index("shiftOffers_status_idx").on(t.status),
+}));
+
+/** Pay period sign-off (2026-10-04, every 2 weeks): the employee confirms their hours, the manager approves. */
+export const payPeriodSignoffs = mysqlTable("payPeriodSignoffs", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").references(() => users.id).notNull(),
+  /** The period's first day (a Monday). */
+  periodStart: varchar("periodStart", { length: 10 }).notNull(),
+  confirmedAt: datetime("confirmedAt"),
+  /** Minutes they confirmed (if hours change afterwards, it needs confirming again). */
+  confirmedMinutes: int("confirmedMinutes"),
+  approvedByUserId: int("approvedByUserId").references(() => users.id),
+  approvedAt: datetime("approvedAt"),
+  approvedMinutes: int("approvedMinutes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  oneIdx: uniqueIndex("payPeriodSignoffs_one_unique").on(t.userId, t.periodStart),
 }));

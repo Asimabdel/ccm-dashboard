@@ -48,6 +48,19 @@ export function createApp(): Express {
       res.redirect("/integrations?gmail=" + encodeURIComponent("Connecting the mailbox failed. Try again."));
     }
   });
+  // A person's shifts as a calendar feed (Google / Apple / Outlook). The long secret in the link is the key.
+  app.get("/api/calendar/:file", async (req, res) => {
+    try {
+      const token = String(req.params.file ?? "").replace(/\.ics$/, "");
+      const { calendarFor } = await import("../calendarFeed");
+      const ics = await calendarFor(token);
+      if (!ics) { res.status(404).type("text/plain").send("Not found"); return; }
+      res.set({ "Content-Type": "text/calendar; charset=utf-8", "Cache-Control": "private, max-age=300", "Content-Disposition": "inline; filename=\"mypcp-shifts.ics\"" }).send(ics);
+    } catch (e) {
+      console.error("[calendar] failed:", (e as Error).message);
+      res.status(503).type("text/plain").send("Unavailable");
+    }
+  });
   // Practice Fusion checks MyPCP's sign-in against this public key (SMART Backend Services).
   app.get("/.well-known/jwks.json", async (_req, res) => {
     try {

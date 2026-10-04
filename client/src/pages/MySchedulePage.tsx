@@ -7,6 +7,7 @@ import { Loader2, MapPin, CalendarPlus, X } from "lucide-react";
 import { fmtDay, fmtTime, localDateStr } from "@shared/workforce";
 import { MyWeekCard } from "@/components/workforce/MyWeekCard";
 import { MyPunchesCard, ReminderTextsCard } from "@/components/workforce/ClockCards";
+import { CalendarCard, OpenShiftsCard, PayPeriodCard, ShiftActions } from "@/components/workforce/ScheduleCards";
 
 export const TIME_OFF_TYPE: Record<string, string> = { pto: "PTO", sick: "Sick", unpaid: "Unpaid", other: "Other" };
 export const TIME_OFF_STATUS: Record<string, string> = {
@@ -19,6 +20,7 @@ export default function MySchedulePage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
   const utils = trpc.useUtils();
   const sched = trpc.workforce.me.schedule.useQuery(undefined, { enabled: !!user });
+  const myOffers = trpc.workforce.me.myOffers.useQuery(undefined, { enabled: !!user });
   const [formOpen, setFormOpen] = useState(false);
   const today = localDateStr();
   const [form, setForm] = useState({ startDate: today, endDate: today, type: "pto" as "pto" | "sick" | "unpaid" | "other", reason: "" });
@@ -41,20 +43,24 @@ export default function MySchedulePage() {
     <CCMDashboardLayout title="My Schedule">
       <div className="grid lg:grid-cols-2 gap-5">
         <MyWeekCard />
+        <OpenShiftsCard />
         <MyPunchesCard />
+        <PayPeriodCard />
         <ReminderTextsCard />
+        <CalendarCard />
         <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-soft">
           <h2 className="text-lg font-bold tracking-tight text-slate-900">Next 4 weeks</h2>
           {sched.isLoading && <Loader2 className="animate-spin text-slate-400 mt-4" />}
           {!sched.isLoading && shifts.length === 0 && <p className="mt-4 text-sm text-slate-500">No shifts scheduled yet.</p>}
           <ul className="mt-4 space-y-2">
             {shifts.map((s) => (
-              <li key={s.id} className={`flex items-center justify-between gap-3 rounded-2xl px-4 py-3 border ${s.status === "called_out" ? "bg-rose-50 border-rose-200" : s.date === today ? "bg-emerald-50 border-emerald-200" : "bg-slate-50 border-slate-200"}`}>
+              <li key={s.id} className={`flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-2xl px-4 py-3 border ${s.status === "called_out" ? "bg-rose-50 border-rose-200" : s.date === today ? "bg-emerald-50 border-emerald-200" : "bg-slate-50 border-slate-200"}`}>
                 <div>
                   <p className="text-sm font-semibold text-slate-800">{fmtDay(s.date)}{s.date === today && <span className="ml-2 text-[10px] uppercase tracking-widest text-emerald-700">Today</span>}</p>
                   <p className="flex items-center gap-1 text-xs text-slate-500 mt-0.5"><MapPin size={11} /> {s.clinicName}{s.coversShiftId ? " · coverage" : ""}{s.status === "called_out" ? " · called out" : ""}</p>
                 </div>
                 <p className="text-sm font-medium text-slate-700 whitespace-nowrap">{fmtTime(s.startTime)} – {fmtTime(s.endTime)}</p>
+                <div className="w-full"><ShiftActions shift={s} offer={(myOffers.data ?? []).find((o) => o.shiftId === s.id && o.mine && ["open", "claimed"].includes(o.status))} /></div>
               </li>
             ))}
           </ul>

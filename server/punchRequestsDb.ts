@@ -51,6 +51,8 @@ export async function requestPunchFix(user: { id: number; name: string | null; r
   const d = await db();
   const today = localDateStr();
   if (input.workDate < addDays(today, -31)) throw new PunchRequestError("Only the last 31 days can be fixed this way. Ask your manager.");
+  const { assertOpenDate } = await import("./payPeriodsDb");
+  await assertOpenDate(input.workDate).catch((e: Error) => { throw new PunchRequestError(e.message); });
   let punch: typeof timePunches.$inferSelect | undefined;
   if (input.punchId) {
     [punch] = await d.select().from(timePunches).where(and(eq(timePunches.id, input.punchId), eq(timePunches.userId, user.id))).limit(1);
@@ -123,6 +125,8 @@ export async function decidePunchRequest(input: { id: number; approve: boolean; 
   if (r.userId === input.decidedBy.id) throw new PunchRequestError("You can't approve your own punch.");
   const note = input.managerNote?.trim().slice(0, 500) || null;
   if (input.approve) {
+    const { assertOpenDate } = await import("./payPeriodsDb");
+    await assertOpenDate(r.workDate).catch((e: Error) => { throw new PunchRequestError(e.message); });
     const stamp = `Fixed on request: ${r.reason}`.slice(0, 500);
     if (r.punchId) {
       const [p] = await d.select().from(timePunches).where(eq(timePunches.id, r.punchId)).limit(1);

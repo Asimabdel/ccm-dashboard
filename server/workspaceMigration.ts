@@ -1131,6 +1131,39 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     \`createdAt\` timestamp NOT NULL DEFAULT (now()),
     UNIQUE KEY \`workforceAlerts_one_unique\` (\`userId\`, \`date\`, \`ref\`),
     CONSTRAINT \`workforceAlerts_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`))` },
+  // Scheduling: shifts up for grabs (swaps / call-outs) and pay period sign-off (added 2026-10-04).
+  { label: "shiftOffers", sql: `CREATE TABLE IF NOT EXISTS \`shiftOffers\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`shiftId\` int NOT NULL,
+    \`kind\` varchar(8) NOT NULL,
+    \`offeredByUserId\` int NOT NULL,
+    \`note\` varchar(300) NULL,
+    \`status\` varchar(10) NOT NULL DEFAULT 'open',
+    \`claimedByUserId\` int NULL,
+    \`claimedAt\` datetime NULL,
+    \`decidedByUserId\` int NULL,
+    \`decidedAt\` datetime NULL,
+    \`managerNote\` varchar(300) NULL,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    INDEX \`shiftOffers_shift_idx\` (\`shiftId\`),
+    INDEX \`shiftOffers_status_idx\` (\`status\`),
+    CONSTRAINT \`shiftOffers_shiftId_fk\` FOREIGN KEY (\`shiftId\`) REFERENCES \`shifts\`(\`id\`),
+    CONSTRAINT \`shiftOffers_offeredByUserId_fk\` FOREIGN KEY (\`offeredByUserId\`) REFERENCES \`users\`(\`id\`),
+    CONSTRAINT \`shiftOffers_claimedByUserId_fk\` FOREIGN KEY (\`claimedByUserId\`) REFERENCES \`users\`(\`id\`),
+    CONSTRAINT \`shiftOffers_decidedByUserId_fk\` FOREIGN KEY (\`decidedByUserId\`) REFERENCES \`users\`(\`id\`))` },
+  { label: "payPeriodSignoffs", sql: `CREATE TABLE IF NOT EXISTS \`payPeriodSignoffs\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`userId\` int NOT NULL,
+    \`periodStart\` varchar(10) NOT NULL,
+    \`confirmedAt\` datetime NULL,
+    \`confirmedMinutes\` int NULL,
+    \`approvedByUserId\` int NULL,
+    \`approvedAt\` datetime NULL,
+    \`approvedMinutes\` int NULL,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    UNIQUE KEY \`payPeriodSignoffs_one_unique\` (\`userId\`, \`periodStart\`),
+    CONSTRAINT \`payPeriodSignoffs_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`),
+    CONSTRAINT \`payPeriodSignoffs_approvedByUserId_fk\` FOREIGN KEY (\`approvedByUserId\`) REFERENCES \`users\`(\`id\`))` },
 ];
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
@@ -1272,6 +1305,7 @@ const INTAKE_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: "timePunches", column: "outReason", ddl: "`outReason` varchar(10) NULL AFTER `minutesLate`" },
   { table: "staffProfiles", column: "mobilePhone", ddl: "`mobilePhone` varchar(10) NULL AFTER `hireDate`" },
   { table: "staffProfiles", column: "textReminders", ddl: "`textReminders` boolean NOT NULL DEFAULT false AFTER `mobilePhone`" },
+  { table: "staffProfiles", column: "calendarToken", ddl: "`calendarToken` varchar(40) NULL UNIQUE AFTER `textReminders`" },
 ];
 async function upgradeIntake(db: Db): Promise<string[]> {
   const applied: string[] = [];

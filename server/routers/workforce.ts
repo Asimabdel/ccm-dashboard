@@ -6,6 +6,9 @@ import * as wf from "../workforceDb";
 import { officeClinicIds, officeStaff } from "../workspaceDb";
 import * as sched from "../scheduleRequestsDb";
 import * as punchFix from "../punchRequestsDb";
+import * as offers from "../shiftOffersDb";
+import * as pay from "../payPeriodsDb";
+import * as cal from "../calendarFeed";
 
 // Managing the workforce (schedules, approvals, time clock, scorecards) is for admins (everyone)
 // and office managers (the staff whose home clinic is their office, at that clinic). Job-role
@@ -42,6 +45,15 @@ async function needShift(m: Manager, shiftId: number) {
 }
 
 /** Turn a data-layer `{ error }` result into a user-facing BAD_REQUEST. */
+/** The site's address for links (the calendar feed). */
+function calendarBase(ctx: unknown): string {
+  const req = (ctx as { req?: { headers?: Record<string, string | string[] | undefined>; protocol?: string } }).req;
+  const h = req?.headers ?? {};
+  const host = String(h["x-forwarded-host"] ?? h.host ?? "mypcpcare.com").split(",")[0]!.trim();
+  const proto = /^(localhost|127\.0\.0\.1)(:|$)/.test(host) ? "http" : "https";
+  return `${proto}://${host}`;
+}
+
 function unwrap<T extends object>(res: T | { error: string }): T {
   if ("error" in res) throw new TRPCError({ code: "BAD_REQUEST", message: res.error });
   return res;
@@ -56,7 +68,7 @@ const weekPattern = z.object({ mon: dayPlan, tue: dayPlan, wed: dayPlan, thu: da
 /** Schedule-request errors are the user's to fix. */
 async function schedRun<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } catch (e) {
-    if (e instanceof sched.ScheduleError || e instanceof punchFix.PunchRequestError) throw new TRPCError({ code: "BAD_REQUEST", message: e.message });
+    if (e instanceof sched.ScheduleError || e instanceof punchFix.PunchRequestError || e instanceof offers.ShiftOfferError || e instanceof pay.PayPeriodError) throw new TRPCError({ code: "BAD_REQUEST", message: e.message });
     throw e;
   }
 }
@@ -155,6 +167,7 @@ export const workforceRouter = router({
       const m = await requireManager(ctx);
       await needShift(m, input);
       await wf.undoCallOut(input);
+      await offers.closeOffersForShift(input, ctx.user.id, "The call-out was undone, so the shift isn't up for grabs anymore.");
       return { success: true };
     }),
     coverageCandidates: protectedProcedure.input(z.number()).query(async ({ input, ctx }) => {
@@ -168,7 +181,10 @@ export const workforceRouter = router({
       .mutation(async ({ input, ctx }) => {
         const m = await requireManager(ctx);
         await needShift(m, input.shiftId);
-        return unwrap(await wf.assignCoverage(input.shiftId, input.userId, ctx.user.id));
+        const r = unwrap(await wf.assignCoverage(input.shiftId, input.userId, ctx.user.id));
+        // The call-out was posted for coworkers: it's covered now.
+        await offers.closeOffersForShift(input.shiftId, ctx.user.id, "Your manager arranged coverage, so the shift isn't up for grabs anymore.");
+        return r;
       }),
   }),
 
@@ -239,6 +255,7 @@ export const workforceRouter = router({
         const p = await wf.getPunchById(input.id);
         if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Punch not found." });
         needPerson(m, p.userId);
+        await schedRun(async () => { await pay.assertOpenDate(p.workDate); await pay.assertOpenDate(localDateStr(input.clockInAt)); });
         return unwrap(await wf.editPunch({ ...input, editedByUserId: ctx.user.id }));
       }),
     add: protectedProcedure
@@ -246,6 +263,7 @@ export const workforceRouter = router({
       .mutation(async ({ input, ctx }) => {
         const m = await requireManager(ctx);
         needPerson(m, input.userId);
+        await schedRun(() => pay.assertOpenDate(localDateStr(input.clockInAt)));
         return unwrap(await wf.addPunch({ ...input, editedByUserId: ctx.user.id }));
       }),
     delete: protectedProcedure.input(z.number()).mutation(async ({ input, ctx }) => {
@@ -253,6 +271,7 @@ export const workforceRouter = router({
       const p = await wf.getPunchById(input);
       if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Punch not found." });
       needPerson(m, p.userId);
+      await schedRun(() => pay.assertOpenDate(p.workDate));
       await wf.deletePunch(input);
       return { success: true };
     }),
@@ -326,6 +345,29 @@ export const workforceRouter = router({
       .input(z.object({ workDate: dateStr, punchId: z.number().int().positive().nullish(), clockIn: timeStr.nullish(), clockOut: timeStr.nullish(), reason: z.string().max(500) }))
       .mutation(async ({ input, ctx }) => schedRun(() => punchFix.requestPunchFix({ id: ctx.user.id, name: ctx.user.name ?? null, role: ctx.user.role }, input))),
     cancelPunchRequest: protectedProcedure.input(z.number().int().positive()).mutation(async ({ input, ctx }) => schedRun(async () => { await punchFix.cancelPunchRequest(ctx.user.id, input); return { success: true }; })),
+    /** Call-outs and swaps: "I can't make it", "Offer this shift", shifts I could take, and my offers. */
+    callOut: protectedProcedure.input(z.object({ shiftId: z.number().int().positive(), reason: z.string().max(200).nullish() }))
+      .mutation(async ({ input, ctx }) => schedRun(() => offers.callOut({ id: ctx.user.id, name: ctx.user.name ?? null, role: ctx.user.role }, input.shiftId, input.reason ?? null))),
+    offerShift: protectedProcedure.input(z.object({ shiftId: z.number().int().positive(), note: z.string().max(300).nullish() }))
+      .mutation(async ({ input, ctx }) => schedRun(() => offers.offerShift({ id: ctx.user.id, name: ctx.user.name ?? null, role: ctx.user.role }, input.shiftId, input.note ?? null))),
+    cancelOffer: protectedProcedure.input(z.number().int().positive()).mutation(async ({ input, ctx }) => schedRun(async () => { await offers.cancelOffer(ctx.user.id, input); return { success: true }; })),
+    openShifts: protectedProcedure.query(async ({ ctx }) => offers.openShiftsFor(ctx.user.id)),
+    myOffers: protectedProcedure.query(async ({ ctx }) => offers.myOffers(ctx.user.id)),
+    claimShift: protectedProcedure.input(z.number().int().positive()).mutation(async ({ input, ctx }) => schedRun(() => offers.claimShift({ id: ctx.user.id, name: ctx.user.name ?? null, role: ctx.user.role }, input))),
+    /** My calendar link (Google / Apple / Outlook). */
+    calendar: protectedProcedure.query(async ({ ctx }) => {
+      const t = await cal.myCalendarToken(ctx.user.id);
+      return { url: t.token ? `${calendarBase(ctx)}/api/calendar/${t.token}.ics` : null, hasProfile: t.hasProfile };
+    }),
+    calendarOn: protectedProcedure.mutation(async ({ ctx }) => {
+      const token = await cal.newCalendarToken(ctx.user.id);
+      if (!token) throw new TRPCError({ code: "BAD_REQUEST", message: "Your workforce profile isn't set up yet. Ask your manager." });
+      return { url: `${calendarBase(ctx)}/api/calendar/${token}.ics` };
+    }),
+    calendarOff: protectedProcedure.mutation(async ({ ctx }) => { await cal.turnOffCalendar(ctx.user.id); return { success: true }; }),
+    /** My hours this pay period and last, and confirming them. */
+    payPeriods: protectedProcedure.query(async ({ ctx }) => pay.myPayPeriods(ctx.user.id)),
+    confirmHours: protectedProcedure.input(z.object({ start: dateStr })).mutation(async ({ input, ctx }) => schedRun(() => pay.confirmMyHours(ctx.user.id, input.start))),
     toggleDuty: protectedProcedure
       .input(z.object({ dutyId: z.number(), done: z.boolean() }))
       .mutation(async ({ input, ctx }) => unwrap(await wf.toggleDuty(ctx.user.id, input.dutyId, input.done))),
@@ -348,6 +390,53 @@ export const workforceRouter = router({
       .input(z.object({ pattern: weekPattern, effectiveFrom: dateStr, note: z.string().max(500).nullish() }))
       .mutation(async ({ input, ctx }) => schedRun(() => sched.submitWeek({ id: ctx.user.id, name: ctx.user.name ?? null, role: ctx.user.role }, input))),
     cancelWeekRequest: protectedProcedure.input(z.number().int().positive()).mutation(async ({ input, ctx }) => schedRun(async () => { await sched.cancelRequest(ctx.user.id, input); return { success: true }; })),
+  }),
+
+  // ---- Shifts taken by coworkers (manager approves) ----
+  shiftOffers: router({
+    get: protectedProcedure.input(z.number().int().positive()).query(async ({ input, ctx }) => {
+      const m = await requireManager(ctx);
+      const o = await offers.getOffer(input);
+      if (!o) throw new TRPCError({ code: "NOT_FOUND", message: "Not found." });
+      needPerson(m, o.offeredByUserId);
+      return o;
+    }),
+    decide: protectedProcedure
+      .input(z.object({ offerId: z.number().int().positive(), approve: z.boolean(), managerNote: z.string().max(300).nullish() }))
+      .mutation(async ({ input, ctx }) => {
+        const m = await requireManager(ctx);
+        const o = await offers.getOffer(input.offerId);
+        if (!o) throw new TRPCError({ code: "NOT_FOUND", message: "Not found." });
+        needPerson(m, o.offeredByUserId);
+        return schedRun(() => offers.decideOffer({ ...input, decidedBy: { id: ctx.user.id, name: (ctx.user as { name?: string | null }).name ?? null } }));
+      }),
+  }),
+
+  // ---- Pay periods (every 2 weeks): approve hours, close, QuickBooks sheet ----
+  payPeriods: router({
+    summary: protectedProcedure.input(z.object({ start: dateStr.nullish() })).query(async ({ input, ctx }) => {
+      const m = await requireManager(ctx);
+      const s = await pay.paySettings();
+      const { recentPayPeriods } = await import("../../shared/payPeriods");
+      // Default: the last finished period.
+      const start = input.start ?? recentPayPeriods(localDateStr(), s.anchor, 2)[1]!.start;
+      return pay.periodSummary(start, (userId) => manages(m, userId));
+    }),
+    approve: protectedProcedure.input(z.object({ userId: z.number().int().positive(), start: dateStr })).mutation(async ({ input, ctx }) => {
+      const m = await requireManager(ctx);
+      needPerson(m, input.userId);
+      return schedRun(() => pay.approveHours(ctx.user.id, input.userId, input.start));
+    }),
+    setLocked: protectedProcedure.input(z.object({ start: dateStr, locked: z.boolean() })).mutation(async ({ input, ctx }) => {
+      requireAdmin(ctx);
+      await schedRun(() => pay.setLocked(ctx.user.id, input.start, input.locked));
+      return { success: true };
+    }),
+    setAnchor: protectedProcedure.input(z.object({ anchor: dateStr })).mutation(async ({ input, ctx }) => {
+      requireAdmin(ctx);
+      await schedRun(() => pay.setAnchor(ctx.user.id, input.anchor));
+      return { success: true };
+    }),
   }),
 
   // ---- Fix-my-punch requests (manager side) ----

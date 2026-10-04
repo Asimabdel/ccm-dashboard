@@ -5,6 +5,7 @@ import { AlertTriangle, ChevronDown, ChevronRight, Download, Loader2, Pencil, Pl
 import { addDays, fmtDay, fmtDuration, localDateStr, localMinutes, weekStart } from "@shared/workforce";
 import { clinicLocalToUtc } from "@shared/workspace";
 import { Field, Modal, StatCard, btnGhost, btnPrimary, inputCls } from "./ui";
+import { PayPeriodsPanel } from "./PayPeriodsPanel";
 
 type Preset = "this_week" | "last_week" | "two_weeks" | "this_month" | "last_month" | "custom";
 
@@ -54,6 +55,8 @@ export function TimesheetsTab() {
   const [range, setRange] = useState(presetRange("last_week", today));
   const [open, setOpen] = useState<Set<number>>(new Set());
   const [draft, setDraft] = useState<PunchDraft | null>(null);
+  // Pay periods (approve, close, QuickBooks) or any dates (fix punches, CSVs).
+  const [view, setView] = useState<"pay" | "dates">("pay");
 
   const sheet = trpc.workforce.timesheet.useQuery(range);
   const onError = (e: { message: string }) => toast.error(e.message);
@@ -93,6 +96,12 @@ export function TimesheetsTab() {
 
   return (
     <div>
+      <div className="mb-4 inline-flex rounded-xl bg-slate-100 p-1" role="group" aria-label="Timesheets view">
+        {([["pay", "Pay periods"], ["dates", "Any dates (fix punches)"]] as const).map(([k, label]) => (
+          <button key={k} onClick={() => setView(k)} aria-pressed={view === k} className={`rounded-lg px-3 py-1.5 text-sm font-semibold ${view === k ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}>{label}</button>
+        ))}
+      </div>
+      {view === "pay" ? <PayPeriodsPanel /> : <>
       <div className="flex flex-wrap items-center gap-2 mb-4">
         {PRESETS.map((p) => (
           <button key={p.key} onClick={() => pick(p.key)} className={`${btnGhost} ${preset === p.key ? "!bg-slate-900 !text-white !border-slate-900" : ""}`}>{p.label}</button>
@@ -219,6 +228,7 @@ export function TimesheetsTab() {
           </form>
         </Modal>
       )}
+      </>}
     </div>
   );
 }
