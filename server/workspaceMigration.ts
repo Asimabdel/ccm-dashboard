@@ -1027,6 +1027,39 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     UNIQUE KEY \`chatReactions_one_unique\` (\`messageId\`, \`userId\`, \`emoji\`),
     CONSTRAINT \`chatReactions_messageId_fk\` FOREIGN KEY (\`messageId\`) REFERENCES \`chatMessages\`(\`id\`),
     CONSTRAINT \`chatReactions_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`))` },
+  // Messages: attachments, "I read this", edit history (added 2026-10-04).
+  { label: "chatAttachments", sql: `CREATE TABLE IF NOT EXISTS \`chatAttachments\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`conversationId\` int NOT NULL,
+    \`messageId\` int NULL,
+    \`storageKey\` varchar(200) NOT NULL,
+    \`fileName\` varchar(255) NOT NULL,
+    \`mimeType\` varchar(80) NOT NULL,
+    \`sizeBytes\` int NOT NULL,
+    \`status\` varchar(12) NOT NULL DEFAULT 'uploading',
+    \`uploadedByUserId\` int NOT NULL,
+    \`savedFileId\` int NULL,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    INDEX \`chatAttachments_message_idx\` (\`messageId\`),
+    CONSTRAINT \`chatAttachments_conversationId_fk\` FOREIGN KEY (\`conversationId\`) REFERENCES \`chatConversations\`(\`id\`),
+    CONSTRAINT \`chatAttachments_messageId_fk\` FOREIGN KEY (\`messageId\`) REFERENCES \`chatMessages\`(\`id\`),
+    CONSTRAINT \`chatAttachments_uploadedByUserId_fk\` FOREIGN KEY (\`uploadedByUserId\`) REFERENCES \`users\`(\`id\`),
+    CONSTRAINT \`chatAttachments_savedFileId_fk\` FOREIGN KEY (\`savedFileId\`) REFERENCES \`patientFiles\`(\`id\`))` },
+  { label: "chatAcks", sql: `CREATE TABLE IF NOT EXISTS \`chatAcks\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`messageId\` int NOT NULL,
+    \`userId\` int NOT NULL,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    UNIQUE KEY \`chatAcks_pair_unique\` (\`messageId\`, \`userId\`),
+    CONSTRAINT \`chatAcks_messageId_fk\` FOREIGN KEY (\`messageId\`) REFERENCES \`chatMessages\`(\`id\`),
+    CONSTRAINT \`chatAcks_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`))` },
+  { label: "chatMessageEdits", sql: `CREATE TABLE IF NOT EXISTS \`chatMessageEdits\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`messageId\` int NOT NULL,
+    \`previousBody\` text NOT NULL,
+    \`editedAt\` datetime NOT NULL,
+    INDEX \`chatMessageEdits_message_idx\` (\`messageId\`),
+    CONSTRAINT \`chatMessageEdits_messageId_fk\` FOREIGN KEY (\`messageId\`) REFERENCES \`chatMessages\`(\`id\`))` },
 ];
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
@@ -1157,6 +1190,13 @@ const INTAKE_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: "chatMembers", column: "lastReadMessageId", ddl: "`lastReadMessageId` int NULL AFTER `lastReadAt`" },
   // Added 2026-10-02: call lists — the day a patient asked to be called back.
   { table: "phoneCalls", column: "callBackOn", ddl: "`callBackOn` varchar(10) NULL AFTER `outcome`" },
+  // Added 2026-10-04: Messages — replies, edits, pins, must-read, announcement-only conversations.
+  { table: "chatMessages", column: "replyToId", ddl: "`replyToId` int NULL AFTER `taskId`" },
+  { table: "chatMessages", column: "editedAt", ddl: "`editedAt` datetime NULL AFTER `replyToId`" },
+  { table: "chatMessages", column: "pinnedAt", ddl: "`pinnedAt` datetime NULL AFTER `editedAt`" },
+  { table: "chatMessages", column: "pinnedByUserId", ddl: "`pinnedByUserId` int NULL AFTER `pinnedAt`" },
+  { table: "chatMessages", column: "requiresAck", ddl: "`requiresAck` boolean NOT NULL DEFAULT false AFTER `pinnedByUserId`" },
+  { table: "chatConversations", column: "postingRestricted", ddl: "`postingRestricted` boolean NOT NULL DEFAULT false AFTER `lastMessageAt`" },
 ];
 async function upgradeIntake(db: Db): Promise<string[]> {
   const applied: string[] = [];
@@ -1297,6 +1337,12 @@ export async function runWorkspaceMigration(): Promise<string[]> {
     await db.execute(sql`UPDATE chatMembers mb JOIN chatConversations c ON c.id = mb.conversationId SET mb.lastReadAt = NULL
       WHERE c.kind IN ('everyone', 'clinic', 'team') AND mb.lastReadAt = mb.createdAt`);
     applied.push("chatMembers read positions reset");
+  }
+  // Once, with announcement-only conversations (2026-10-04, the practice's choice): Everyone becomes
+  // announcements (admins / office managers post); an admin can switch it back.
+  if (upgraded.includes("chatConversations.postingRestricted added")) {
+    await db.execute(sql`UPDATE chatConversations SET postingRestricted = true WHERE kind = 'everyone'`);
+    applied.push("Everyone set to announcements");
   }
   // Once, with lastReadMessageId: what each person had already read, by message (not just by time).
   if (upgraded.includes("chatMembers.lastReadMessageId added")) {

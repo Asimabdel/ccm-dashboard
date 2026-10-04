@@ -10,6 +10,37 @@ export type Reaction = (typeof REACTIONS)[number];
 export const QUICK_REPLIES = ["On my way", "5 minutes", "Got it, thanks", "Patient is here", "Room is ready", "Can you call me?"] as const;
 export const FLOW_QUICK_REPLIES = ["On my way", "5 minutes", "Got it"] as const;
 
+// ---------------------------------------------------------------------------
+// Attachments, announcements, pins and search (added 2026-10-04)
+// ---------------------------------------------------------------------------
+
+/** Files people can send: PDFs and photos (the same as a patient's folder takes, so any can be filed there). */
+export const CHAT_FILE_MIME = ["application/pdf", "image/jpeg", "image/png"] as const;
+export const MAX_CHAT_FILE_BYTES = 25 * 1024 * 1024;
+export const MAX_CHAT_FILES = 5;
+
+/** People who post announcements: they can make a message "must read" and post where only they may. */
+export const canAnnounce = (role: string) => role === "admin" || role === "office_manager";
+
+/** Can this person post here? An announcement-only conversation takes posts from admins / office managers. */
+export const canPostIn = (role: string, conv: { postingRestricted: boolean }) => !conv.postingRestricted || canAnnounce(role);
+
+/** Pinning: anyone in a direct message, group or patient conversation; admins / office managers in the built-in channels. */
+export const canPinIn = (role: string, kind: string) => ["dm", "group", "patient"].includes(kind) || canAnnounce(role);
+
+/** A search term as a SQL LIKE pattern, with %, _ and \ matched literally. */
+export const likeContains = (q: string) => `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
+/** The part of a message around the first match, for search results ("…can you call Mrs. Lopez back…"). */
+export function snippetAround(body: string, q: string, radius = 60): string {
+  const text = body.replace(/\s+/g, " ").trim();
+  const at = text.toLowerCase().indexOf(q.trim().toLowerCase());
+  if (at < 0) return text.length > radius * 2 ? `${text.slice(0, radius * 2)}…` : text;
+  const start = Math.max(0, at - radius);
+  const end = Math.min(text.length, at + q.trim().length + radius);
+  return `${start > 0 ? "…" : ""}${text.slice(start, end)}${end < text.length ? "…" : ""}`;
+}
+
 /** How someone is @mentioned: their name without a note in brackets ("Rosa Diaz (MA)" → "Rosa Diaz"). */
 export function mentionName(name: string | null | undefined): string {
   return (name ?? "").replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s+/g, " ").trim();

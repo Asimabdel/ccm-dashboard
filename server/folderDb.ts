@@ -419,6 +419,24 @@ export async function finishFileUpload(actor: WorkspaceActor, id: number) {
   return { ok: true };
 }
 
+/** File a copy of something already in storage (e.g. a PDF or photo sent in Messages) in a patient's folder. */
+export async function addFileFromStorage(actor: WorkspaceActor, input: { subjectKey: string; fileType: PatientFileType; title: string; note?: string | null; sourceKey: string; fileName: string; mimeType: string; size: number }) {
+  const { care } = await assertFolder(actor, input.subjectKey, "files");
+  if (!(PATIENT_FILE_MIME as readonly string[]).includes(input.mimeType)) throw new WorkspaceError("Only PDFs, JPGs and PNGs go in a patient's folder.");
+  if (!(input.fileType in PATIENT_FILE_TYPES)) throw new WorkspaceError("Pick what the file is.");
+  const storageKey = `documents/patient-files/${randomUUID()}`;
+  await putBytes(storageKey, await getBytes(input.sourceKey), input.mimeType);
+  const res = await (await db()).insert(patientFiles).values({
+    subjectKey: input.subjectKey, patientId: pidOf(input.subjectKey), clinicId: care?.clinicId ?? null, fileType: input.fileType,
+    title: input.title.replace(/[\r\n<>]/g, " ").trim().slice(0, 255) || PATIENT_FILE_TYPES[input.fileType],
+    note: input.note?.trim().slice(0, 500) || null, storageKey, fileName: input.fileName.slice(0, 255), mimeType: input.mimeType, sizeBytes: input.size,
+    status: "ready", uploadedByUserId: actor.id,
+  });
+  const id = (res as unknown as [{ insertId: number }])[0].insertId;
+  await audit(actor, "update_patient", { entityType: "patientFile", entityId: id, description: `Added to the patient's folder from Messages: ${PATIENT_FILE_TYPES[input.fileType]}` });
+  return id;
+}
+
 async function readyFile(actor: WorkspaceActor, id: number) {
   const [f] = await (await db()).select().from(patientFiles).where(and(eq(patientFiles.id, id), eq(patientFiles.status, "ready"), isNull(patientFiles.removedAt))).limit(1);
   if (!f) throw new WorkspaceError("That file wasn't found.", "NOT_FOUND");

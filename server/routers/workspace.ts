@@ -1599,9 +1599,60 @@ export const workspaceRouter = router({
       await actorFor(ctx, "messages");
       return (await chat.staffDirectory()).map((u) => ({ id: u.id, name: u.name, role: u.role, clinicId: u.clinicId }));
     }),
-    get: protectedProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ ctx, input }) => {
+    get: protectedProcedure.input(z.object({ id: z.number().int().positive(), focusId: z.number().int().positive().nullish() })).query(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "messages");
-      return run(() => chat.conversationDetail(actor, input.id));
+      return run(() => chat.conversationDetail(actor, input.id, input.focusId));
+    }),
+    /** Search the messages in every conversation I'm in. */
+    search: protectedProcedure.input(z.object({ q: z.string().trim().min(2).max(100) })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return chat.searchMessages(actor, input.q);
+    }),
+    edit: protectedProcedure.input(z.object({ messageId: z.number().int().positive(), body: z.string().max(4000) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.editMessage(actor, input.messageId, input.body));
+    }),
+    pin: protectedProcedure.input(z.object({ messageId: z.number().int().positive(), pinned: z.boolean() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.setPinned(actor, input.messageId, input.pinned));
+    }),
+    /** "I read this" on a must-read message. */
+    ack: protectedProcedure.input(z.object({ messageId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.acknowledge(actor, input.messageId));
+    }),
+    ackStatus: protectedProcedure.input(z.object({ messageId: z.number().int().positive() })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.ackStatus(actor, input.messageId));
+    }),
+    /** Announcements only (admins). */
+    restrict: protectedProcedure.input(z.object({ conversationId: z.number().int().positive(), restricted: z.boolean() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.setPostingRestricted(actor, input.conversationId, input.restricted));
+    }),
+    attachStart: protectedProcedure.input(z.object({ conversationId: z.number().int().positive(), fileName: z.string().trim().min(1).max(255), mimeType: z.string().max(80), size: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.startAttachment(actor, input));
+    }),
+    attachLocal: protectedProcedure.input(z.object({ id: z.number().int().positive(), base64: z.string().max(36_000_000) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.uploadAttachmentLocal(actor, input.id, input.base64));
+    }),
+    attachFinish: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.finishAttachment(actor, input.id));
+    }),
+    /** A short-lived link to view a sent file (every view is logged). */
+    attachment: protectedProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.openAttachment(actor, input.id));
+    }),
+    saveToFolder: protectedProcedure.input(z.object({
+      attachmentId: z.number().int().positive(), subjectKey: patientKey,
+      fileType: z.enum(PATIENT_FILE_TYPE_LIST as [PatientFileType, ...PatientFileType[]]), title: z.string().trim().max(255), note: z.string().max(500).nullish(),
+    })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "messages");
+      return run(() => chat.saveAttachmentToFolder(actor, input));
     }),
     /** Muted: only @mentions of me count on the badge / pop up. */
     mute: protectedProcedure.input(z.object({ conversationId: z.number().int().positive(), muted: z.boolean() })).mutation(async ({ ctx, input }) => {
@@ -1617,7 +1668,10 @@ export const workspaceRouter = router({
       await actorFor(ctx, "messages");
       return chat.presence();
     }),
-    send: protectedProcedure.input(z.object({ conversationId: z.number().int().positive(), body: z.string().max(4000), subjectKey: patientKey.nullish() })).mutation(async ({ ctx, input }) => {
+    send: protectedProcedure.input(z.object({
+      conversationId: z.number().int().positive(), body: z.string().max(4000), subjectKey: patientKey.nullish(),
+      replyToId: z.number().int().positive().nullish(), requiresAck: z.boolean().optional(), attachmentIds: z.array(z.number().int().positive()).max(5).optional(),
+    })).mutation(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "messages");
       return run(() => chat.sendMessage(actor, input));
     }),

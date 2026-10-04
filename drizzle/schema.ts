@@ -1861,6 +1861,8 @@ export const chatConversations = mysqlTable("chatConversations", {
   patientId: int("patientId").references(() => patients.id),
   createdByUserId: int("createdByUserId").references(() => users.id),
   lastMessageAt: datetime("lastMessageAt"),
+  /** Announcements only: just admins / office managers post (everyone can react and mark "I read this"). */
+  postingRestricted: boolean("postingRestricted").default(false).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (t) => ({
   kindIdx: index("chatConversations_kind_idx").on(t.kind),
@@ -1898,10 +1900,58 @@ export const chatMessages = mysqlTable("chatMessages", {
   patientName: varchar("patientName", { length: 255 }),
   /** The task made from this message. */
   taskId: int("taskId"),
+  /** A reply to another message in the same conversation (shown quoted above it). */
+  replyToId: int("replyToId"),
+  /** Last edited by its sender (earlier wording kept in chatMessageEdits). */
+  editedAt: datetime("editedAt"),
+  pinnedAt: datetime("pinnedAt"),
+  pinnedByUserId: int("pinnedByUserId").references(() => users.id),
+  /** Must read: everyone is asked to tap "I read this" (chatAcks). */
+  requiresAck: boolean("requiresAck").default(false).notNull(),
   deletedAt: datetime("deletedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (t) => ({
   convIdx: index("chatMessages_conv_idx").on(t.conversationId, t.id),
+}));
+
+/** Files sent in Messages (PDFs, photos), in the private documents bucket. A copy can be filed in a patient's folder. */
+export const chatAttachments = mysqlTable("chatAttachments", {
+  id: int("id").autoincrement().primaryKey(),
+  conversationId: int("conversationId").references(() => chatConversations.id).notNull(),
+  /** Null until the message is sent. */
+  messageId: int("messageId").references(() => chatMessages.id),
+  storageKey: varchar("storageKey", { length: 200 }).notNull(),
+  fileName: varchar("fileName", { length: 255 }).notNull(),
+  mimeType: varchar("mimeType", { length: 80 }).notNull(),
+  sizeBytes: int("sizeBytes").notNull(),
+  /** uploading | ready */
+  status: varchar("status", { length: 12 }).default("uploading").notNull(),
+  uploadedByUserId: int("uploadedByUserId").references(() => users.id).notNull(),
+  /** The patient-folder copy, once filed. */
+  savedFileId: int("savedFileId").references(() => patientFiles.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  messageIdx: index("chatAttachments_message_idx").on(t.messageId),
+}));
+
+/** "I read this" on a must-read message. */
+export const chatAcks = mysqlTable("chatAcks", {
+  id: int("id").autoincrement().primaryKey(),
+  messageId: int("messageId").references(() => chatMessages.id).notNull(),
+  userId: int("userId").references(() => users.id).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  pairIdx: uniqueIndex("chatAcks_pair_unique").on(t.messageId, t.userId),
+}));
+
+/** A message's wording before each edit (kept for the record). */
+export const chatMessageEdits = mysqlTable("chatMessageEdits", {
+  id: int("id").autoincrement().primaryKey(),
+  messageId: int("messageId").references(() => chatMessages.id).notNull(),
+  previousBody: text("previousBody").notNull(),
+  editedAt: datetime("editedAt").notNull(),
+}, (t) => ({
+  messageIdx: index("chatMessageEdits_message_idx").on(t.messageId),
 }));
 
 /**

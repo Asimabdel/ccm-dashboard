@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findMentions, mentionName, presenceFor, shortPatientName, splitMentions } from "../shared/chat";
+import { canAnnounce, canPinIn, canPostIn, findMentions, likeContains, mentionName, presenceFor, shortPatientName, snippetAround, splitMentions } from "../shared/chat";
 
 // Made-up staff and patients only.
 const people = [
@@ -60,5 +60,39 @@ describe("Who's in today", () => {
   });
   it("no shift: not scheduled", () => {
     expect(presenceFor({ ...base, shifts: [] })).toEqual({ status: "none", label: "Not scheduled today" });
+  });
+});
+
+describe("announcements, pins and search", () => {
+  it("lets only admins and office managers post in an announcement-only conversation", () => {
+    expect(canPostIn("staff", { postingRestricted: false })).toBe(true);
+    expect(canPostIn("medical_assistant", { postingRestricted: true })).toBe(false);
+    expect(canPostIn("provider", { postingRestricted: true })).toBe(false);
+    expect(canPostIn("admin", { postingRestricted: true })).toBe(true);
+    expect(canPostIn("office_manager", { postingRestricted: true })).toBe(true);
+    expect(canAnnounce("front_desk")).toBe(false);
+  });
+
+  it("lets anyone pin in their own conversations, but only admins / office managers in the built-in channels", () => {
+    for (const kind of ["dm", "group", "patient"]) expect(canPinIn("staff", kind)).toBe(true);
+    for (const kind of ["everyone", "clinic", "team"]) {
+      expect(canPinIn("medical_assistant", kind)).toBe(false);
+      expect(canPinIn("office_manager", kind)).toBe(true);
+    }
+  });
+
+  it("searches for the words typed, with % and _ taken literally", () => {
+    expect(likeContains("call back")).toBe("%call back%");
+    expect(likeContains("50%_off")).toBe(String.raw`%50\%\_off%`);
+    expect(likeContains(String.raw`a\b`)).toBe(String.raw`%a\\b%`);
+  });
+
+  it("shows the part of a message around the match", () => {
+    const body = `Reminder for the front desk: ${"x".repeat(80)} please call Mrs. Example back about her refill today ${"y".repeat(80)}`;
+    const s = snippetAround(body, "call mrs");
+    expect(s.startsWith("…")).toBe(true);
+    expect(s.endsWith("…")).toBe(true);
+    expect(s.toLowerCase()).toContain("call mrs. example back");
+    expect(snippetAround("Short note", "zzz")).toBe("Short note");
   });
 });
