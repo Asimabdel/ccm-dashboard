@@ -2203,3 +2203,16 @@ export const payPeriodSignoffs = mysqlTable("payPeriodSignoffs", {
 }, (t) => ({
   oneIdx: uniqueIndex("payPeriodSignoffs_one_unique").on(t.userId, t.periodStart),
 }));
+
+/** Punch problems a manager marked as fine ("Wasn't in", "Looks right", "Keep"): one row per person, day and problem. */
+export const timeClockReviews = mysqlTable("timeClockReviews", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").references(() => users.id).notNull(),
+  date: varchar("date", { length: 10 }).notNull(),
+  /** The problem (shared/punchFixes ref), e.g. "no_punch:123", "long_day". */
+  ref: varchar("ref", { length: 40 }).notNull(),
+  reviewedByUserId: int("reviewedByUserId").references(() => users.id).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  oneIdx: uniqueIndex("timeClockReviews_one_unique").on(t.userId, t.date, t.ref),
+}));

@@ -9,6 +9,7 @@ import { PerformanceTab } from "./workforce/PerformanceTab";
 import { RolesTab } from "./workforce/RolesTab";
 import { PeopleTab } from "./workforce/PeopleTab";
 import { TimesheetsTab } from "./workforce/TimesheetsTab";
+import { trpc } from "@/lib/trpc";
 
 const TABS = [
   { key: "today", label: "Today", icon: Sun },
@@ -23,6 +24,9 @@ type TabKey = (typeof TABS)[number]["key"];
 
 export default function WorkforcePage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
+  const managerish = user?.role === "admin" || user?.role === "office_manager";
+  const fixes = trpc.workforce.fixes.list.useQuery({ days: 14 }, { enabled: managerish, refetchInterval: 5 * 60_000 });
+  const fixCount = fixes.data?.fixCount ?? 0;
   // ?tab=timesheets etc. deep-links straight to a tab.
   const [tab, setTab] = useState<TabKey>(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
@@ -43,6 +47,7 @@ export default function WorkforcePage() {
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition ${tab === t.key ? "bg-gradient-to-r from-[hsl(17_66%_52%)] to-[hsl(20_72%_46%)] text-white shadow-glow-primary" : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"}`}>
             <t.icon size={15} /> {t.label}
+            {t.key === "timesheets" && fixCount > 0 && <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${tab === t.key ? "bg-white/25 text-white" : "bg-rose-600 text-white"}`} title="Punches to fix">{fixCount}</span>}
           </button>
         ))}
       </div>

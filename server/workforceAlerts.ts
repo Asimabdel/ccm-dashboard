@@ -5,6 +5,8 @@
 //   • an hour after the shift: no-show, didn't clock out, didn't come back from lunch, worked 6+ hours with
 //     no break — each a task for their office manager (else the time-off approver, else the admins);
 //   • once a week, a heads-up when someone is on course for more than 40 hours.
+// Forgot to clock out (2026-10-05): 2 hours after the shift ends they're clocked out automatically at the
+// scheduled end (no shift: after 12 hours); they're told, and their manager gets a task to check the time.
 // Reminders go to the person in MyPCP (notification; the page shows a banner and pop-up) and, if they turned
 // it on with their own cell, by text from the practice number. Every reminder / alert goes once (workforceAlerts).
 // Mondays after 8 AM: a perfect-attendance shout-out for last week in the Everyone channel (names only).
@@ -56,7 +58,7 @@ async function managerAlert(counts: { byKind: Record<string, number> }, p: Perso
   const { createTask } = await import("./workspaceDb");
   const task = await createTask({ id: actorId, name: "MyPCP", role: "admin", clinicIds: null }, {
     title: a.title,
-    description: `${a.detail}\n\nFrom the time clock. Fix any punch on Workforce → Timesheets, or ask ${p.name.split(" ")[0]} to send a "Fix my punch" request.`,
+    description: `${a.detail}\n\nFrom the time clock. Fix it on Workforce → Timesheets → Needs fixing (one click for most), or ask ${p.name.split(" ")[0]} to send a "Fix my punch" request.`,
     assignedUserId: approver.assignedUserId,
     assignedRole: approver.assignedUserId ? null : "admin",
     priority: a.priority,
@@ -80,7 +82,7 @@ export async function runWorkforceAlerts(now: Date = new Date()) {
   const d = await db();
   const today = localDateStr(now);
   const nowMin = localMinutes(now);
-  const counts = { reminders: 0, texts: 0, alerts: 0, shoutout: false, byKind: {} as Record<string, number> };
+  const counts = { reminders: 0, texts: 0, alerts: 0, shoutout: false, autoClockOuts: 0, byKind: {} as Record<string, number> };
   const people: Person[] = (await d.select({
     userId: staffProfiles.userId, name: users.name, homeClinicId: staffProfiles.homeClinicId, usesTimeClock: staffProfiles.usesTimeClock,
     clockStartDate: staffProfiles.clockStartDate, mobilePhone: staffProfiles.mobilePhone, textReminders: staffProfiles.textReminders,
@@ -128,6 +130,7 @@ export async function runWorkforceAlerts(now: Date = new Date()) {
           await remind(p, `Your shift ended at ${fmtTime(s.endTime)} and you're still clocked in. Clock out if you've left.`, counts);
         }
         if (nowMin >= end + END_OF_DAY_AFTER) {
+          // Still clocked in is handled by the automatic clock-out below.
           const open = sp.some((x) => !x.clockOutAt);
           const last = sp.slice().sort((a, b) => +a.clockInAt - +b.clockInAt).at(-1);
           if (!sp.length && await claim(p.userId, today, `noshow:${s.id}`)) {
@@ -135,12 +138,7 @@ export async function runWorkforceAlerts(now: Date = new Date()) {
               title: `No-show: ${p.name} (${fmtTime(s.startTime)}–${fmtTime(s.endTime)} ${where(s)})`,
               detail: `${p.name} was scheduled today and never clocked in. If they called out or had time off, mark the shift called out on Workforce → Schedule.` });
             counts.alerts++;
-          } else if (open && await claim(p.userId, today, `missedout:${s.id}`)) {
-            await managerAlert(counts, p, { date: today, ref: `missedout:${s.id}`, priority: "normal",
-              title: `Didn't clock out: ${p.name}, ${fmtDay(today)}`,
-              detail: `${p.name}'s shift ended at ${fmtTime(s.endTime)} and they're still clocked in. Until it's fixed, the day counts 0 hours.` });
-            counts.alerts++;
-          } else if (last?.clockOutAt && last.outReason === "lunch" && await claim(p.userId, today, `lunchback:${s.id}`)) {
+          } else if (!open && last?.clockOutAt && last.outReason === "lunch" && await claim(p.userId, today, `lunchback:${s.id}`)) {
             await managerAlert(counts, p, { date: today, ref: `lunchback:${s.id}`, priority: "normal",
               title: `Didn't clock back in after lunch: ${p.name}, ${fmtDay(today)}`,
               detail: `${p.name} started lunch and never clocked back in. If they worked the afternoon, add the missing time.` });
@@ -174,6 +172,20 @@ export async function runWorkforceAlerts(now: Date = new Date()) {
           : `${p.name} has worked ${Math.floor(worked / 60)}h ${worked % 60}m so far this week (since ${fmtDay(monday)}) and is scheduled for about ${Math.round(ahead / 60)}h more, over 40 hours. Adjust the schedule now if overtime isn't approved.` });
       counts.alerts++;
     }
+  }
+
+  // Forgot to clock out: clocked out automatically (today's and yesterday's punches).
+  const { autoClockOuts } = await import("./punchFixesDb");
+  for (const c of await autoClockOuts(now)) {
+    counts.autoClockOuts = (counts.autoClockOuts ?? 0) + 1;
+    const p = people.find((x) => x.userId === c.userId);
+    if (!p || !(await claim(p.userId, c.date, `auto:${c.punchId}`))) continue;
+    const at = fmtTime(c.clockOut);
+    await remind(p, `You didn't clock out ${c.date === today ? "today" : `on ${fmtDay(c.date)}`}, so you were clocked out automatically at ${at}${c.byShift ? " (your scheduled end)" : ""}. If you left at a different time, use Fix a punch on My Schedule.`, counts);
+    await managerAlert(counts, p, { date: c.date, ref: `auto:${c.punchId}`, priority: "low",
+      title: `Clocked out automatically: ${p.name}, ${fmtDay(c.date)}`,
+      detail: `${p.name} didn't clock out, so MyPCP clocked them out at ${at}${c.byShift ? " (their scheduled end)" : " (12 hours after clocking in; no shift was scheduled)"}. Check the time: "Looks right" or change it.` });
+    counts.alerts++;
   }
 
   counts.shoutout = await mondayShoutout(now, people);

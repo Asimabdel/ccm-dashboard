@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, CheckCircle2, Download, Loader2, Lock, LockOpen, ThumbsUp } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Download, Loader2, Lock, LockOpen, Plus, ThumbsUp } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
-import { fmtDay, fmtDuration } from "@shared/workforce";
+import { fmtDay, fmtDuration, localDateStr } from "@shared/workforce";
 import { quickbooksSheet, toCsv } from "@shared/payPeriods";
+import { AddTimeDialog, PunchDays } from "./PunchFixing";
 
 const clockTime = (d: Date | string) => new Date(d).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Chicago" });
 
@@ -32,6 +33,10 @@ export function PayPeriodsPanel() {
     onError: (e) => toast.error(e.message),
   });
   const [anchor, setAnchor] = useState("");
+  // Click a person to see (and fix) their punches in this period.
+  const [open, setOpen] = useState<Set<number>>(new Set());
+  const [adding, setAdding] = useState<{ userId: number; name: string } | null>(null);
+  const toggle = (id: number) => setOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const saveAnchor = trpc.workforce.payPeriods.setAnchor.useMutation({ onSuccess: () => { toast.success("Pay periods updated."); setStart(null); void utils.workforce.payPeriods.invalidate(); }, onError: (e) => toast.error(e.message) });
 
   if (q.isLoading) return <div className="py-6"><Loader2 className="animate-spin text-slate-400" /></div>;
@@ -78,11 +83,14 @@ export function PayPeriodsPanel() {
           </thead>
           <tbody>
             {d.people.map((p) => (
-              <tr key={p.userId} className="border-t border-slate-100">
+              <Fragment key={p.userId}>
+              <tr className="border-t border-slate-100">
                 <td className="px-3 py-2">
-                  <p className="font-semibold text-slate-800">{p.name}</p>
-                  <p className="text-xs text-slate-500">{[p.jobRoleName, p.homeClinicName].filter(Boolean).join(" · ")}</p>
-                  {(p.missedClockOuts > 0 || p.pendingFixes > 0) && <p className="mt-0.5 flex items-center gap-1 text-xs font-semibold text-amber-700"><AlertTriangle size={11} /> {[p.missedClockOuts ? `${p.missedClockOuts} missing clock-out` : null, p.pendingFixes ? `${p.pendingFixes} punch fix waiting` : null].filter(Boolean).join(" · ")}</p>}
+                  <button type="button" onClick={() => toggle(p.userId)} className="flex items-center gap-1 text-left font-semibold text-slate-800 hover:text-slate-950" aria-expanded={open.has(p.userId)}>
+                    {open.has(p.userId) ? <ChevronDown size={14} className="text-slate-400" /> : <ChevronRight size={14} className="text-slate-400" />}{p.name}
+                  </button>
+                  <p className="ml-5 text-xs text-slate-500">{[p.jobRoleName, p.homeClinicName].filter(Boolean).join(" · ")}</p>
+                  {(p.missedClockOuts > 0 || p.pendingFixes > 0 || p.autoOuts > 0) && <p className="ml-5 mt-0.5 flex items-center gap-1 text-xs font-semibold text-amber-700"><AlertTriangle size={11} /> {[p.missedClockOuts ? `${p.missedClockOuts} missing clock-out` : null, p.autoOuts ? `${p.autoOuts} automatic clock-out to check` : null, p.pendingFixes ? `${p.pendingFixes} punch fix waiting` : null].filter(Boolean).join(" · ")}</p>}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums">{fmtDuration(p.regularMinutes)}</td>
                 <td className={`px-3 py-2 text-right tabular-nums ${p.overtimeMinutes ? "font-semibold text-amber-700" : "text-slate-400"}`}>{p.overtimeMinutes ? fmtDuration(p.overtimeMinutes) : "—"}</td>
@@ -94,6 +102,15 @@ export function PayPeriodsPanel() {
                     : <span className="text-slate-400">—</span>}
                 </td>
               </tr>
+              {open.has(p.userId) && (
+                <tr className="border-t border-slate-100 bg-slate-50/50">
+                  <td colSpan={6} className="px-3 py-2">
+                    {p.punches.length ? <PunchDays punches={p.punches} /> : <p className="ml-5 text-xs text-slate-500">No punches in this period.</p>}
+                    {!d.locked && <button onClick={() => setAdding({ userId: p.userId, name: p.name })} className="ml-5 mt-1 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100"><Plus size={12} /> Add time</button>}
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             ))}
             {d.people.length === 0 && <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-400">Nobody on the time clock in this period.</td></tr>}
           </tbody>
@@ -106,6 +123,7 @@ export function PayPeriodsPanel() {
           <button onClick={() => anchor && saveAnchor.mutate({ anchor })} disabled={!anchor || saveAnchor.isPending} className="rounded-lg border border-slate-200 px-2.5 py-1 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40">Use this Monday</button>
         </div>
       )}
+      {adding && <AddTimeDialog {...adding} date={d.period.end < localDateStr() ? d.period.end : localDateStr()} clockIn="09:00" clockOut="17:00" onClose={() => setAdding(null)} />}
     </div>
   );
 }

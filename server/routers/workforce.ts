@@ -8,6 +8,7 @@ import * as sched from "../scheduleRequestsDb";
 import * as punchFix from "../punchRequestsDb";
 import * as offers from "../shiftOffersDb";
 import * as pay from "../payPeriodsDb";
+import * as fixes from "../punchFixesDb";
 import * as cal from "../calendarFeed";
 
 // Managing the workforce (schedules, approvals, time clock, scorecards) is for admins (everyone)
@@ -31,6 +32,10 @@ async function requireManager(ctx: Ctx): Promise<Manager> {
   return { clinicId, staff: await officeStaff(ctx.user.id, clinicId) };
 }
 const manages = (m: Manager, userId: number) => !m.staff || m.staff.has(userId);
+/** After a punch fix: close the person's late / no-show / clock-out alert tasks for those days if nothing's left. */
+async function afterFix(userId: number, dates: string[], byUserId: number) {
+  for (const date of Array.from(new Set(dates))) await fixes.resolveAlertTasks(userId, date, byUserId).catch(() => 0);
+}
 function needPerson(m: Manager, userId: number) {
   if (!manages(m, userId)) throw forbid("That person isn't on your office's staff.");
 }
@@ -68,7 +73,7 @@ const weekPattern = z.object({ mon: dayPlan, tue: dayPlan, wed: dayPlan, thu: da
 /** Schedule-request errors are the user's to fix. */
 async function schedRun<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } catch (e) {
-    if (e instanceof sched.ScheduleError || e instanceof punchFix.PunchRequestError || e instanceof offers.ShiftOfferError || e instanceof pay.PayPeriodError) throw new TRPCError({ code: "BAD_REQUEST", message: e.message });
+    if (e instanceof sched.ScheduleError || e instanceof punchFix.PunchRequestError || e instanceof offers.ShiftOfferError || e instanceof pay.PayPeriodError || e instanceof fixes.PunchFixError) throw new TRPCError({ code: "BAD_REQUEST", message: e.message });
     throw e;
   }
 }
@@ -256,15 +261,19 @@ export const workforceRouter = router({
         if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Punch not found." });
         needPerson(m, p.userId);
         await schedRun(async () => { await pay.assertOpenDate(p.workDate); await pay.assertOpenDate(localDateStr(input.clockInAt)); });
-        return unwrap(await wf.editPunch({ ...input, editedByUserId: ctx.user.id }));
+        const r = unwrap(await wf.editPunch({ ...input, editedByUserId: ctx.user.id }));
+        await afterFix(p.userId, [p.workDate, localDateStr(input.clockInAt)], ctx.user.id);
+        return r;
       }),
     add: protectedProcedure
-      .input(z.object({ userId: z.number(), clockInAt: z.date(), clockOutAt: z.date().nullable(), note: z.string().max(500).nullish() }))
+      .input(z.object({ userId: z.number(), clockInAt: z.date(), clockOutAt: z.date().nullable(), note: z.string().max(500).nullish(), lunch: z.boolean().optional() }))
       .mutation(async ({ input, ctx }) => {
         const m = await requireManager(ctx);
         needPerson(m, input.userId);
         await schedRun(() => pay.assertOpenDate(localDateStr(input.clockInAt)));
-        return unwrap(await wf.addPunch({ ...input, editedByUserId: ctx.user.id }));
+        const r = unwrap(await wf.addPunch({ ...input, editedByUserId: ctx.user.id }));
+        await afterFix(input.userId, [localDateStr(input.clockInAt)], ctx.user.id);
+        return r;
       }),
     delete: protectedProcedure.input(z.number()).mutation(async ({ input, ctx }) => {
       const m = await requireManager(ctx);
@@ -273,6 +282,36 @@ export const workforceRouter = router({
       needPerson(m, p.userId);
       await schedRun(() => pay.assertOpenDate(p.workDate));
       await wf.deletePunch(input);
+      await afterFix(p.userId, [p.workDate], ctx.user.id);
+      return { success: true };
+    }),
+  }),
+
+  // ---- Fixing punches: the Needs fixing list, the day view, "Looks right" / "Wasn't in" ----
+  fixes: router({
+    list: protectedProcedure.input(z.object({ days: z.number().int().refine((n) => (fixes.FIX_LOOKBACK_DAYS as readonly number[]).includes(n)).optional() }).optional())
+      .query(async ({ input, ctx }) => {
+        const m = await requireManager(ctx);
+        return fixes.needsFixing((id) => manages(m, id), input?.days ?? 14);
+      }),
+    day: protectedProcedure.input(z.object({ date: dateStr })).query(async ({ input, ctx }) => {
+      const m = await requireManager(ctx);
+      return schedRun(() => fixes.dayView(input.date, (id) => manages(m, id)));
+    }),
+    confirm: protectedProcedure.input(z.object({ punchId: z.number().int().positive() })).mutation(async ({ input, ctx }) => {
+      const m = await requireManager(ctx);
+      const p = await wf.getPunchById(input.punchId);
+      if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Punch not found." });
+      needPerson(m, p.userId);
+      const r = await fixes.confirmAutoOut(input.punchId, ctx.user.id);
+      await afterFix(r.userId, [r.date], ctx.user.id);
+      return { success: true };
+    }),
+    dismiss: protectedProcedure.input(z.object({ userId: z.number().int().positive(), date: dateStr, ref: z.string().min(1).max(40) })).mutation(async ({ input, ctx }) => {
+      const m = await requireManager(ctx);
+      needPerson(m, input.userId);
+      await fixes.dismissProblem(input, ctx.user.id);
+      await afterFix(input.userId, [input.date], ctx.user.id);
       return { success: true };
     }),
   }),

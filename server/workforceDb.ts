@@ -611,9 +611,14 @@ export async function listPunches(from: string, to: string, userId?: number) {
 export async function editPunch(input: { id: number; clockInAt: Date; clockOutAt: Date | null; note?: string | null; editedByUserId: number }): Promise<{ success: true } | { error: string }> {
   const db = await requireDb();
   if (input.clockOutAt && +input.clockOutAt <= +input.clockInAt) return { error: "Clock-out must be after clock-in." };
+  if (+input.clockInAt > Date.now() || (input.clockOutAt && +input.clockOutAt > Date.now() + 60_000)) return { error: "That time hasn't happened yet." };
+  const [cur] = await db.select({ outReason: timePunches.outReason, note: timePunches.note }).from(timePunches).where(eq(timePunches.id, input.id)).limit(1);
   await db.update(timePunches).set({
-    clockInAt: input.clockInAt, clockOutAt: input.clockOutAt, note: input.note ?? null, editedByUserId: input.editedByUserId,
+    clockInAt: input.clockInAt, clockOutAt: input.clockOutAt, note: input.note === undefined ? cur?.note ?? null : input.note, editedByUserId: input.editedByUserId,
     workDate: localDateStr(input.clockInAt),
+    // A manager setting the time on an automatic clock-out has checked it; an open punch has no out reason.
+    ...(cur?.outReason === "auto" ? { outReason: "auto_ok" } : {}),
+    ...(!input.clockOutAt ? { outReason: null } : {}),
   }).where(eq(timePunches.id, input.id));
   return { success: true };
 }
@@ -906,9 +911,10 @@ export async function getTimesheet(from: string, to: string) {
       .from(staffProfiles).innerJoin(users, eq(users.id, staffProfiles.userId))
       .leftJoin(jobRoles, eq(jobRoles.id, staffProfiles.jobRoleId))
       .leftJoin(clinics, eq(clinics.id, staffProfiles.homeClinicId)),
-    db.select({ userId: shifts.userId, startTime: shifts.startTime, endTime: shifts.endTime })
+    db.select({ id: shifts.id, userId: shifts.userId, date: shifts.date, startTime: shifts.startTime, endTime: shifts.endTime, status: shifts.status })
       .from(shifts).where(and(gte(shifts.date, from), lte(shifts.date, to), eq(shifts.status, "scheduled"))),
   ]);
+  const { shiftForPunch } = await import("../shared/punchFixes");
   const scheduled = new Map<number, number>();
   shiftRows.forEach((s) => scheduled.set(s.userId, (scheduled.get(s.userId) ?? 0) + shiftMinutes(s.startTime, s.endTime)));
   const profileBy = new Map(profileRows.map((r) => [r.userId, r]));
@@ -948,12 +954,18 @@ export async function getTimesheet(from: string, to: string) {
           daysWorked: new Set(mine.map((r) => r.p.workDate)).size,
           lateCount: mine.filter((r) => r.p.minutesLate > 0).length,
           missedClockOuts: mine.filter((r) => !r.p.clockOutAt && r.p.workDate < today).length,
+          /** Automatic clock-outs nobody has checked yet. */
+          autoOuts: mine.filter((r) => r.p.outReason === "auto").length,
           onTheClock: mine.some((r) => !r.p.clockOutAt && r.p.workDate === today),
-          punches: mine.map(({ p, clinicName }) => ({
-            id: p.id, workDate: p.workDate, clockInAt: p.clockInAt, clockOutAt: p.clockOutAt, minutes: punchMinutes(p),
-            minutesLate: p.minutesLate, note: p.note, edited: !!p.editedByUserId, clinicName, lunch: p.outReason === "lunch",
-            missingClockOut: !p.clockOutAt && p.workDate < today,
-          })),
+          punches: mine.map(({ p, clinicName }) => {
+            const s = shiftForPunch(p, shiftRows.filter((x) => x.userId === person.userId));
+            return {
+              id: p.id, workDate: p.workDate, clockInAt: p.clockInAt, clockOutAt: p.clockOutAt, minutes: punchMinutes(p),
+              minutesLate: p.minutesLate, note: p.note, edited: !!p.editedByUserId, clinicName, lunch: p.outReason === "lunch",
+              auto: p.outReason === "auto", missingClockOut: !p.clockOutAt && p.workDate < today,
+              shift: s ? { startTime: s.startTime, endTime: s.endTime } : null,
+            };
+          }),
         };
       })
       .sort((a, b) => a.name.localeCompare(b.name)),
@@ -961,7 +973,7 @@ export async function getTimesheet(from: string, to: string) {
 }
 
 /** A manager adds a punch someone forgot entirely. */
-export async function addPunch(input: { userId: number; clockInAt: Date; clockOutAt: Date | null; note?: string | null; editedByUserId: number }): Promise<{ id: number } | { error: string }> {
+export async function addPunch(input: { userId: number; clockInAt: Date; clockOutAt: Date | null; note?: string | null; lunch?: boolean; editedByUserId: number }): Promise<{ id: number } | { error: string }> {
   const db = await requireDb();
   if (input.clockOutAt && +input.clockOutAt <= +input.clockInAt) return { error: "Clock-out must be after clock-in." };
   if (+input.clockInAt > Date.now()) return { error: "Clock-in can't be in the future." };
@@ -969,6 +981,7 @@ export async function addPunch(input: { userId: number; clockInAt: Date; clockOu
   const res = await db.insert(timePunches).values({
     userId: input.userId, clinicId: profile?.homeClinicId ?? null, workDate: localDateStr(input.clockInAt),
     clockInAt: input.clockInAt, clockOutAt: input.clockOutAt, note: input.note || "Added by manager", editedByUserId: input.editedByUserId,
+    outReason: input.lunch && input.clockOutAt ? "lunch" : null,
   });
   return { id: res?.[0]?.insertId as number };
 }

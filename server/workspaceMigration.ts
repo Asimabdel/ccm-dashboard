@@ -1164,6 +1164,17 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     UNIQUE KEY \`payPeriodSignoffs_one_unique\` (\`userId\`, \`periodStart\`),
     CONSTRAINT \`payPeriodSignoffs_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`),
     CONSTRAINT \`payPeriodSignoffs_approvedByUserId_fk\` FOREIGN KEY (\`approvedByUserId\`) REFERENCES \`users\`(\`id\`))` },
+  // Time clock: punch problems a manager marked as fine (added 2026-10-05).
+  { label: "timeClockReviews", sql: `CREATE TABLE IF NOT EXISTS \`timeClockReviews\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`userId\` int NOT NULL,
+    \`date\` varchar(10) NOT NULL,
+    \`ref\` varchar(40) NOT NULL,
+    \`reviewedByUserId\` int NOT NULL,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    UNIQUE KEY \`timeClockReviews_one_unique\` (\`userId\`, \`date\`, \`ref\`),
+    CONSTRAINT \`timeClockReviews_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`),
+    CONSTRAINT \`timeClockReviews_reviewedByUserId_fk\` FOREIGN KEY (\`reviewedByUserId\`) REFERENCES \`users\`(\`id\`))` },
 ];
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;

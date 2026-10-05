@@ -72,7 +72,7 @@ export async function periodSummary(start: string, scope: (userId: number) => bo
       return {
         userId: p.userId, name: p.name, jobRoleName: p.jobRoleName, homeClinicName: p.homeClinicName,
         regularMinutes: p.regularMinutes, overtimeMinutes: p.overtimeMinutes, totalMinutes: p.totalMinutes, daysWorked: p.daysWorked,
-        missedClockOuts: p.missedClockOuts, pendingFixes: pending.filter((x) => x.userId === p.userId).length,
+        missedClockOuts: p.missedClockOuts, autoOuts: p.autoOuts, pendingFixes: pending.filter((x) => x.userId === p.userId).length,
         confirmedAt: so?.confirmedAt ?? null, confirmedChanged: !!so?.confirmedAt && so.confirmedMinutes !== p.totalMinutes,
         approvedAt: so?.approvedAt ?? null, approvedBy: so?.approvedByUserId ? nameOf.get(so.approvedByUserId) ?? null : null,
         approvedChanged: !!so?.approvedAt && so.approvedMinutes !== p.totalMinutes,
