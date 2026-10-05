@@ -94,7 +94,7 @@ export async function myPayPeriods(userId: number) {
   const [cur, prev] = recentPayPeriods(today, s.anchor, 2);
   const d = await db();
   const out = [];
-  for (const period of [prev!, cur!]) {
+  for (const period of prev ? [prev, cur!] : [cur!]) {
     const t = await personTotals(userId, period);
     const [so] = await d.select().from(payPeriodSignoffs).where(and(eq(payPeriodSignoffs.userId, userId), eq(payPeriodSignoffs.periodStart, period.start))).limit(1);
     const byDay = new Map<string, number>();

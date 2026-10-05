@@ -54,6 +54,8 @@ export function useWorkspace() {
     noClinicAccess: q.data?.noClinicAccess ?? false,
     /** One of the named people who approve program enrollments from diagnoses. */
     programApprover: q.data?.programApprover ?? false,
+    /** A named CCM assigner (not an admin) who gets Staff Assignment. */
+    ccmAssigner: q.data?.ccmAssigner ?? false,
     clinicId: effectiveClinic,
     setClinicId,
   };

@@ -79,6 +79,7 @@ import {
 import { ccmNotesRouter } from "./routers/ccmNotes";
 import { getMaClinicIds, officeClinicIds, officeStaff } from "./workspaceDb";
 import { OFFICE_ASSIGNABLE_ROLES, officeCanManageLogin } from "../shared/workspace";
+import { canAssignCcm } from "./ccmAssigners";
 import { staffProfiles } from "../drizzle/schema";
 import { workforceRouter } from "./routers/workforce";
 import { workspaceRouter } from "./routers/workspace";
@@ -101,6 +102,13 @@ import { clinics, providers, appointments, workTasks } from "../drizzle/schema";
 // ---- Role guards ----
 function requireRole(ctx: any, roles: string[]) {
   if (!ctx.user || !roles.includes(ctx.user.role)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this resource." });
+  }
+}
+
+/** Staff Assignment: admins and the named CCM assigners (see server/ccmAssigners.ts). */
+async function requireCcmAssigner(ctx: any) {
+  if (!ctx.user || !(await canAssignCcm(ctx.user))) {
     throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this resource." });
   }
 }
@@ -1001,7 +1009,7 @@ export const appRouter = router({
     assign: protectedProcedure
       .input(z.object({ taskIds: z.array(z.number()), staffId: z.number() }))
       .mutation(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin"]);
+        await requireCcmAssigner(ctx);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         for (const id of input.taskIds) {
@@ -1013,7 +1021,7 @@ export const appRouter = router({
     autoBalance: protectedProcedure
       .input(z.object({ month: z.string().optional() }).optional())
       .mutation(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin"]);
+        await requireCcmAssigner(ctx);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const month = input?.month || currentMonth();
@@ -1571,13 +1579,13 @@ export const appRouter = router({
   }),
   staff: router({
     all: protectedProcedure.query(async ({ ctx }) => {
-      requireRole(ctx, ["admin"]);
+      await requireCcmAssigner(ctx);
       return getAllStaffUsers();
     }),
     workload: protectedProcedure
       .input(z.object({ month: z.string().optional() }).optional())
       .query(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin"]);
+        await requireCcmAssigner(ctx);
         return getStaffWorkload(input?.month || currentMonth());
       }),
   }),

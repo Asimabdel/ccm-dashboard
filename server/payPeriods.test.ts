@@ -16,9 +16,13 @@ describe("pay periods (Oct 5–17, Oct 19–31, … 2026)", () => {
     expect(payPeriodOf("2026-11-16")).toEqual({ start: "2026-11-16", end: "2026-11-28", through: "2026-11-29" });
   });
 
-  it("lists the current period and the ones before it", () => {
+  it("lists the current period and the ones before it, never before the first one (Oct 5)", () => {
     const list = recentPayPeriods("2026-10-20", DEFAULT_PAY_ANCHOR, 3);
-    expect(list.map((p) => `${p.start} to ${p.end}`)).toEqual(["2026-10-19 to 2026-10-31", "2026-10-05 to 2026-10-17", "2026-09-21 to 2026-10-03"]);
+    expect(list.map((p) => `${p.start} to ${p.end}`)).toEqual(["2026-10-19 to 2026-10-31", "2026-10-05 to 2026-10-17"]);
+    expect(recentPayPeriods("2026-10-05").map((p) => p.start)).toEqual(["2026-10-05"]);
+    expect(recentPayPeriods("2026-11-30", DEFAULT_PAY_ANCHOR, 2).map((p) => p.start)).toEqual(["2026-11-30", "2026-11-16"]);
+    // Before the first one starts, it's the only one.
+    expect(recentPayPeriods("2026-10-04").map((p) => p.start)).toEqual(["2026-10-05"]);
   });
 
   it("only starts on a Monday", () => {

@@ -32,6 +32,7 @@ import * as square from "../squareDb";
 import * as folders from "../folderDb";
 import * as directory from "../directoryDb";
 import * as programs from "../programsDb";
+import { isCcmAssigner } from "../ccmAssigners";
 import * as officeTests from "../officeTestingDb";
 import * as seenSince from "../seenSince";
 import * as rosterMatch from "../rosterMatch";
@@ -156,10 +157,11 @@ export const workspaceRouter = router({
     const role = ctx.user.role;
     const caps = Object.fromEntries(Object.keys(WORKSPACE_CAPS).map((k) => [k, can(role, k as WorkspaceCap)])) as Record<WorkspaceCap, boolean>;
     const programApprover = await programs.isProgramApprover(ctx.user.id);
-    if (!caps.tasks && !caps.playbooksView) return { caps, clinics: [], limitedToClinics: false, noClinicAccess: false, programApprover };
+    const ccmAssigner = ctx.user.role !== "admin" && (await isCcmAssigner(ctx.user.id));
+    if (!caps.tasks && !caps.playbooksView) return { caps, clinics: [], limitedToClinics: false, noClinicAccess: false, programApprover, ccmAssigner };
     const actor = await actorFor(ctx, caps.tasks ? "tasks" : "playbooksView");
     const clinics = await ws.listClinics(actor);
-    return { caps, clinics, limitedToClinics: actor.clinicIds !== null, noClinicAccess: actor.clinicIds !== null && actor.clinicIds.length === 0, programApprover };
+    return { caps, clinics, limitedToClinics: actor.clinicIds !== null, noClinicAccess: actor.clinicIds !== null && actor.clinicIds.length === 0, programApprover, ccmAssigner };
   }),
 
   home: protectedProcedure.input(z.object({ clinicId })).query(async ({ ctx, input }) => {

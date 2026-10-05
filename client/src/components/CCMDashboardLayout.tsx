@@ -5,7 +5,7 @@ import { trpc } from "@/lib/trpc";
 import {
   LogOut, Menu, Bell, ChevronDown, Check, Clock, Search, Sun, Moon, PanelLeftClose, PanelLeftOpen, X, Building2, KeyRound, MessagesSquare,
 } from "lucide-react";
-import { MESSAGES, NAV_GROUPS, PROGRAM_APPROVALS, ROLES, ROLE_HOME, type Role } from "@/lib/nav";
+import { MESSAGES, NAV_GROUPS, PROGRAM_APPROVALS, ROLES, ROLE_HOME, STAFF_ASSIGNMENT, type Role } from "@/lib/nav";
 import { useUnreadMessages } from "@/components/messages/useUnreadMessages";
 import { useUnreadTexts } from "@/components/texts/useUnreadTexts";
 import { ClockBanner } from "@/components/workforce/ClockBanner";
@@ -107,7 +107,7 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
 
   const { data: notifications } = trpc.notifications.list.useQuery(undefined, { refetchInterval: 30000 });
   // Program approvals: only the named approvers get the tab (with how many patients are waiting).
-  const { programApprover } = useWorkspace();
+  const { programApprover, ccmAssigner } = useWorkspace();
   const approvals = trpc.workspace.programs.count.useQuery(undefined, { enabled: !!user && programApprover, refetchInterval: 5 * 60_000 });
   // Internal messages: unread count (top bar + sidebar) and the browser pop-up.
   // The Messages badge: team messages plus unread patient texts (for people who handle texts).
@@ -149,15 +149,20 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
         saveNavScroll(el.scrollTop);
       }
     }
-  }, [location, !!user, collapsed, isMobile, mobileOpen, programApprover]);
+  }, [location, !!user, collapsed, isMobile, mobileOpen, programApprover, ccmAssigner]);
 
   if (!user) return null;
 
   const currentRole = (user.role in NAV_GROUPS ? user.role : "admin") as Role;
   const baseGroups = NAV_GROUPS[currentRole] || [];
-  const groups = programApprover
+  const withApprovals = programApprover
     ? baseGroups.map((g, i) => (i === 0 ? { ...g, items: [...g.items.slice(0, 2), PROGRAM_APPROVALS, ...g.items.slice(2)] } : g))
     : baseGroups;
+  // Named CCM assigners get Staff Assignment in Care Management (or at the end of their first group).
+  const careIdx = withApprovals.findIndex((g) => g.label === "Care Management");
+  const groups = ccmAssigner && !withApprovals.some((g) => g.items.some((x) => x.path === STAFF_ASSIGNMENT.path))
+    ? withApprovals.map((g, i) => (i === (careIdx >= 0 ? careIdx : 0) ? { ...g, items: careIdx >= 0 ? [...g.items.slice(0, 2), STAFF_ASSIGNMENT, ...g.items.slice(2)] : [...g.items, STAFF_ASSIGNMENT] } : g))
+    : withApprovals;
   const waitingApprovals = approvals.data?.patients ?? 0;
   const unread = (notifications || []).filter((n) => !n.read);
   const rail = !isMobile && collapsed;

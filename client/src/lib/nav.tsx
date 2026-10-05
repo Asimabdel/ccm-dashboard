@@ -36,6 +36,8 @@ const CCM_ROSTER: NavItem = { label: "CCM roster", path: "/ccm-roster", icon: He
 const CARE_PLANS: NavItem = { label: "Care plans", path: "/care-plans", icon: NotebookPen };
 /** Only for the named program approvers (added to their sidebar by the layout, whatever their role). */
 export const PROGRAM_APPROVALS: NavItem = { label: "Program approvals", path: "/program-approvals", icon: ClipboardCheck };
+/** Admins, plus the named CCM assigners (added to their Care Management group by the layout). */
+export const STAFF_ASSIGNMENT: NavItem = { label: "Staff Assignment", path: "/assignment", icon: UserCog };
 const PLAYBOOKS: NavItem = { label: "Playbooks", path: "/playbooks", icon: BookOpen };
 const EMAILS: NavItem = { label: "Patient emails", path: "/patient-emails", icon: Mail };
 const FAXES: NavItem = { label: "Faxes", path: "/faxes", icon: Printer };
@@ -66,7 +68,7 @@ export const NAV_GROUPS: Record<Role, NavGroup[]> = {
         CCM_ROSTER,
         CARE_PLANS,
         { label: "Monthly Worklist", path: "/worklist", icon: ClipboardList },
-        { label: "Staff Assignment", path: "/assignment", icon: UserCog },
+        STAFF_ASSIGNMENT,
         { label: "APCM", path: "/apcm", icon: Activity },
         { label: "Reach Out", path: "/reach-out", icon: PhoneOutgoing },
         { label: "Escalations", path: "/escalations", icon: AlertTriangle },

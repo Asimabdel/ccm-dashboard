@@ -1,5 +1,6 @@
 // Pay periods (2026-10-04, the practice's choices): every 2 weeks, Monday to the second Saturday — Oct 5–17,
-// Oct 19–31, … (the anchor Monday an admin can change). The Sunday in between belongs to the period that just
+// Oct 19–31, … (the anchor is the first pay period — none are listed before it — and an admin can change it).
+// The Sunday in between belongs to the period that just
 // ended (so a rare Sunday shift is never left out of payroll); its dates still read Monday–Saturday. Staff confirm their
 // hours, managers approve, an admin closes the period (no more punch changes), then downloads the
 // QuickBooks Payroll sheet. QuickBooks Online Payroll can't import hours from a file, so the sheet lists each
@@ -28,10 +29,10 @@ export function payPeriodOf(date: string, anchor: string = DEFAULT_PAY_ANCHOR): 
   return period(addDays(anchor, idx * PAY_PERIOD_DAYS));
 }
 
-/** The current period and the ones before it, newest first. */
+/** The current period and the ones before it back to the first one, newest first (before the first one starts: just it). */
 export function recentPayPeriods(today: string, anchor: string = DEFAULT_PAY_ANCHOR, count = 6): PayPeriod[] {
-  const cur = payPeriodOf(today, anchor);
-  return Array.from({ length: count }, (_, i) => period(addDays(cur.start, -i * PAY_PERIOD_DAYS)));
+  const cur = today < anchor ? anchor : payPeriodOf(today, anchor).start;
+  return Array.from({ length: count }, (_, i) => period(addDays(cur, -i * PAY_PERIOD_DAYS))).filter((p) => p.start >= anchor);
 }
 
 /** An anchor must be a Monday so each period is two whole Monday–Sunday overtime weeks. */
