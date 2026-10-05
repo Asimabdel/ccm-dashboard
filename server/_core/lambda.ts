@@ -236,6 +236,11 @@ export const handler = async (event: any, context: any) => {
     const { programApproversJob } = await import("../programsDb");
     return programApproversJob({ names: Array.isArray(event.names) ? event.names.map(String) : [], apply: event.apply === true });
   }
+  // One-time clock history reset (IAM-only; dry run with the old punches unless apply). Snapshot RDS first.
+  if (event && event.__job === "clock-reset" && !event.requestContext && !event.version) {
+    const { resetClockHistory } = await import("../clockReset");
+    return resetClockHistory({ before: String(event.before ?? ""), apply: event.apply === true });
+  }
   // Who assigns CCM patients like an admin (Staff Assignment), by name (IAM-only; dry run unless apply).
   if (event && event.__job === "ccm-assigners" && !event.requestContext && !event.version) {
     const { ccmAssignersJob } = await import("../ccmAssigners");
