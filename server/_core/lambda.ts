@@ -202,6 +202,12 @@ export const handler = async (event: any, context: any) => {
     const { providerProgramCounts } = await import("../providerProgramCounts");
     return providerProgramCounts();
   }
+  // Each care coordinator's list: active CCM on the roster + this month's CCM / BHI worklist (IAM-only; counts only).
+  if (event && event.__job === "coordinator-list-counts" && !event.requestContext && !event.version) {
+    const { coordinatorListCounts } = await import("../providerProgramCounts");
+    const { currentMonth } = await import("../seed");
+    return coordinatorListCounts(typeof event.month === "string" && /^\d{4}-\d{2}$/.test(event.month) ? event.month : currentMonth(), typeof event.provider === "string" ? event.provider : undefined);
+  }
   if (event && event.__job === "ccm-dx-stats" && !event.requestContext && !event.version) {
     const { ccmDiagnosisStats } = await import("../diagnosisStats");
     return ccmDiagnosisStats();
