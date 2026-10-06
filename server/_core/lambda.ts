@@ -208,6 +208,11 @@ export const handler = async (event: any, context: any) => {
     const { currentMonth } = await import("../seed");
     return coordinatorListCounts(typeof event.month === "string" && /^\d{4}-\d{2}$/.test(event.month) ? event.month : currentMonth(), typeof event.provider === "string" ? event.provider : undefined);
   }
+  // Active CCM patients by coordinator: visit / talked by phone / call attempted since a date (IAM-only; counts only).
+  if (event && event.__job === "contact-counts" && !event.requestContext && !event.version) {
+    const { contactCounts } = await import("../providerProgramCounts");
+    return contactCounts({ since: typeof event.since === "string" && /^\d{4}-\d{2}-\d{2}$/.test(event.since) ? event.since : "2026-07-01", provider: typeof event.provider === "string" ? event.provider : undefined });
+  }
   if (event && event.__job === "ccm-dx-stats" && !event.requestContext && !event.version) {
     const { ccmDiagnosisStats } = await import("../diagnosisStats");
     return ccmDiagnosisStats();

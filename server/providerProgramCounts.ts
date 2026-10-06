@@ -63,3 +63,70 @@ export async function coordinatorListCounts(month: string, providerName?: string
     .sort((a, b) => (a.coordinator === "(unassigned)" ? 1 : b.coordinator === "(unassigned)" ? -1 : b.ccmWorklist.assigned - a.ccmWorklist.assigned || b.activeCcmOnRoster - a.activeCcmOnRoster));
   return { month, provider: providerName ?? "all", byCoordinator: list };
 }
+
+/** CCM worklist statuses that mean the patient was reached on the phone (even if they then declined). */
+const REACHED = ["completed", "needs_provider_review", "needs_appointment", "documentation_incomplete", "ready_for_billing", "billed", "declined_ccm"];
+/** …and the ones that only mean someone tried. */
+const TRIED = ["called_no_answer", "voicemail_left", "wrong_number", "needs_callback", "unable_to_reach", "in_progress"];
+
+/**
+ * Active CCM patients (optionally one provider's), by coordinator: how many had a visit, were talked to on the
+ * phone (a completed CCM call or a connected call), or at least had a call attempted since a date (2026-10-06).
+ * Visits = the patient directory's last visit (Practice Fusion visits, the schedule, the roster). Counts only.
+ */
+export async function contactCounts(input: { since: string; provider?: string }) {
+  const d = await getDb();
+  if (!d) throw new Error("Database not available");
+  const { since } = input;
+  let providerId: number | null = null;
+  if (input.provider) {
+    const all = await d.select({ id: providers.id, name: providers.name }).from(providers);
+    const hits = all.filter((p) => p.name.toLowerCase().includes(input.provider!.trim().toLowerCase()));
+    if (hits.length !== 1) return { since, provider: input.provider, problem: hits.length ? `matches ${hits.map((h) => h.name).join(", ")}` : "no provider by that name" };
+    providerId = hits[0]!.id;
+  }
+  const roster = await d.select({ id: patients.id, staffId: patients.assignedStaffId, lastCCMDate: patients.lastCCMDate, lastCalledAt: patients.lastCalledAt })
+    .from(patients).where(and(eq(patients.ccmEnrollmentStatus, "active"), sql`${patients.name} NOT LIKE '%(merged into #%'`, providerId ? eq(patients.providerId, providerId) : undefined));
+  if (!roster.length) return { since, provider: input.provider ?? "all", byCoordinator: [] };
+  const ids = roster.map((r) => r.id);
+  const sinceAt = new Date(`${since}T05:00:00Z`);
+  const { phoneCalls } = await import("../drizzle/schema");
+  const { loadDirectory } = await import("./directoryDb");
+  const [tasks, calls, dir, people] = await Promise.all([
+    d.select({ patientId: ccmTasks.patientId, status: ccmTasks.status }).from(ccmTasks)
+      .where(and(inArray(ccmTasks.patientId, ids), eq(ccmTasks.program, "ccm"), sql`${ccmTasks.month} >= ${since.slice(0, 7)}`)),
+    d.select({ patientId: phoneCalls.patientId, result: phoneCalls.result, durationSec: phoneCalls.durationSec }).from(phoneCalls)
+      .where(and(inArray(phoneCalls.patientId, ids), sql`${phoneCalls.startedAt} >= ${sinceAt}`)),
+    loadDirectory(),
+    d.select({ id: users.id, name: users.name }).from(users),
+  ]);
+  const visitIds = new Set<number>();
+  for (const e of Array.from(dir.values())) if (e.patientId && e.lastVisit && e.lastVisit >= since) visitIds.add(e.patientId);
+  const talked = new Set<number>(), tried = new Set<number>();
+  for (const t of tasks) {
+    if (REACHED.includes(t.status as string)) { talked.add(t.patientId); tried.add(t.patientId); } else if (TRIED.includes(t.status as string)) tried.add(t.patientId);
+  }
+  for (const c of calls) {
+    if (!c.patientId) continue;
+    tried.add(c.patientId);
+    if (/connected|accepted/i.test(c.result ?? "") && c.durationSec >= 30) talked.add(c.patientId);
+  }
+  for (const r of roster) {
+    if (r.lastCCMDate && r.lastCCMDate >= sinceAt) { talked.add(r.id); tried.add(r.id); }
+    if (r.lastCalledAt && r.lastCalledAt >= sinceAt) tried.add(r.id);
+  }
+  const name = new Map(people.map((p) => [p.id, p.name]));
+  const groups = new Map<number | null, number[]>();
+  for (const r of roster) groups.set(r.staffId, [...(groups.get(r.staffId) ?? []), r.id]);
+  const row = (label: string, list: number[]) => ({
+    coordinator: label, patients: list.length,
+    hadVisit: list.filter((id) => visitIds.has(id)).length,
+    talkedByPhone: list.filter((id) => talked.has(id)).length,
+    visitOrTalked: list.filter((id) => visitIds.has(id) || talked.has(id)).length,
+    onlyCallAttempts: list.filter((id) => !visitIds.has(id) && !talked.has(id) && tried.has(id)).length,
+    noContactAtAll: list.filter((id) => !visitIds.has(id) && !tried.has(id)).length,
+  });
+  const byCoordinator = Array.from(groups.entries()).map(([staffId, list]) => row(staffId ? name.get(staffId) ?? `User #${staffId}` : "(unassigned)", list))
+    .sort((a, b) => b.patients - a.patients);
+  return { since, provider: input.provider ?? "all", byCoordinator, total: row("Total", roster.map((r) => r.id)) };
+}
