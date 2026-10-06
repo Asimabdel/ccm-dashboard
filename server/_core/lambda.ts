@@ -197,6 +197,11 @@ export const handler = async (event: any, context: any) => {
     const r = await getApcmOverview(month, { limit: 1 });
     return { month, ...r.stats };
   }
+  // Active CCM / BHI / APCM patients per provider (IAM-only; counts only).
+  if (event && event.__job === "provider-program-counts" && !event.requestContext && !event.version) {
+    const { providerProgramCounts } = await import("../providerProgramCounts");
+    return providerProgramCounts();
+  }
   if (event && event.__job === "ccm-dx-stats" && !event.requestContext && !event.version) {
     const { ccmDiagnosisStats } = await import("../diagnosisStats");
     return ccmDiagnosisStats();
