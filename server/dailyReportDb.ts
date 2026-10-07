@@ -1,12 +1,13 @@
 // Providers' daily reports and the injection log (see shared/dailyReport.ts for the format and rules).
-import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lte, ne, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { appointments, clinics, injections, patientTests, patients, programSuggestions, providers, users } from "../drizzle/schema";
+import { appointments, clinics, injections, patientTests, patients, programSuggestions, providers, scheduleImports, users } from "../drizzle/schema";
 import { WorkspaceError, audit, subjectCare, type WorkspaceActor } from "./workspaceDb";
 import { INJECTION_KINDS, formatProviderReport, injectionTag, type InjectionKind } from "../shared/dailyReport";
 import { OFFICE_TESTS, OFFICE_TEST_LABELS, type OfficeTest } from "../shared/officeTests";
 import { SEEN_STATUSES, nameKey } from "../shared/workspace";
-import { isValidDateStr, localDateStr } from "../shared/workforce";
+import { addDays, isValidDateStr, localDateStr } from "../shared/workforce";
+import { dayKind, summarizeProvider, type ProviderDay } from "../shared/providerReport";
 
 async function db() {
   const d = await getDb();
@@ -214,4 +215,92 @@ export async function removeInjection(actor: WorkspaceActor, id: number) {
   await d.update(injections).set({ removedAt: new Date(), removedByUserId: actor.id }).where(eq(injections.id, id));
   await audit(actor, "update_patient", { entityType: "injection", entityId: id, description: `Injection removed: ${injectionTag(i.kind, i.label, i.seriesNumber)}` });
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Provider report: averages over a date range (shared/providerReport.ts has the rules)
+// ---------------------------------------------------------------------------
+
+export async function providerReport(actor: WorkspaceActor, input: { from: string; to: string; clinicId?: number | null }) {
+  const { from, to } = input;
+  if (!isValidDateStr(from) || !isValidDateStr(to) || to < from) throw new WorkspaceError("Pick a date range.");
+  if (addDays(from, 400) < to) throw new WorkspaceError("Pick a range of up to about a year.");
+  const d = await db();
+  const today = localDateStr();
+  const scope = actor.clinicIds ? (input.clinicId ? actor.clinicIds.filter((c) => c === input.clinicId) : actor.clinicIds) : input.clinicId ? [input.clinicId] : null;
+  const inScope = (clinicId: number | null) => !scope || (clinicId != null && scope.includes(clinicId));
+
+  const [provRows, clinicRows, visits, imports] = await Promise.all([
+    d.select({ id: providers.id, name: providers.name }).from(providers),
+    d.select({ id: clinics.id, name: clinics.name }).from(clinics),
+    d.select({ patientId: appointments.patientId, name: appointments.patientName, dob: appointments.dateOfBirth, providerId: appointments.providerId, providerName: appointments.providerName, clinicId: appointments.clinicId, status: appointments.status, date: appointments.date })
+      .from(appointments).where(and(gte(appointments.date, from), lte(appointments.date, to))),
+    d.select({ at: scheduleImports.createdAt, lastDate: scheduleImports.lastDate }).from(scheduleImports).orderBy(desc(scheduleImports.createdAt)).limit(1),
+  ]);
+  const provName = new Map(provRows.map((p) => [p.id, p.name]));
+  const clinicName = new Map(clinicRows.map((c) => [c.id, c.name]));
+
+  // New patients (first visit with the practice that day) and whether they qualify for CCM / RPM — same rules as the daily report.
+  const { loadDirectory } = await import("./directoryDb");
+  const dir = await loadDirectory();
+  const qualifies = { ccm: new Set<string>(), rpm: new Set<string>() };
+  const sugg = await d.select({ patientId: programSuggestions.patientId, name: programSuggestions.name, dob: programSuggestions.dob, program: programSuggestions.program })
+    .from(programSuggestions).where(and(inArray(programSuggestions.program, ["ccm", "rpm"]), ne(programSuggestions.status, "withdrawn")));
+  for (const s of sugg) qualifies[s.program as "ccm" | "rpm"].add(personOf({ patientId: s.patientId, name: s.name, dob: s.dob }));
+  const consented = await d.select({ id: patients.id, ccm: patients.ccmConsentDate, rpm: patients.rpmConsentDate }).from(patients)
+    .where(sql`DATE(${patients.ccmConsentDate}) BETWEEN ${from} AND ${to} OR DATE(${patients.rpmConsentDate}) BETWEEN ${from} AND ${to}`);
+  const consentOn = new Map<string, { ccm: string | null; rpm: string | null }>(consented.map((c) => [`p:${c.id}`, { ccm: ymd(c.ccm), rpm: ymd(c.rpm) }]));
+
+  type Cell = ProviderDay & { persons: Set<string> };
+  type Prov = { key: string; provider: string; clinics: Set<string>; days: Map<string, Cell> };
+  const provs = new Map<string, Prov>();
+  const cellOf = (providerId: number | null, providerName: string | null, date: string) => {
+    const key = providerId ? `p${providerId}` : providerName ? `n:${providerName.toLowerCase()}` : "none";
+    let p = provs.get(key);
+    if (!p) { p = { key, provider: (providerId ? provName.get(providerId) : null) ?? providerName ?? "No provider", clinics: new Set(), days: new Map() }; provs.set(key, p); }
+    let c = p.days.get(date);
+    if (!c) { c = { date, booked: 0, seen: 0, noShow: 0, cancelled: 0, stillScheduled: 0, newPatients: 0, newCcm: 0, newRpm: 0, persons: new Set() }; p.days.set(date, c); }
+    return { p, c };
+  };
+  for (const v of visits) {
+    if (!inScope(v.clinicId)) continue;
+    const { p, c } = cellOf(v.providerId, v.providerName, v.date);
+    if (v.status === "cancelled") { c.cancelled++; continue; }
+    c.booked++;
+    if (v.status === "no_show") c.noShow++;
+    else if (v.status === "scheduled") { if (v.date < today) c.stillScheduled++; }
+    else if ((SEEN_STATUSES as string[]).includes(v.status)) {
+      const person = personOf({ patientId: v.patientId, name: v.name, dob: ymd(v.dob) });
+      if (c.persons.has(person)) continue;
+      c.persons.add(person);
+      c.seen++;
+      if (v.clinicId) p.clinics.add(clinicName.get(v.clinicId) ?? "");
+      const subjectKey = v.patientId ? `p:${v.patientId}` : `s:${nameKey(v.name)}|${ymd(v.dob) ?? ""}`;
+      const first = dir.get(subjectKey)?.firstVisit ?? null;
+      if (!first || first >= v.date) {
+        c.newPatients++;
+        const consent = consentOn.get(person);
+        if (qualifies.ccm.has(person) || consent?.ccm === v.date) c.newCcm++;
+        if (qualifies.rpm.has(person) || consent?.rpm === v.date) c.newRpm++;
+      }
+    }
+  }
+
+  const range = { from, to, today };
+  const rows = Array.from(provs.values()).filter((p) => p.key !== "none").map((p) => {
+    const days = Array.from(p.days.values()).sort((a, b) => a.date.localeCompare(b.date)).map(({ persons: _persons, ...c }) => c);
+    return { key: p.key, provider: p.provider, clinics: Array.from(p.clinics).filter(Boolean), days, summary: summarizeProvider(days, range) };
+  }).filter((r) => r.summary.totalSeen > 0 || r.summary.pendingDays > 0)
+    .sort((a, b) => b.summary.totalSeen - a.summary.totalSeen || a.provider.localeCompare(b.provider));
+  const all = rows.flatMap((r) => r.days.filter((x) => dayKind(x, today) !== "pending"));
+  const sumOf = (k: "seen" | "noShow" | "cancelled" | "booked" | "newPatients" | "newCcm" | "newRpm") => all.reduce((s, x) => s + x[k], 0);
+  return {
+    from, to, today,
+    statusesImported: imports[0] ? { at: imports[0].at, lastDate: imports[0].lastDate } : null,
+    providers: rows,
+    practice: {
+      seen: sumOf("seen"), noShows: sumOf("noShow"), cancellations: sumOf("cancelled"), newPatients: sumOf("newPatients"), newCcm: sumOf("newCcm"), newRpm: sumOf("newRpm"),
+      noShowRate: sumOf("seen") + sumOf("noShow") > 0 ? Math.round((sumOf("noShow") / (sumOf("seen") + sumOf("noShow"))) * 1000) / 10 : null,
+    },
+  };
 }

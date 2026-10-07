@@ -1298,6 +1298,14 @@ export const workspaceRouter = router({
     }),
   }),
 
+  /** Provider report: patients seen as daily / weekly / monthly averages over a range (same people as daily reports). */
+  providerReport: router({
+    get: protectedProcedure.input(z.object({ from: dateStr, to: dateStr, clinicId })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "dailyReports");
+      return run(() => daily.providerReport(actor, input));
+    }),
+  }),
+
   /** Injections given in the office (they count on the provider's daily report). */
   injections: router({
     context: protectedProcedure.input(z.object({ subjectKey: patientKey, date: dateStr })).query(async ({ ctx, input }) => {

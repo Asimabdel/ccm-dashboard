@@ -40,6 +40,7 @@ import IntegrationsPage from "./pages/IntegrationsPage";
 import PatientEmailsPage from "./pages/PatientEmailsPage";
 import MessagesPage from "./pages/MessagesPage";
 import DailyReportsPage from "./pages/DailyReportsPage";
+import ProviderReportPage from "./pages/ProviderReportPage";
 import WellnessPage from "./pages/WellnessPage";
 import InsuranceCheckerPage from "./pages/InsuranceCheckerPage";
 import TeamProgressPage from "./pages/TeamProgressPage";
@@ -115,6 +116,7 @@ function Router() {
       <Route path="/patient-emails" component={PatientEmailsPage} />
       <Route path="/messages" component={MessagesPage} />
       <Route path="/daily-reports" component={DailyReportsPage} />
+      <Route path="/provider-report" component={ProviderReportPage} />
       <Route path="/wellness" component={WellnessPage} />
       <Route path="/insurance" component={InsuranceCheckerPage} />
       <Route path="/team-progress" component={TeamProgressPage} />
