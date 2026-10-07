@@ -213,6 +213,12 @@ export const handler = async (event: any, context: any) => {
     const { contactCounts } = await import("../providerProgramCounts");
     return contactCounts({ since: typeof event.since === "string" && /^\d{4}-\d{2}-\d{2}$/.test(event.since) ? event.since : "2026-07-01", provider: typeof event.provider === "string" ? event.provider : undefined });
   }
+  // Move one provider's active CCM patients to one coordinator (IAM-only; dry run unless apply).
+  if (event && event.__job === "coordinator-transfer" && !event.requestContext && !event.version) {
+    const { transferCoordinator } = await import("../coordinatorTransfer");
+    const { currentMonth } = await import("../seed");
+    return transferCoordinator({ provider: String(event.provider ?? ""), to: String(event.to ?? ""), month: typeof event.month === "string" && /^\d{4}-\d{2}$/.test(event.month) ? event.month : currentMonth(), apply: event.apply === true });
+  }
   if (event && event.__job === "ccm-dx-stats" && !event.requestContext && !event.version) {
     const { ccmDiagnosisStats } = await import("../diagnosisStats");
     return ccmDiagnosisStats();
