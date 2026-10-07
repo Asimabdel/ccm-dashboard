@@ -26,13 +26,29 @@ export interface ProviderDay {
 
 export type DayKind = "worked" | "light" | "off" | "pending";
 
-/** Today, or a past day whose visits are still "scheduled" (statuses not imported yet), isn't counted yet. */
+/**
+ * Today isn't counted yet. A past day with 3+ patients seen was worked (leftover "scheduled" rows don't matter);
+ * one with fewer seen but 3+ still "scheduled" is waiting for its statuses to be imported.
+ */
 export function dayKind(d: Pick<ProviderDay, "date" | "seen" | "stillScheduled">, today: string): DayKind {
   if (d.date >= today) return "pending";
-  if (d.stillScheduled >= WORKED_DAY_MIN && d.stillScheduled > d.seen) return "pending";
   if (d.seen >= WORKED_DAY_MIN) return "worked";
+  if (d.stillScheduled >= WORKED_DAY_MIN) return "pending";
   return d.seen > 0 ? "light" : "off";
 }
+
+/** Weeks (their Monday) whose Monday–Friday lie entirely inside [from, to] and are over before today. */
+export function completeWeeks(from: string, to: string, today: string): string[] {
+  const out: string[] = [];
+  for (let monday = weekStart(from); monday <= to; monday = addDays(monday, 7)) {
+    const friday = addDays(monday, 4);
+    if (monday >= from && friday <= to && friday < today) out.push(monday);
+  }
+  return out;
+}
+
+/** Weeks per month, for the estimate when a range has no complete month. */
+export const WEEKS_PER_MONTH = 52 / 12;
 
 /** Calendar months ("YYYY-MM") that lie entirely inside [from, to] and are over before today. */
 export function completeMonths(from: string, to: string, today: string): string[] {
@@ -57,10 +73,13 @@ export interface ProviderSummary {
   daysWorked: number;
   lightDays: { date: string; seen: number }[];
   pendingDays: number;
-  /** Patients seen per day worked / per week worked / per complete month worked. */
+  /** Patients seen per day worked / per complete week worked / per complete month worked. */
   dailyAvg: number | null;
   weeklyAvg: number | null;
   monthlyAvg: number | null;
+  /** True when the range has no complete month worked: the monthly figure is the weekly average × 52/12. */
+  monthlyEstimated: boolean;
+  /** Complete weeks with a day worked (partial weeks at the ends of the range don't count). */
   weeksWorked: number;
   daysPerWeek: number | null;
   monthsCounted: string[];
@@ -78,7 +97,7 @@ export interface ProviderSummary {
   newPerMonth: number | null;
   newCcm: number;
   newRpm: number;
-  /** Patients seen per week (Monday), for the trend. */
+  /** Patients seen per complete week (Monday), for the trend. */
   weekly: { week: string; seen: number }[];
 }
 
@@ -86,26 +105,31 @@ export function summarizeProvider(days: ProviderDay[], range: { from: string; to
   const kinded = days.map((d) => ({ ...d, kind: dayKind(d, range.today) }));
   const counted = kinded.filter((d) => d.kind !== "pending");
   const worked = kinded.filter((d) => d.kind === "worked");
-  const weeks = new Set(worked.map((d) => weekStart(d.date)));
+  const fullWeeks = new Set(completeWeeks(range.from, range.to, range.today));
+  const inWeeks = worked.filter((d) => fullWeeks.has(weekStart(d.date)));
+  const weeks = new Set(inWeeks.map((d) => weekStart(d.date)));
   const months = completeMonths(range.from, range.to, range.today).filter((m) => worked.some((d) => d.date.startsWith(m)));
   const inMonths = worked.filter((d) => months.includes(d.date.slice(0, 7)));
   const seenWorked = sum(worked.map((d) => d.seen));
-  const newWorked = sum(worked.map((d) => d.newPatients));
+  const weeklyAvg = per(sum(inWeeks.map((d) => d.seen)), weeks.size);
+  const newWeekly = per(sum(inWeeks.map((d) => d.newPatients)), weeks.size);
+  const estimate = (w: number | null) => (w == null ? null : Math.round(w * WEEKS_PER_MONTH * 10) / 10);
   const totalSeen = sum(counted.map((d) => d.seen));
   const noShows = sum(counted.map((d) => d.noShow));
   const cancellations = sum(counted.map((d) => d.cancelled));
   const booked = sum(counted.map((d) => d.booked));
   const byWeek = new Map<string, number>();
-  for (const d of counted) byWeek.set(weekStart(d.date), (byWeek.get(weekStart(d.date)) ?? 0) + d.seen);
+  for (const d of counted) if (fullWeeks.has(weekStart(d.date))) byWeek.set(weekStart(d.date), (byWeek.get(weekStart(d.date)) ?? 0) + d.seen);
   return {
     daysWorked: worked.length,
     lightDays: kinded.filter((d) => d.kind === "light").map((d) => ({ date: d.date, seen: d.seen })),
     pendingDays: kinded.filter((d) => d.kind === "pending" && d.booked > 0).length,
     dailyAvg: per(seenWorked, worked.length),
-    weeklyAvg: per(seenWorked, weeks.size),
-    monthlyAvg: per(sum(inMonths.map((d) => d.seen)), months.length),
+    weeklyAvg,
+    monthlyAvg: months.length ? per(sum(inMonths.map((d) => d.seen)), months.length) : estimate(weeklyAvg),
+    monthlyEstimated: !months.length && weeklyAvg != null,
     weeksWorked: weeks.size,
-    daysPerWeek: per(worked.length, weeks.size),
+    daysPerWeek: per(inWeeks.length, weeks.size),
     monthsCounted: months,
     totalSeen,
     noShows,
@@ -113,9 +137,9 @@ export function summarizeProvider(days: ProviderDay[], range: { from: string; to
     cancellations,
     cancelRate: pct(cancellations, booked + cancellations),
     newPatients: sum(counted.map((d) => d.newPatients)),
-    newPerDay: per(newWorked, worked.length),
-    newPerWeek: per(newWorked, weeks.size),
-    newPerMonth: per(sum(inMonths.map((d) => d.newPatients)), months.length),
+    newPerDay: per(sum(worked.map((d) => d.newPatients)), worked.length),
+    newPerWeek: newWeekly,
+    newPerMonth: months.length ? per(sum(inMonths.map((d) => d.newPatients)), months.length) : estimate(newWeekly),
     newCcm: sum(counted.map((d) => d.newCcm)),
     newRpm: sum(counted.map((d) => d.newRpm)),
     weekly: Array.from(byWeek.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([week, seen]) => ({ week, seen })),

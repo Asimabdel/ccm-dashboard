@@ -43,6 +43,7 @@ export default function ProviderReportPage() {
   const [range, setRange] = useState(presetRange("3m", today));
   const q = trpc.workspace.providerReport.get.useQuery({ ...range, clinicId: ws.clinicId }, { enabled: !!user && !!ws.caps?.dailyReports && range.from <= range.to });
   const rows = q.data?.providers ?? [];
+  const anyEstimated = rows.some((r) => r.summary.monthlyEstimated);
   const pending = rows.reduce((s, r) => s + r.summary.pendingDays, 0);
 
   const trend = useMemo(() => {
@@ -87,7 +88,7 @@ export default function ProviderReportPage() {
 
       {rows.length > 0 && q.data && (
         <>
-          <Panel title="Averages" subtitle={`${fmtDay(range.from, { month: "short", day: "numeric", year: "numeric" })} – ${fmtDay(range.to, { month: "short", day: "numeric", year: "numeric" })}`} bodyClassName="p-0">
+          <Panel title="Averages" subtitle={`${fmtDay(range.from, { month: "short", day: "numeric", year: "numeric" })} – ${fmtDay(range.to, { month: "short", day: "numeric", year: "numeric" })}${anyEstimated ? " · ≈ per month is estimated (no full month in this range)" : ""}`} bodyClassName="p-0">
             <div className="overflow-x-auto">
               <table className="w-full min-w-[980px] text-sm">
                 <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
@@ -110,7 +111,7 @@ export default function ProviderReportPage() {
                         <td className={`${th} tabular-nums`}>{s.daysWorked}</td>
                         <td className={`${th} font-semibold tabular-nums text-slate-900 dark:text-white`}>{n(s.dailyAvg)}</td>
                         <td className={`${th} font-semibold tabular-nums text-slate-900 dark:text-white`}>{n(s.weeklyAvg)}</td>
-                        <td className={`${th} font-semibold tabular-nums text-slate-900 dark:text-white`} title={s.monthsCounted.length ? `Complete months: ${s.monthsCounted.join(", ")}` : "No complete month in this range"}>{n(s.monthlyAvg)}</td>
+                        <td className={`${th} font-semibold tabular-nums text-slate-900 dark:text-white`} title={s.monthlyEstimated ? "No full month in this range: estimated as the weekly average × 4.33" : s.monthsCounted.length ? `Full months: ${s.monthsCounted.join(", ")}` : undefined}>{s.monthlyEstimated && s.monthlyAvg != null ? "≈ " : ""}{n(s.monthlyAvg)}</td>
                         <td className={`${th} tabular-nums`}>{n(s.daysPerWeek)}</td>
                         <td className={`${th} tabular-nums`}>{s.totalSeen.toLocaleString()}</td>
                         <td className={`${th} tabular-nums`}>{s.noShows}{s.noShowRate != null && <span className="ml-1 text-xs text-slate-400">({s.noShowRate}%)</span>}</td>
@@ -147,7 +148,7 @@ export default function ProviderReportPage() {
             </Panel>
           )}
 
-          <Panel className="mt-4" title="Patients seen per week">
+          <Panel className="mt-4" title="Patients seen per week" subtitle="Full weeks only.">
             <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={trend} margin={{ top: 8, right: 16, bottom: 0, left: -12 }}>
@@ -194,7 +195,7 @@ export default function ProviderReportPage() {
 
           <p className="mt-5 flex items-start gap-2 text-xs text-slate-500">
             <Info size={13} className="mt-0.5 shrink-0" />
-            <span><b>Seen</b> = schedule visits marked arrived through checked out (same as the daily reports). A <b>day worked</b> has {WORKED_DAY_MIN}+ patients seen; days with 1–{WORKED_DAY_MIN - 1} are light days (most likely off). <b>Per day</b> = patients seen ÷ days worked; <b>per week</b> = ÷ weeks with a day worked; <b>per month</b> = ÷ complete calendar months in the range that they worked (hover for which). <b>No-show rate</b> = no-shows ÷ (seen + no-shows); <b>cancelled</b> % = of everything booked. <b>New patients</b> = first visit with the practice; <b>→ CCM · RPM</b> = of those, how many qualify by their diagnoses or signed that consent.</span>
+            <span><b>Seen</b> = schedule visits marked arrived through checked out (same as the daily reports). A <b>day worked</b> has {WORKED_DAY_MIN}+ patients seen; days with 1–{WORKED_DAY_MIN - 1} are light days (most likely off). <b>Per day</b> = patients seen ÷ days worked; <b>per week</b> = patients seen in full weeks (Mon–Fri inside the range and over) ÷ those weeks they worked, so a partial week at either end doesn't pull it down; <b>per month</b> = the same for full calendar months, or ≈ the weekly average × 4.33 when the range has no full month (hover to see which). <b>No-show rate</b> = no-shows ÷ (seen + no-shows); <b>cancelled</b> % = of everything booked. <b>New patients</b> = first visit with the practice; <b>→ CCM · RPM</b> = of those, how many qualify by their diagnoses or signed that consent.</span>
           </p>
         </>
       )}

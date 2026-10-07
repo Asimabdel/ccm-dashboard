@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
-import { completeMonths, dayKind, presetRange, summarizeProvider, type ProviderDay } from "../shared/providerReport";
+import { completeMonths, completeWeeks, dayKind, presetRange, summarizeProvider, type ProviderDay } from "../shared/providerReport";
 
 const day = (date: string, seen: number, extra: Partial<ProviderDay> = {}): ProviderDay =>
   ({ date, booked: seen, seen, noShow: 0, cancelled: 0, stillScheduled: 0, newPatients: 0, newCcm: 0, newRpm: 0, ...extra });
@@ -18,6 +18,14 @@ describe("which days count", () => {
     // Oct 2: 1 seen, 16 still "scheduled" (the schedule was imported Oct 1) — not a light day.
     expect(dayKind(day("2026-10-02", 1, { stillScheduled: 16 }), today)).toBe("pending");
     expect(dayKind(day("2026-10-02", 15, { stillScheduled: 2 }), today)).toBe("worked");
+    // Sep 24: 10 seen plus 22 leftover "scheduled" rows — worked.
+    expect(dayKind(day("2026-09-24", 10, { stillScheduled: 22 }), today)).toBe("worked");
+  });
+  it("finds the complete weeks in a range (Mon–Fri inside it, over before today)", () => {
+    // Last 4 weeks on Wed Oct 7: Sep 7 – Oct 6 → the week of Oct 5 isn't over.
+    expect(completeWeeks("2026-09-07", "2026-10-06", "2026-10-07")).toEqual(["2026-09-07", "2026-09-14", "2026-09-21", "2026-09-28"]);
+    // A range starting midweek drops that week too; one ending on a Friday keeps it.
+    expect(completeWeeks("2026-09-09", "2026-10-02", "2026-10-07")).toEqual(["2026-09-14", "2026-09-21", "2026-09-28"]);
   });
   it("finds the complete months in a range", () => {
     expect(completeMonths("2026-07-01", "2026-10-06", "2026-10-07")).toEqual(["2026-07", "2026-08", "2026-09"]);
@@ -50,6 +58,7 @@ describe("averages", () => {
     expect(s.weeksWorked).toBe(2);
     expect(s.weeklyAvg).toBe(25); // 50 / 2
     expect(s.daysPerWeek).toBe(2.5);
+    expect(s.monthlyEstimated).toBe(false);
     // Complete months worked: August (10) and September (40) → 25.
     expect(s.monthsCounted).toEqual(["2026-08", "2026-09"]);
     expect(s.monthlyAvg).toBe(25);
@@ -61,6 +70,26 @@ describe("averages", () => {
     expect(s.newPerWeek).toBe(1);
     expect(s.newCcm).toBe(1);
     expect(s.weekly).toEqual([{ week: "2026-08-31", seen: 32 }, { week: "2026-09-07", seen: 20 }]);
+  });
+
+  it("a partial week at the end doesn't drag the weekly average down (Maggie, last 4 weeks)", () => {
+    const days = [
+      ...["2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11"].map((d) => day(d, 8)),
+      ...["2026-09-14", "2026-09-15", "2026-09-16", "2026-09-17", "2026-09-18"].map((d) => day(d, 8)),
+      ...["2026-09-21", "2026-09-22", "2026-09-23", "2026-09-24", "2026-09-25"].map((d) => day(d, 8)),
+      ...["2026-09-28", "2026-09-29", "2026-09-30", "2026-10-01", "2026-10-02"].map((d) => day(d, 8)),
+      day("2026-10-05", 8), day("2026-10-06", 8), // this week, only Mon–Tue so far
+    ];
+    const s = summarizeProvider(days, { from: "2026-09-07", to: "2026-10-06", today: "2026-10-07" });
+    expect(s.daysWorked).toBe(21);
+    expect(s.dailyAvg).toBe(8);
+    expect(s.weeksWorked).toBe(4);
+    expect(s.weeklyAvg).toBe(38); // (4 + 5 + 5 + 5) × 8 / 4, not ÷ 5
+    expect(s.daysPerWeek).toBe(4.8);
+    // No complete month in the range: per month is estimated from the week.
+    expect(s.monthlyEstimated).toBe(true);
+    expect(s.monthlyAvg).toBe(164.7); // 38 × 52 / 12
+    expect(s.weekly.map((w) => w.week)).toEqual(["2026-09-07", "2026-09-14", "2026-09-21", "2026-09-28"]);
   });
 
   it("nothing worked: no averages", () => {
