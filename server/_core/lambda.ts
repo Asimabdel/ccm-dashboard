@@ -219,6 +219,13 @@ export const handler = async (event: any, context: any) => {
     const { currentMonth } = await import("../seed");
     return transferCoordinator({ provider: String(event.provider ?? ""), to: String(event.to ?? ""), month: typeof event.month === "string" && /^\d{4}-\d{2}$/.test(event.month) ? event.month : currentMonth(), apply: event.apply === true });
   }
+  // Which days each provider worked: schedule (seen) vs Practice Fusion visits, per day (IAM-only; counts only).
+  if (event && event.__job === "provider-days" && !event.requestContext && !event.version) {
+    const { providerDays } = await import("../providerDays");
+    const ok = (x: unknown) => typeof x === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x);
+    if (!ok(event.from) || !ok(event.to)) return { problem: "from and to must be YYYY-MM-DD" };
+    return providerDays({ from: event.from, to: event.to });
+  }
   if (event && event.__job === "ccm-dx-stats" && !event.requestContext && !event.version) {
     const { ccmDiagnosisStats } = await import("../diagnosisStats");
     return ccmDiagnosisStats();
