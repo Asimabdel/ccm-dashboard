@@ -10,6 +10,7 @@ import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { useWorkspace } from "@/components/workspace/useWorkspace";
 import { Btn, EmptyState, ErrorNote, Loading, PageHeader, Panel, inputCls } from "@/components/workspace/ui";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { SendFormsDialog } from "@/components/intake/SendFormsDialog";
 import { rcText } from "@/components/phone/ringcentralStore";
 import { chartHref } from "@/components/chart/ChartLookup";
@@ -366,7 +367,8 @@ function LinkPatient({ packetId, name, onDone }: { packetId: number; name: strin
 }
 
 function AnswerList({ packetId, answers, files }: { packetId: number; answers: Answers; files: { id: number; kind: string }[] }) {
-  const [shown, setShown] = useState<number | null>(null);
+  // The photo opens in its own window on top (it used to appear below the whole form, out of sight).
+  const [shown, setShown] = useState<{ id: number; label: string } | null>(null);
   return (
     <div className="space-y-3">
       {MEDICAL_INTAKE.sections.map((s) => {
@@ -381,7 +383,7 @@ function AnswerList({ packetId, answers, files }: { packetId: number; answers: A
                   return (
                     <div key={f.id} className="sm:col-span-2">
                       <dt className="text-xs text-slate-500">{f.label.en}</dt>
-                      <dd>{file ? <button type="button" onClick={() => setShown(file.id)} className="inline-flex items-center gap-1 font-medium text-brand hover:underline"><ImageIcon size={13} /> View photo</button> : <span className="text-slate-400">No photo</span>}</dd>
+                      <dd>{file ? <button type="button" onClick={() => setShown({ id: file.id, label: f.label.en })} className="inline-flex items-center gap-1 font-medium text-brand hover:underline"><ImageIcon size={13} /> View photo</button> : <span className="text-slate-400">No photo</span>}</dd>
                     </div>
                   );
                 }
@@ -397,22 +399,33 @@ function AnswerList({ packetId, answers, files }: { packetId: number; answers: A
           </div>
         );
       })}
-      {shown && <PhotoViewer packetId={packetId} fileId={shown} onClose={() => setShown(null)} />}
+      {shown && <PhotoViewer packetId={packetId} fileId={shown.id} label={shown.label} onClose={() => setShown(null)} />}
     </div>
   );
 }
 
-function PhotoViewer({ packetId, fileId, onClose }: { packetId: number; fileId: number; onClose: () => void }) {
-  const f = trpc.workspace.intake.file.useQuery({ id: packetId, fileId });
+/** A photo the patient uploaded (insurance card, ID), in a window on top of the form. Opening it is logged. */
+function PhotoViewer({ packetId, fileId, label, onClose }: { packetId: number; fileId: number; label: string; onClose: () => void }) {
+  const f = trpc.workspace.intake.file.useQuery({ id: packetId, fileId }, { retry: 1 });
+  const ext = f.data ? ({ "image/png": "png", "image/webp": "webp" } as Record<string, string>)[f.data.dataUrl.slice(5, f.data.dataUrl.indexOf(";"))] ?? "jpg" : "jpg";
   return (
-    <div className="rounded-lg border border-slate-200 p-2 dark:border-slate-700">
-      {f.isLoading && <Loader2 className="m-4 animate-spin" />}
-      {f.data && <img src={f.data.dataUrl} alt="Patient photo" className="max-h-80 w-full rounded object-contain" />}
-      <div className="mt-2 flex justify-end gap-2">
-        {f.data && <a href={f.data.dataUrl} download={`${f.data.kind}.jpg`}><Btn size="sm" variant="secondary">Download</Btn></a>}
-        <Btn size="sm" variant="ghost" onClick={onClose}>Close</Btn>
-      </div>
-    </div>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>{label}</DialogTitle>
+          <DialogDescription>Uploaded by the patient with their forms. Opening it is logged.</DialogDescription>
+        </DialogHeader>
+        <div className="flex min-h-40 items-center justify-center rounded-lg bg-slate-50 p-2 dark:bg-slate-800/60">
+          {f.isLoading && <Loader2 className="animate-spin text-slate-400" />}
+          {f.error && <ErrorNote message={`Couldn't open the photo: ${f.error.message}`} />}
+          {f.data && <img src={f.data.dataUrl} alt={label} className="max-h-[70vh] w-full rounded object-contain" />}
+        </div>
+        <div className="flex justify-end gap-2">
+          {f.data && <a href={f.data.dataUrl} download={`${f.data.kind}.${ext}`}><Btn size="sm" variant="secondary">Download</Btn></a>}
+          <Btn size="sm" variant="ghost" onClick={onClose}>Close</Btn>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
