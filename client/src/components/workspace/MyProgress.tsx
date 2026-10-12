@@ -83,9 +83,12 @@ export function MyProgress({ isAdmin }: { isAdmin: boolean }) {
             <p className="text-sm font-semibold text-slate-900 dark:text-slate-50">My progress today</p>
             <span className="text-xs text-slate-500">{fmtDay(data.date)}</span>
           </div>
-          <ul className="max-h-[70vh] overflow-y-auto pb-1">
-            {data.metrics.map((m) => <MetricRow key={m.key} m={m} onGo={m.href ? () => { setOpen(false); setLocation(m.href!); } : undefined} />)}
-          </ul>
+          <div className="max-h-[70vh] overflow-y-auto pb-1">
+            <ul>
+              {data.metrics.map((m) => <MetricRow key={m.key} m={m} onGo={m.href ? () => { setOpen(false); setLocation(m.href!); } : undefined} />)}
+            </ul>
+            {open && <ProvidersToday />}
+          </div>
           <div className="flex items-center justify-between gap-2 border-t border-slate-100 dark:border-slate-700 px-4 py-2.5">
             <span className="text-[11px] text-slate-400">Updates every minute. Calls from RingCentral can take ~10 minutes to show.</span>
             {isAdmin && <Btn size="sm" variant="ghost" onClick={() => { setOpen(false); setGoalsOpen(true); }}><Settings2 size={13} /> Goals</Btn>}
@@ -94,6 +97,47 @@ export function MyProgress({ isAdmin }: { isAdmin: boolean }) {
       </Popover>
       {goalsOpen && <GoalsDialog onClose={() => setGoalsOpen(false)} />}
     </>
+  );
+}
+
+/**
+ * The providers this person works with (their clinic's; a provider sees themselves; everyone else sees all):
+ * patients seen today with a bar toward that provider's usual day, and their averages over the last 4 full weeks.
+ */
+function ProvidersToday() {
+  const q = trpc.workspace.metrics.providers.useQuery(undefined, { refetchInterval: 60_000, retry: false });
+  const rows = q.data?.providers ?? [];
+  if (q.isLoading) return <div className="px-4 py-3"><Loader2 size={14} className="animate-spin text-slate-400" /></div>;
+  if (!rows.length) return null;
+  return (
+    <div className="border-t border-slate-100 dark:border-slate-700">
+      <p className="px-4 pt-3 pb-1 text-xs font-semibold uppercase tracking-wider text-slate-500">Providers today</p>
+      <ul>
+        {rows.map((r) => {
+          const p = r.dailyAvg ? Math.min(1, r.today.seen / r.dailyAvg) : null;
+          return (
+            <li key={`${r.providerId ?? r.provider}`} className="flex gap-3 px-4 py-2.5">
+              <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"><Stethoscope size={14} /></span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-baseline justify-between gap-2">
+                  <span className="min-w-0 truncate text-sm text-slate-700 dark:text-slate-200">{r.provider}{(r.clinicToday ?? r.clinicUsual) && <span className="text-xs text-slate-400"> · {r.clinicToday ?? r.clinicUsual}</span>}</span>
+                  <b className="shrink-0 tabular-nums text-slate-900 dark:text-slate-50">{r.today.booked ? `${r.today.seen} seen` : "Off today"}</b>
+                </span>
+                {r.today.booked > 0 && p != null && (
+                  <span className="mt-1.5 block h-1.5 rounded-full bg-slate-100 dark:bg-slate-700 overflow-hidden">
+                    <span className={cn("block h-full rounded-full", p >= 1 ? "bg-emerald-500" : "bg-brand")} style={{ width: `${Math.round(p * 100)}%` }} />
+                  </span>
+                )}
+                <span className="mt-1 block text-[11px] text-slate-500">
+                  {[r.today.booked ? `${r.today.booked} booked today` : null, r.dailyAvg != null ? `usually ${r.dailyAvg} a day · ${r.weeklyAvg ?? "—"} a week` : null].filter(Boolean).join(" · ")}
+                </span>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="px-4 pb-2 text-[11px] text-slate-400">Seen = moved to arrived or later on Patient Flow, or imported from Practice Fusion. "Usually" = the last 4 full weeks.</p>
+    </div>
   );
 }
 

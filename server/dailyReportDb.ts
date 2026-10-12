@@ -6,7 +6,7 @@ import { WorkspaceError, audit, subjectCare, type WorkspaceActor } from "./works
 import { INJECTION_KINDS, formatProviderReport, injectionTag, type InjectionKind } from "../shared/dailyReport";
 import { OFFICE_TESTS, OFFICE_TEST_LABELS, type OfficeTest } from "../shared/officeTests";
 import { SEEN_STATUSES, nameKey } from "../shared/workspace";
-import { addDays, isValidDateStr, localDateStr } from "../shared/workforce";
+import { addDays, isValidDateStr, localDateStr, weekStart } from "../shared/workforce";
 import { dayKind, summarizeProvider, type ProviderDay } from "../shared/providerReport";
 
 async function db() {
@@ -303,4 +303,78 @@ export async function providerReport(actor: WorkspaceActor, input: { from: strin
       noShowRate: sumOf("seen") + sumOf("noShow") > 0 ? Math.round((sumOf("noShow") / (sumOf("seen") + sumOf("noShow"))) * 1000) / 10 : null,
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Providers' pace for the top-bar "My progress" panel (2026-10-12): each provider's patients seen today
+// against their usual day, and their averages over the last 4 full weeks. One schedule read shared by
+// everyone (cached a minute: every open panel refreshes each minute), then limited to the person's providers.
+// ---------------------------------------------------------------------------
+
+type PaceRow = { providerId: number | null; provider: string; clinicToday: string | null; clinicUsual: string | null; clinicIds: number[];
+  today: { seen: number; booked: number; left: number }; dailyAvg: number | null; weeklyAvg: number | null; daysWorked: number };
+let paceCache: { at: number; today: string; rows: PaceRow[] } | null = null;
+
+async function allProviderPace(): Promise<PaceRow[]> {
+  const today = localDateStr();
+  if (paceCache && paceCache.today === today && Date.now() - paceCache.at < 60_000) return paceCache.rows;
+  const d = await db();
+  const from = addDays(weekStart(today), -28);
+  const [visits, provRows, clinicRows] = await Promise.all([
+    d.select({ patientId: appointments.patientId, name: appointments.patientName, dob: appointments.dateOfBirth, providerId: appointments.providerId, providerName: appointments.providerName, clinicId: appointments.clinicId, status: appointments.status, date: appointments.date })
+      .from(appointments).where(and(gte(appointments.date, from), lte(appointments.date, today))),
+    d.select({ id: providers.id, name: providers.name }).from(providers),
+    d.select({ id: clinics.id, name: clinics.name }).from(clinics),
+  ]);
+  const provName = new Map(provRows.map((p) => [p.id, p.name]));
+  const clinicName = new Map(clinicRows.map((c) => [c.id, c.name]));
+  type Acc = { providerId: number | null; provider: string; days: Map<string, ProviderDay & { persons: Set<string> }>; clinicsToday: Set<number>; clinicCount: Map<number, number> };
+  const accs = new Map<string, Acc>();
+  for (const v of visits) {
+    if (!v.providerId && !v.providerName) continue;
+    const key = v.providerId ? `p${v.providerId}` : `n:${v.providerName!.toLowerCase()}`;
+    let a = accs.get(key);
+    if (!a) { a = { providerId: v.providerId, provider: (v.providerId ? provName.get(v.providerId) : null) ?? v.providerName ?? "Provider", days: new Map(), clinicsToday: new Set(), clinicCount: new Map() }; accs.set(key, a); }
+    let c = a.days.get(v.date);
+    if (!c) { c = { date: v.date, booked: 0, seen: 0, noShow: 0, cancelled: 0, stillScheduled: 0, newPatients: 0, newCcm: 0, newRpm: 0, persons: new Set() }; a.days.set(v.date, c); }
+    if (v.status === "cancelled") { c.cancelled++; continue; }
+    c.booked++;
+    if (v.clinicId) {
+      a.clinicCount.set(v.clinicId, (a.clinicCount.get(v.clinicId) ?? 0) + 1);
+      if (v.date === today) a.clinicsToday.add(v.clinicId);
+    }
+    if (v.status === "no_show") c.noShow++;
+    else if (v.status === "scheduled") c.stillScheduled++;
+    else if ((SEEN_STATUSES as string[]).includes(v.status)) {
+      const person = personOf({ patientId: v.patientId, name: v.name, dob: ymd(v.dob) });
+      if (!c.persons.has(person)) { c.persons.add(person); c.seen++; }
+    }
+  }
+  const range = { from, to: addDays(today, -1), today };
+  const rows: PaceRow[] = Array.from(accs.values()).map((a) => {
+    const days = Array.from(a.days.values()).map(({ persons: _p, ...x }) => x);
+    const t = a.days.get(today);
+    const s = summarizeProvider(days.filter((x) => x.date < today), range);
+    const usual = Array.from(a.clinicCount.entries()).sort((x, y) => y[1] - x[1])[0]?.[0] ?? null;
+    return {
+      providerId: a.providerId, provider: a.provider,
+      clinicToday: Array.from(a.clinicsToday).map((id) => clinicName.get(id) ?? "").filter(Boolean).join(", ") || null,
+      clinicUsual: usual ? clinicName.get(usual) ?? null : null,
+      clinicIds: Array.from(a.clinicCount.keys()),
+      today: { seen: t?.seen ?? 0, booked: t?.booked ?? 0, left: t?.stillScheduled ?? 0 },
+      dailyAvg: s.dailyAvg, weeklyAvg: s.weeklyAvg, daysWorked: s.daysWorked,
+    };
+  }).filter((r) => r.daysWorked > 0 || r.today.booked > 0)
+    .sort((a, b) => b.today.booked - a.today.booked || (b.dailyAvg ?? 0) - (a.dailyAvg ?? 0) || a.provider.localeCompare(b.provider));
+  paceCache = { at: Date.now(), today, rows };
+  return rows;
+}
+
+/** The providers someone works with: a provider sees themselves; clinic staff see their clinic's providers; everyone else sees all. */
+export async function providerPace(scope: { clinicIds: number[] | null; providerIds: number[] | null }) {
+  const rows = await allProviderPace();
+  const mine = scope.providerIds ? rows.filter((r) => r.providerId != null && scope.providerIds!.includes(r.providerId))
+    : scope.clinicIds ? rows.filter((r) => r.clinicIds.some((c) => scope.clinicIds!.includes(c)))
+    : rows;
+  return { date: localDateStr(), providers: mine.map(({ clinicIds: _c, ...r }) => r) };
 }

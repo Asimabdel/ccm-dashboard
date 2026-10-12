@@ -1145,6 +1145,12 @@ export const workspaceRouter = router({
       await actorFor(ctx, "tasks");
       return metrics.myMetrics({ id: ctx.user.id, name: ctx.user.name, role: ctx.user.role });
     }),
+    /** My progress → Providers: the providers this person works with — patients seen today vs their usual day. */
+    providers: protectedProcedure.query(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "tasks");
+      const scope = await ws.opportunityScope({ id: ctx.user.id, name: ctx.user.name, role: ctx.user.role });
+      return daily.providerPace({ clinicIds: scope.clinicIds ?? actor.clinicIds, providerIds: scope.providerIds });
+    }),
     /** My Work → My calls: the signed-in person's own phone numbers only (no one else's, any role). */
     myCalls: protectedProcedure.input(z.object({ date: dateStr.nullish() })).query(async ({ ctx, input }) => {
       await actorFor(ctx, "tasks");
