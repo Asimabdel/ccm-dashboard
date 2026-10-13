@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
-import { BarChart3, CalendarPlus, CheckSquare, EyeOff, Info, ListPlus, Loader2, PhoneCall, Radar, Square, CalendarClock, Clock, UserSearch } from "lucide-react";
+import { BarChart3, CalendarPlus, CheckSquare, ChevronDown, EyeOff, Info, ListPlus, Loader2, PhoneCall, Radar, Square, CalendarClock, Clock, Stethoscope, UserSearch } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { LogCallDialog, OutreachCell, SUGGESTED_SORT, SortHeader, SortNote, StatusTabs, type ListSortState } from "@/components/outreach/Outreach";
 import { CallingMode } from "@/components/outreach/CallingMode";
 import { CallResults } from "@/components/outreach/CallResults";
@@ -53,6 +54,51 @@ function ScopeNote({ clinicId }: { clinicId: number | null }) {
   );
 }
 
+/**
+ * Pick which providers' patients to look at (admins and office managers): all, or one or more. Every tab follows it
+ * (Call results is about callers, so it doesn't).
+ */
+function ProviderPicker({ value, onChange }: { value: number[]; onChange: (ids: number[]) => void }) {
+  const q = trpc.workspace.opportunities.providerOptions.useQuery(undefined, { staleTime: 5 * 60_000 });
+  const options = q.data ?? [];
+  const [open, setOpen] = useState(false);
+  const picked = options.filter((o) => value.includes(o.id));
+  const label = !value.length ? "All providers" : picked.length === 1 ? picked[0]!.name : `${value.length} providers`;
+  const toggle = (id: number) => onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2">
+      <span className="text-sm text-slate-500">Providers:</span>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button type="button" className={cn("inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-sm font-medium",
+            value.length ? "border-brand/50 bg-brand/5 text-slate-900 dark:text-slate-50" : "border-slate-200 bg-white text-slate-700 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200")}>
+            <Stethoscope size={14} className="text-slate-400" /> {label} <ChevronDown size={14} className="text-slate-400" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-72 p-1.5">
+          <button type="button" onClick={() => { onChange([]); setOpen(false); }}
+            className={cn("flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-800", !value.length && "font-semibold")}>
+            <input type="checkbox" readOnly checked={!value.length} className="accent-[hsl(17_66%_52%)]" tabIndex={-1} /> All providers
+          </button>
+          <div className="my-1 border-t border-slate-100 dark:border-slate-700" />
+          <div className="max-h-72 overflow-y-auto">
+            {q.isLoading && <Loader2 size={14} className="m-2 animate-spin text-slate-400" />}
+            {options.map((o) => (
+              <label key={o.id} className="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-800">
+                <input type="checkbox" checked={value.includes(o.id)} onChange={() => toggle(o.id)} className="accent-[hsl(17_66%_52%)]" />
+                <span className="min-w-0 flex-1 truncate text-slate-800 dark:text-slate-100">{o.name}{o.clinicName && <span className="text-xs text-slate-400"> · {o.clinicName}</span>}</span>
+                {!o.active && <span className="text-[10px] text-slate-400">not seeing patients</span>}
+              </label>
+            ))}
+          </div>
+        </PopoverContent>
+      </Popover>
+      {picked.length > 1 && <span className="text-xs text-slate-500">{picked.map((p) => p.name).join(", ")}</span>}
+      {value.length > 0 && <Btn size="sm" variant="ghost" onClick={() => onChange([])}>Show all</Btn>}
+    </div>
+  );
+}
+
 export default function OpportunitiesPage() {
   const { user } = useAuth({ redirectOnUnauthenticated: true });
   const ws = useWorkspace();
@@ -60,6 +106,10 @@ export default function OpportunitiesPage() {
   const t = params.get("tab");
   const tab = t === "openings" || t === "fill" || t === "testing" || t === "results" ? t : "patients";
   const fillProvider = Number(params.get("provider")) || null;
+  // ?providers=3,5 — the providers picked (admins and office managers); none = all.
+  const picked = (params.get("providers") ?? "").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  const scope = trpc.workspace.opportunities.scope.useQuery(undefined, { staleTime: 5 * 60_000, enabled: !!user });
+  const providerIds = scope.data?.canPickProviders && picked.length ? picked : null;
   const category = (params.get("category") as OpportunityCategory) || null;
 
   return (
@@ -69,6 +119,9 @@ export default function OpportunitiesPage() {
         subtitle="Patients who may need outreach, based on simple, visible rules. Suggestions only — nothing contacts a patient automatically."
       />
       {user && ws.caps?.opportunitiesView && <ScopeNote clinicId={ws.clinicId} />}
+      {user && ws.caps?.opportunitiesView && scope.data?.canPickProviders && tab !== "results" && (
+        <ProviderPicker value={picked} onChange={(ids) => setParams({ providers: ids.length ? ids.join(",") : null })} />
+      )}
       <div className="flex gap-1 mb-5 border-b border-slate-200 dark:border-slate-700 overflow-x-auto" role="tablist">
         {[
           { key: "patients", label: "Patient opportunities", icon: Radar },
@@ -90,22 +143,22 @@ export default function OpportunitiesPage() {
       </div>
       {user && ws.caps?.opportunitiesView === false && <ErrorNote message="You don't have access to Opportunity Finder." />}
       {user && ws.caps?.opportunitiesView && (
-        tab === "openings" ? <Openings clinicId={ws.clinicId} />
-          : tab === "fill" ? <FillSchedule providerParam={fillProvider} onProvider={(id) => setParams({ provider: id })} />
-          : tab === "testing" ? <TestingDue clinicId={ws.clinicId} />
+        tab === "openings" ? <Openings clinicId={ws.clinicId} providerIds={providerIds} />
+          : tab === "fill" ? <FillSchedule providerParam={fillProvider} onProvider={(id) => setParams({ provider: id })} providerIds={providerIds} />
+          : tab === "testing" ? <TestingDue clinicId={ws.clinicId} providerIds={providerIds} />
           : tab === "results" ? <CallResults />
-          : <PatientOpportunities clinicId={ws.clinicId} category={category} onCategory={(c) => setParams({ category: c })} />
+          : <PatientOpportunities clinicId={ws.clinicId} providerIds={providerIds} category={category} onCategory={(c) => setParams({ category: c })} />
       )}
     </CCMDashboardLayout>
   );
 }
 
-function PatientOpportunities({ clinicId, category, onCategory }: { clinicId: number | null; category: OpportunityCategory | null; onCategory: (c: string | null) => void }) {
+function PatientOpportunities({ clinicId, providerIds, category, onCategory }: { clinicId: number | null; providerIds: number[] | null; category: OpportunityCategory | null; onCategory: (c: string | null) => void }) {
   const { caps } = useWorkspace();
-  const summary = trpc.workspace.opportunities.summary.useQuery({ clinicId });
+  const summary = trpc.workspace.opportunities.summary.useQuery({ clinicId, providerIds });
   const [status, setStatus] = useState<OutreachStatus>("to_call");
   const [sort, setSort] = useState<ListSortState>(SUGGESTED_SORT);
-  const list = trpc.workspace.opportunities.list.useQuery({ category: category ?? "missed_appointment", clinicId, status, sort: sort.by, dir: sort.dir }, { enabled: !!category, placeholderData: (prev) => prev });
+  const list = trpc.workspace.opportunities.list.useQuery({ category: category ?? "missed_appointment", clinicId, providerIds, status, sort: sort.by, dir: sort.dir }, { enabled: !!category, placeholderData: (prev) => prev });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [taskOpen, setTaskOpen] = useState(false);
   const [logFor, setLogFor] = useState<{ key: string; name: string } | null>(null);
@@ -339,10 +392,10 @@ function CreateTasksDialog({ open, onOpenChange, count, category, pending, onSub
   );
 }
 
-function Openings({ clinicId }: { clinicId: number | null }) {
+function Openings({ clinicId, providerIds }: { clinicId: number | null; providerIds: number[] | null }) {
   const { clinics } = useWorkspace();
   const [days, setDays] = useState(3);
-  const q = trpc.workspace.openings.useQuery({ clinicId, days });
+  const q = trpc.workspace.openings.useQuery({ clinicId, days, providerIds });
   const clinicName = (id: number | null) => clinics.find((c) => c.id === id)?.name ?? "Clinic";
   const today = localDateStr();
 

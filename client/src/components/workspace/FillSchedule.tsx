@@ -28,9 +28,9 @@ const csvEscape = (v: unknown) => { const s = String(v ?? ""); return /[",\r\n]/
  * Fill a provider's schedule: patients most likely to book with them, ranked by a
  * visible points score. Suggestions only — staff call, and book in Practice Fusion.
  */
-export function FillSchedule({ providerParam, onProvider }: { providerParam: number | null; onProvider: (id: number | null) => void }) {
+export function FillSchedule({ providerParam, onProvider, providerIds = null }: { providerParam: number | null; onProvider: (id: number | null) => void; providerIds?: number[] | null }) {
   const { caps } = useWorkspace();
-  const providers = trpc.workspace.opportunities.fillProviders.useQuery();
+  const providers = trpc.workspace.opportunities.fillProviders.useQuery({ providerIds });
   const [includeOtherClinics, setIncludeOtherClinics] = useState(false);
   const [status, setStatus] = useState<OutreachStatus>("to_call");
   const [sort, setSort] = useState<ListSortState>(SUGGESTED_SORT);

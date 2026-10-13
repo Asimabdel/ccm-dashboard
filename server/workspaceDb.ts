@@ -1420,6 +1420,19 @@ const FILL_CATEGORY = "schedule_fill";
 const FILL_LIST_LIMIT = 1000;
 
 /** Providers to fill for, with how busy they've been lately (from the imported schedule). */
+/** Every provider, for the Opportunity Finder's provider picker (the ones who saw patients lately first). */
+export async function providerOptions() {
+  const d = await db();
+  const [provs, subjects, clinicRows] = await Promise.all([
+    d.select({ id: providers.id, name: providers.name, clinicId: providers.clinicId }).from(providers),
+    loadScheduleSubjects(),
+    d.select({ id: clinics.id, name: clinics.name }).from(clinics),
+  ]);
+  const activity = providerActivity(Array.from(subjects.values()).flatMap((s) => s.visits));
+  return provs.map((p) => ({ id: p.id, name: p.name, clinicName: clinicRows.find((c) => c.id === p.clinicId)?.name ?? null, active: activity.get(`id:${p.id}`)?.active ?? false }))
+    .sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name));
+}
+
 export async function fillProviders(actor: WorkspaceActor) {
   const d = await db();
   const scope = scopeClinics(actor, null);

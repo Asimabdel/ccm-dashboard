@@ -101,10 +101,18 @@ async function taskActor(ctx: Ctx): Promise<ws.WorkspaceActor> {
 
 /** Map data-layer errors to tRPC errors with user-safe messages. */
 /** Opportunity Finder (every tab): care coordinators / front desk see their clinic's patients, providers their own. */
-async function oppActor(ctx: Ctx, cap: WorkspaceCap): Promise<ws.WorkspaceActor> {
+/** Who can pick providers in the Opportunity Finder (2026-10-13, the practice's choice: admins and Fatima, the office manager). */
+const PROVIDER_FILTER_ROLES = ["admin", "office_manager"];
+/** Picked providers for the Opportunity Finder (none = all the person can see). */
+const providerFilter = z.array(z.number().int().positive()).max(30).nullish();
+
+async function oppActor(ctx: Ctx, cap: WorkspaceCap, pickedProviders?: number[] | null): Promise<ws.WorkspaceActor> {
   const actor = await actorFor(ctx, cap);
   const scope = await ws.opportunityScope({ id: ctx.user.id, name: ctx.user.name, role: ctx.user.role });
-  return { ...actor, clinicIds: scope.clinicIds ?? actor.clinicIds, providerIds: scope.providerIds };
+  let providerIds = scope.providerIds;
+  // Narrow to the picked providers (never wider than what the person may see).
+  if (pickedProviders?.length && PROVIDER_FILTER_ROLES.includes(ctx.user.role)) providerIds = providerIds ? providerIds.filter((id) => pickedProviders.includes(id)) : pickedProviders;
+  return { ...actor, clinicIds: scope.clinicIds ?? actor.clinicIds, providerIds };
 }
 
 /** Who / where, for a document's audit trail and signature certificate. */
@@ -404,8 +412,8 @@ export const workspaceRouter = router({
     }),
   }),
 
-  openings: protectedProcedure.input(z.object({ clinicId, days: z.number().int().min(0).max(14).default(3) })).query(async ({ ctx, input }) => {
-    const actor = await oppActor(ctx, "opportunitiesView");
+  openings: protectedProcedure.input(z.object({ clinicId, days: z.number().int().min(0).max(14).default(3), providerIds: providerFilter })).query(async ({ ctx, input }) => {
+    const actor = await oppActor(ctx, "opportunitiesView", input.providerIds);
     return run(() => ws.openings(actor, input));
   }),
 
@@ -1188,9 +1196,10 @@ export const workspaceRouter = router({
         states: z.array(z.enum(["due", "no_record", "due_soon", "needs_info", "current", "declined", "not_applicable"])).min(1).default(["due", "due_soon"]),
         upcomingDays: z.number().int().min(0).max(60).nullish(),
         includeActioned: z.boolean().default(false),
+        providerIds: providerFilter,
       }))
       .query(async ({ ctx, input }) => {
-        const actor = await oppActor(ctx, "opportunitiesView");
+        const actor = await oppActor(ctx, "opportunitiesView", input.providerIds);
         return run(() => testing.testingOverview(actor, input as Parameters<typeof testing.testingOverview>[1]));
       }),
     person: protectedProcedure.input(z.string().regex(subjectKeyRe)).query(async ({ ctx, input }) => {
@@ -1242,21 +1251,27 @@ export const workspaceRouter = router({
     scope: protectedProcedure.query(async ({ ctx }) => {
       await actorFor(ctx, "opportunitiesView");
       const sc = await ws.opportunityScope({ id: ctx.user.id, name: ctx.user.name, role: ctx.user.role });
-      return { label: sc.label, clinicIds: sc.clinicIds, limitedToProviders: !!sc.providerIds };
+      return { label: sc.label, clinicIds: sc.clinicIds, limitedToProviders: !!sc.providerIds, canPickProviders: PROVIDER_FILTER_ROLES.includes(ctx.user.role) };
     }),
-    summary: protectedProcedure.input(z.object({ clinicId })).query(async ({ ctx, input }) => {
-      const actor = await oppActor(ctx, "opportunitiesView");
+    /** The providers to pick from (admins and office managers). */
+    providerOptions: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "opportunitiesView");
+      if (!PROVIDER_FILTER_ROLES.includes(ctx.user.role)) return [];
+      return run(() => ws.providerOptions());
+    }),
+    summary: protectedProcedure.input(z.object({ clinicId, providerIds: providerFilter })).query(async ({ ctx, input }) => {
+      const actor = await oppActor(ctx, "opportunitiesView", input.providerIds);
       return run(() => ws.opportunitySummary(actor, input.clinicId));
     }),
     list: protectedProcedure
-      .input(z.object({ category: z.enum(OPPORTUNITY_CATEGORY_LIST as [string, ...string[]]), clinicId, providerId: z.number().int().positive().nullish(), status: z.enum(OUTREACH_STATUS_LIST as [string, ...string[]]).default("to_call"), ...listSort }))
+      .input(z.object({ category: z.enum(OPPORTUNITY_CATEGORY_LIST as [string, ...string[]]), clinicId, providerId: z.number().int().positive().nullish(), providerIds: providerFilter, status: z.enum(OUTREACH_STATUS_LIST as [string, ...string[]]).default("to_call"), ...listSort }))
       .query(async ({ ctx, input }) => {
-        const actor = await oppActor(ctx, "opportunitiesView");
+        const actor = await oppActor(ctx, "opportunitiesView", input.providerIds);
         return run(() => ws.opportunityList(actor, input as Parameters<typeof ws.opportunityList>[1]));
       }),
     // Fill a provider's schedule: who is most likely to book with them.
-    fillProviders: protectedProcedure.query(async ({ ctx }) => {
-      const actor = await oppActor(ctx, "opportunitiesView");
+    fillProviders: protectedProcedure.input(z.object({ providerIds: providerFilter }).optional()).query(async ({ ctx, input }) => {
+      const actor = await oppActor(ctx, "opportunitiesView", input?.providerIds);
       return run(() => ws.fillProviders(actor));
     }),
     fill: protectedProcedure

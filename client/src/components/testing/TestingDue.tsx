@@ -21,7 +21,7 @@ const STATE_FILTERS: { key: TestState; hint: string }[] = [
 ];
 
 /** Opportunity Finder tab: who's due for which tests, with scheduling tasks. */
-export function TestingDue({ clinicId }: { clinicId: number | null }) {
+export function TestingDue({ clinicId, providerIds = null }: { clinicId: number | null; providerIds?: number[] | null }) {
   const { user } = useAuth();
   const { caps } = useWorkspace();
   const [states, setStates] = useState<TestState[]>(["due", "due_soon"]);
@@ -30,7 +30,7 @@ export function TestingDue({ clinicId }: { clinicId: number | null }) {
   const [includeActioned, setIncludeActioned] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<{ key: string; name: string } | null>(null);
-  const q = trpc.workspace.testing.overview.useQuery({ clinicId, test, states, upcomingDays: upcoming ? 14 : null, includeActioned });
+  const q = trpc.workspace.testing.overview.useQuery({ clinicId, test, states, upcomingDays: upcoming ? 14 : null, includeActioned, providerIds });
   const utils = trpc.useUtils();
   const canAct = !!caps?.opportunitiesAct;
   const isAdmin = user?.role === "admin";
