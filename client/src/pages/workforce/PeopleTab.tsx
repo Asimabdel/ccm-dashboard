@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Link } from "wouter";
 import { Clock, Loader2, Pencil, Shuffle, UserPlus } from "lucide-react";
 import { Field, Modal, btnPrimary, inputCls } from "./ui";
+import { ClinicPlaces } from "./ClinicPlaces";
 import { fmtDay, localDateStr } from "@shared/workforce";
 
 interface ProfileDraft {
@@ -29,6 +30,7 @@ export function PeopleTab() {
 
   return (
     <div>
+      <ClinicPlaces />
       <div className="flex items-start justify-between gap-4 mb-4">
         <p className="text-sm text-slate-500 max-w-2xl">
           Your whole team. Give each employee a job role and home clinic so they show up on the schedule, get their checklist, and can be found for coverage. Turn on <b>Uses time clock</b> for hourly staff — only they can clock in, and their hours show on Timesheets.

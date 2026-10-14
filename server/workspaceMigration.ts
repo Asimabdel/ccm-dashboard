@@ -1314,6 +1314,16 @@ const INTAKE_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: "chatConversations", column: "postingRestricted", ddl: "`postingRestricted` boolean NOT NULL DEFAULT false AFTER `lastMessageAt`" },
   // Added 2026-10-04: time clock — lunch breaks, and staff's own cell for reminder texts.
   { table: "timePunches", column: "outReason", ddl: "`outReason` varchar(10) NULL AFTER `minutesLate`" },
+  // Added 2026-10-14: where people clock in / out (the check and distance only) and each clinic's location / internet.
+  { table: "timePunches", column: "inCheck", ddl: "`inCheck` varchar(12) NULL AFTER `outReason`" },
+  { table: "timePunches", column: "inDistanceM", ddl: "`inDistanceM` int NULL AFTER `inCheck`" },
+  { table: "timePunches", column: "inNearClinicId", ddl: "`inNearClinicId` int NULL AFTER `inDistanceM`" },
+  { table: "timePunches", column: "outCheck", ddl: "`outCheck` varchar(12) NULL AFTER `inNearClinicId`" },
+  { table: "timePunches", column: "outDistanceM", ddl: "`outDistanceM` int NULL AFTER `outCheck`" },
+  { table: "clinics", column: "lat", ddl: "`lat` double NULL AFTER `phone`" },
+  { table: "clinics", column: "lng", ddl: "`lng` double NULL AFTER `lat`" },
+  { table: "clinics", column: "clockRadiusM", ddl: "`clockRadiusM` int NULL AFTER `lng`" },
+  { table: "clinics", column: "clockNetworks", ddl: "`clockNetworks` json NULL AFTER `clockRadiusM`" },
   { table: "staffProfiles", column: "mobilePhone", ddl: "`mobilePhone` varchar(10) NULL AFTER `hireDate`" },
   { table: "staffProfiles", column: "textReminders", ddl: "`textReminders` boolean NOT NULL DEFAULT false AFTER `mobilePhone`" },
   { table: "staffProfiles", column: "calendarToken", ddl: "`calendarToken` varchar(40) NULL UNIQUE AFTER `textReminders`" },

@@ -32,6 +32,16 @@ async function requireManager(ctx: Ctx): Promise<Manager> {
   return { clinicId, staff: await officeStaff(ctx.user.id, clinicId) };
 }
 const manages = (m: Manager, userId: number) => !m.staff || m.staff.has(userId);
+/** The internet address a request came from (for the clinic-internet clock-in check; never stored on a punch). */
+function clientIp(ctx: Ctx): string | null {
+  const req = (ctx as { req?: { headers?: Record<string, unknown>; ip?: string } }).req;
+  const fwd = req?.headers?.["x-forwarded-for"];
+  return (typeof fwd === "string" ? fwd.split(",")[0]!.trim() : null) || req?.ip || null;
+}
+/** The device's location sent with a clock in / out (optional; clocking in needs it unless on the clinic's internet). */
+const clockWhereInput = z.object({ position: z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180), accuracy: z.number().min(0).max(100_000) }).nullish() }).optional();
+const whereOf = (ctx: Ctx, input?: { position?: { lat: number; lng: number; accuracy: number } | null }) => ({ ip: clientIp(ctx), position: input?.position ?? null });
+
 /** After a punch fix: close the person's late / no-show / clock-out alert tasks for those days if nothing's left. */
 async function afterFix(userId: number, dates: string[], byUserId: number) {
   for (const date of Array.from(new Set(dates))) await fixes.resolveAlertTasks(userId, date, byUserId).catch(() => 0);
@@ -287,6 +297,43 @@ export const workforceRouter = router({
     }),
   }),
 
+  // ---- Clinic locations for the clock-in check (admins: every clinic; office managers: theirs) ----
+  clinicPlaces: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      const m = await requireManager(ctx);
+      const ip = clientIp(ctx);
+      const places = await wf.clinicPlaces();
+      const { normalizeIp } = await import("../../shared/clockLocation");
+      return {
+        yourNetwork: ip ? normalizeIp(ip) : null,
+        clinics: places.filter((c) => !m.clinicId || c.id === m.clinicId).map((c) => ({ ...c, onThisNetwork: !!ip && c.networks.map(normalizeIp).includes(normalizeIp(ip)) })),
+      };
+    }),
+    setLocation: protectedProcedure
+      .input(z.object({ clinicId: z.number().int().positive(), lat: z.number().min(-90).max(90).nullable(), lng: z.number().min(-180).max(180).nullable(), radiusM: z.number().int().min(50).max(2000).nullable() }))
+      .mutation(async ({ ctx, input }) => {
+        const m = await requireManager(ctx);
+        needClinic(m, input.clinicId);
+        await wf.setClinicPlace(input.clinicId, { lat: input.lat, lng: input.lng, radiusM: input.radiusM });
+        return { success: true };
+      }),
+    /** Add (or remove) the internet connection this request came from as one of the clinic's. */
+    addThisNetwork: protectedProcedure.input(z.object({ clinicId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const m = await requireManager(ctx);
+      needClinic(m, input.clinicId);
+      const ip = clientIp(ctx);
+      if (!ip) throw new TRPCError({ code: "BAD_REQUEST", message: "Couldn't tell which internet connection you're on." });
+      await wf.setClinicNetwork(input.clinicId, ip, true);
+      return { success: true };
+    }),
+    removeNetwork: protectedProcedure.input(z.object({ clinicId: z.number().int().positive(), network: z.string().min(3).max(64) })).mutation(async ({ ctx, input }) => {
+      const m = await requireManager(ctx);
+      needClinic(m, input.clinicId);
+      await wf.setClinicNetwork(input.clinicId, input.network, false);
+      return { success: true };
+    }),
+  }),
+
   // ---- Fixing punches: the Needs fixing list, the day view, "Looks right" / "Wasn't in" ----
   fixes: router({
     list: protectedProcedure.input(z.object({ days: z.number().int().refine((n) => (fixes.FIX_LOOKBACK_DAYS as readonly number[]).includes(n)).optional() }).optional())
@@ -365,11 +412,11 @@ export const workforceRouter = router({
   // ---- Self-service: every procedure here is scoped to ctx.user.id ----
   me: router({
     today: protectedProcedure.query(async ({ ctx }) => wf.getMyDay(ctx.user.id)),
-    clockIn: protectedProcedure.mutation(async ({ ctx }) => unwrap(await wf.clockIn(ctx.user.id))),
-    clockOut: protectedProcedure.mutation(async ({ ctx }) => unwrap(await wf.clockOut(ctx.user.id))),
+    clockIn: protectedProcedure.input(clockWhereInput).mutation(async ({ ctx, input }) => unwrap(await wf.clockIn(ctx.user.id, whereOf(ctx, input)))),
+    clockOut: protectedProcedure.input(clockWhereInput).mutation(async ({ ctx, input }) => unwrap(await wf.clockOut(ctx.user.id, null, whereOf(ctx, input)))),
     /** Lunch: Start lunch clocks out for a break; End lunch clocks back in (not counted late). */
-    startLunch: protectedProcedure.mutation(async ({ ctx }) => unwrap(await wf.clockOut(ctx.user.id, "lunch"))),
-    endLunch: protectedProcedure.mutation(async ({ ctx }) => unwrap(await wf.clockIn(ctx.user.id))),
+    startLunch: protectedProcedure.input(clockWhereInput).mutation(async ({ ctx, input }) => unwrap(await wf.clockOut(ctx.user.id, "lunch", whereOf(ctx, input)))),
+    endLunch: protectedProcedure.input(clockWhereInput).mutation(async ({ ctx, input }) => unwrap(await wf.clockIn(ctx.user.id, whereOf(ctx, input)))),
     /** Shift reminder texts to my own cell (I turn them on myself). */
     reminders: protectedProcedure.query(async ({ ctx }) => wf.getMyReminders(ctx.user.id)),
     saveReminders: protectedProcedure

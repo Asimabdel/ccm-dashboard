@@ -236,6 +236,18 @@ export const handler = async (event: any, context: any) => {
     const { opportunityOutcomes } = await import("../opportunityOutcomes");
     return opportunityOutcomes({ asOf: typeof event.asOf === "string" && /^\d{4}-\d{2}-\d{2}$/.test(event.asOf) ? event.asOf : "2026-09-28" });
   }
+  // Clinic locations for the clock-in check: list (names, addresses, what's set) or set {set:[{id,lat,lng}]} (IAM-only).
+  if (event && event.__job === "clinic-places" && !event.requestContext && !event.version) {
+    const wfdb = await import("../workforceDb");
+    const list = Array.isArray(event.set) ? event.set as { id: number; lat: number; lng: number }[] : [];
+    for (const x of list) {
+      if (Number.isInteger(x.id) && Math.abs(x.lat) <= 90 && Math.abs(x.lng) <= 180) await wfdb.setClinicPlace(x.id, { lat: x.lat, lng: x.lng, radiusM: null });
+    }
+    const { getDb } = await import("../db");
+    const { clinics } = await import("../../drizzle/schema");
+    const d = await getDb();
+    return d ? await d.select({ id: clinics.id, name: clinics.name, location: clinics.location, address: clinics.address, lat: clinics.lat, lng: clinics.lng, networks: clinics.clockNetworks }).from(clinics) : [];
+  }
   if (event && event.__job === "ccm-dx-stats" && !event.requestContext && !event.version) {
     const { ccmDiagnosisStats } = await import("../diagnosisStats");
     return ccmDiagnosisStats();

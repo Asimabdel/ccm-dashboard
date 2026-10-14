@@ -4,6 +4,7 @@
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { getDb } from "./db";
+import { checkClockLocation, type ClinicPlace, type ClockCheck, type DevicePosition } from "../shared/clockLocation";
 import {
   users, clinics, notifications, jobRoles, jobDuties, staffProfiles, shifts,
   timeOffRequests, timePunches, dutyCompletions, performanceNotes, providers,
@@ -509,7 +510,34 @@ async function missedClockOuts(userId: number) {
     .orderBy(asc(timePunches.workDate));
 }
 
-export async function clockIn(userId: number): Promise<{ id: number; minutesLate: number } | { error: string }> {
+// ---- Where people clock in / out (shared/clockLocation has the rules) ----
+
+/** Each clinic's location and internet connections for the clock-in check. */
+export async function clinicPlaces(): Promise<ClinicPlace[]> {
+  const db = await requireDb();
+  const rows = await db.select({ id: clinics.id, name: clinics.name, lat: clinics.lat, lng: clinics.lng, radiusM: clinics.clockRadiusM, networks: clinics.clockNetworks }).from(clinics);
+  return rows.map((r) => ({ id: r.id, name: r.name, lat: r.lat ?? null, lng: r.lng ?? null, radiusM: r.radiusM ?? null, networks: Array.isArray(r.networks) ? r.networks.map(String) : [] }));
+}
+
+export async function setClinicPlace(clinicId: number, input: { lat: number | null; lng: number | null; radiusM: number | null }) {
+  await (await requireDb()).update(clinics).set({ lat: input.lat, lng: input.lng, clockRadiusM: input.radiusM }).where(eq(clinics.id, clinicId));
+}
+
+export async function setClinicNetwork(clinicId: number, ip: string, add: boolean) {
+  const db = await requireDb();
+  const { normalizeIp } = await import("../shared/clockLocation");
+  const [c] = await db.select({ networks: clinics.clockNetworks }).from(clinics).where(eq(clinics.id, clinicId)).limit(1);
+  const list = (Array.isArray(c?.networks) ? c!.networks.map(String) : []).map(normalizeIp).filter(Boolean);
+  const ipN = normalizeIp(ip);
+  const next = add ? Array.from(new Set([...list, ipN])).slice(-10) : list.filter((x) => x !== ipN);
+  await db.update(clinics).set({ clockNetworks: next }).where(eq(clinics.id, clinicId));
+}
+
+export interface ClockWhere { ip: string | null; position: DevicePosition | null }
+
+export const LOCATION_NEEDED = "Turn on location to clock in: allow location for mypcpcare.com when your browser asks (or in its settings), or connect to the clinic's Wi-Fi, then try again.";
+
+export async function clockIn(userId: number, where: ClockWhere = { ip: null, position: null }): Promise<{ id: number; minutesLate: number; check: ClockCheck; distanceM: number | null; clinicName: string | null } | { error: string }> {
   const db = await requireDb();
   const [clockProfile] = await db.select({ usesTimeClock: staffProfiles.usesTimeClock, active: staffProfiles.active }).from(staffProfiles).where(eq(staffProfiles.userId, userId)).limit(1);
   if (!clockProfile?.usesTimeClock || !clockProfile.active) {
@@ -523,6 +551,11 @@ export async function clockIn(userId: number): Promise<{ id: number; minutesLate
   const todays = await db.select().from(shifts).where(and(eq(shifts.userId, userId), eq(shifts.date, today), eq(shifts.status, "scheduled"))).orderBy(asc(shifts.startTime));
   const shift = todays.find((s) => timeToMinutes(s.endTime) > nowMin) ?? todays[todays.length - 1];
   const [profile] = await db.select().from(staffProfiles).where(eq(staffProfiles.userId, userId)).limit(1);
+  // Where they are: their shift's clinic (a remote shift isn't checked), else their home clinic.
+  const places = await clinicPlaces();
+  const clinicId = shift ? shift.clinicId : profile?.homeClinicId ?? null;
+  const loc = checkClockLocation({ clinicId, remote: !!shift && shift.clinicId == null, clinics: places, ip: where.ip, position: where.position });
+  if (loc.check === "unknown") return { error: LOCATION_NEEDED };
   // Lateness counts only for the first punch of a shift (not the return from lunch).
   let minutesLate = 0;
   if (shift && attendanceTracked(profile, today)) {
@@ -533,17 +566,21 @@ export async function clockIn(userId: number): Promise<{ id: number; minutesLate
   const res = await db.insert(timePunches).values({
     userId, clinicId: shift?.clinicId ?? profile?.homeClinicId ?? null, shiftId: shift?.id ?? null,
     workDate: today, clockInAt: now, minutesLate,
+    inCheck: loc.check, inDistanceM: loc.distanceM, inNearClinicId: loc.check === "other_clinic" ? loc.nearClinicId : null,
   });
-  return { id: res?.[0]?.insertId as number, minutesLate };
+  return { id: res?.[0]?.insertId as number, minutesLate, check: loc.check, distanceM: loc.distanceM, clinicName: places.find((c) => c.id === clinicId)?.name ?? null };
 }
 
 /** Clock out, or start lunch (the punch ends as "lunch"; End lunch clocks back in and isn't counted late). */
-export async function clockOut(userId: number, reason: "lunch" | null = null): Promise<{ success: true } | { error: string }> {
+export async function clockOut(userId: number, reason: "lunch" | null = null, where: ClockWhere = { ip: null, position: null }): Promise<{ success: true; check: ClockCheck } | { error: string }> {
   const db = await requireDb();
   const open = await getOpenPunch(userId);
   if (!open) return { error: "You're not clocked in." };
-  await db.update(timePunches).set({ clockOutAt: new Date(), outReason: reason }).where(eq(timePunches.id, open.id));
-  return { success: true };
+  // Where they clocked out (never blocks: nobody gets stuck on the clock).
+  const [shift] = open.shiftId ? await db.select({ clinicId: shifts.clinicId }).from(shifts).where(eq(shifts.id, open.shiftId)).limit(1) : [];
+  const loc = checkClockLocation({ clinicId: shift ? shift.clinicId : open.clinicId, remote: !!shift && shift.clinicId == null, clinics: await clinicPlaces(), ip: where.ip, position: where.position });
+  await db.update(timePunches).set({ clockOutAt: new Date(), outReason: reason, outCheck: loc.check, outDistanceM: loc.distanceM }).where(eq(timePunches.id, open.id));
+  return { success: true, check: loc.check };
 }
 
 /** My shift reminder texts: my own cell and whether I want them (staff turn this on themselves). */
@@ -915,6 +952,8 @@ export async function getTimesheet(from: string, to: string) {
       .from(shifts).where(and(gte(shifts.date, from), lte(shifts.date, to), eq(shifts.status, "scheduled"))),
   ]);
   const { shiftForPunch } = await import("../shared/punchFixes");
+  const { clockCheckLabel } = await import("../shared/clockLocation");
+  const allClinicNames = new Map((await db.select({ id: clinics.id, name: clinics.name }).from(clinics)).map((c) => [c.id, c.name]));
   const scheduled = new Map<number, number>();
   shiftRows.forEach((s) => scheduled.set(s.userId, (scheduled.get(s.userId) ?? 0) + shiftMinutes(s.startTime, s.endTime)));
   const profileBy = new Map(profileRows.map((r) => [r.userId, r]));
@@ -964,6 +1003,9 @@ export async function getTimesheet(from: string, to: string) {
               minutesLate: p.minutesLate, note: p.note, edited: !!p.editedByUserId, clinicName, lunch: p.outReason === "lunch",
               auto: p.outReason === "auto", missingClockOut: !p.clockOutAt && p.workDate < today,
               shift: s ? { startTime: s.startTime, endTime: s.endTime } : null,
+              // Where they clocked in / out, when it wasn't at their clinic (e.g. "away from Katy (2.3 km)").
+              whereIn: clockCheckLabel(p.inCheck, p.inDistanceM, p.inNearClinicId ? allClinicNames.get(p.inNearClinicId) : null, clinicName),
+              whereOut: clockCheckLabel(p.outCheck, p.outDistanceM, null, clinicName),
             };
           }),
         };

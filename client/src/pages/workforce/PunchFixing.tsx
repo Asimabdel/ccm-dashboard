@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, CalendarDays, Check, ChevronLeft, ChevronRight, Loader2, Plus, Trash2, X } from "lucide-react";
+import { AlertTriangle, CalendarDays, Check, ChevronLeft, ChevronRight, Loader2, MapPin, Plus, Trash2, X } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { addDays, fmtDay, fmtDuration, fmtTime, localDateStr } from "@shared/workforce";
 import { clinicLocalToUtc } from "@shared/workspace";
@@ -15,6 +15,8 @@ type Shift = { startTime: string; endTime: string } | null;
 export interface PunchView {
   id: number; date: string; clockInAt: Date | string; clockOutAt: Date | string | null; minutes: number;
   lunch?: boolean; auto?: boolean; edited?: boolean; note?: string | null; shift?: Shift; missing?: boolean;
+  /** Where they clocked in / out when it wasn't at their clinic ("away from Katy (2.3 km)"). */
+  whereIn?: string | null; whereOut?: string | null;
 }
 
 const nowHhmm = () => clinicHhmm(new Date());
@@ -120,6 +122,8 @@ export function PunchLine({ punch, onDeleted }: { punch: PunchView; onDeleted?: 
       </button>
       {punch.lunch && <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">lunch</span>}
       {punch.auto && <span className="rounded-full bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700">auto clock-out</span>}
+      {punch.whereIn && <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800" title="Where they clocked in"><MapPin size={10} /> in {punch.whereIn}</span>}
+      {punch.whereOut && <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800" title="Where they clocked out"><MapPin size={10} /> out {punch.whereOut}</span>}
       {punch.edited && !punch.auto && <span className="text-[10px] text-slate-400">edited</span>}
       {punch.clockOutAt && <span className="text-xs tabular-nums text-slate-500">{fmtDuration(punch.minutes)}</span>}
       {punch.note && <span className="max-w-[220px] truncate text-xs text-slate-400" title={punch.note}>{punch.note}</span>}
@@ -351,7 +355,7 @@ export function DayPanel({ date, setDate }: { date: string; setDate: (d: string)
   );
 }
 
-type SheetPunch = { id: number; workDate: string; clockInAt: Date | string; clockOutAt: Date | string | null; minutes: number; minutesLate: number; lunch: boolean; auto: boolean; edited: boolean; note: string | null; missingClockOut: boolean; clinicName: string | null; shift: { startTime: string; endTime: string } | null };
+type SheetPunch = { id: number; workDate: string; clockInAt: Date | string; clockOutAt: Date | string | null; minutes: number; minutesLate: number; lunch: boolean; auto: boolean; edited: boolean; note: string | null; missingClockOut: boolean; clinicName: string | null; shift: { startTime: string; endTime: string } | null; whereIn?: string | null; whereOut?: string | null };
 
 /** A person's punches by day (click a time to change it). */
 export function PunchDays({ punches }: { punches: SheetPunch[] }) {

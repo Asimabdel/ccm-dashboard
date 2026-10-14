@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { awayNote, getClockPosition, type ClockPosition } from "@/lib/clockPosition";
 import { localMinutes, timeToMinutes } from "@shared/workforce";
 import { clockNudge, dayWork, type ClockNudge, type PunchLike } from "@shared/attendance";
 
@@ -11,13 +13,27 @@ export function useClock(enabled = true) {
   const utils = trpc.useUtils();
   const day = trpc.workforce.me.today.useQuery(undefined, { enabled, refetchInterval: 60_000, refetchIntervalInBackground: true, staleTime: 20_000 });
   const refresh = () => { void utils.workforce.me.today.invalidate(); void utils.workforce.me.attendance.invalidate(); };
+  const [locating, setLocating] = useState(false);
+  const locationError = (e: { message: string }) => toast.error(e.message, { duration: e.message.startsWith("Turn on location") ? 12_000 : 5_000 });
   const clockIn = trpc.workforce.me.clockIn.useMutation({
-    onSuccess: (r) => { refresh(); r.minutesLate > 0 ? toast.warning(`Clocked in, ${r.minutesLate} min after your shift start`) : toast.success("Clocked in. Have a great shift!"); },
-    onError: (e) => toast.error(e.message),
+    onSuccess: (r) => {
+      refresh();
+      r.minutesLate > 0 ? toast.warning(`Clocked in, ${r.minutesLate} min after your shift start`) : toast.success("Clocked in. Have a great shift!");
+      const note = awayNote(r);
+      if (note) toast.info(note, { duration: 8_000 });
+    },
+    onError: locationError,
   });
   const clockOut = trpc.workforce.me.clockOut.useMutation({ onSuccess: () => { refresh(); toast.success("Clocked out. See you next time!"); }, onError: (e) => toast.error(e.message) });
   const startLunch = trpc.workforce.me.startLunch.useMutation({ onSuccess: () => { refresh(); toast.success("Enjoy your lunch. Tap End lunch when you're back."); }, onError: (e) => toast.error(e.message) });
-  const endLunch = trpc.workforce.me.endLunch.useMutation({ onSuccess: () => { refresh(); toast.success("Welcome back. You're on the clock."); }, onError: (e) => toast.error(e.message) });
+  const endLunch = trpc.workforce.me.endLunch.useMutation({ onSuccess: () => { refresh(); toast.success("Welcome back. You're on the clock."); }, onError: locationError });
+  // Every clock in / out first asks the device where it is (only at that moment).
+  const withPosition = (run: (position: ClockPosition | null) => void) => async () => {
+    setLocating(true);
+    const position = await getClockPosition();
+    setLocating(false);
+    run(position);
+  };
 
   const d = day.data;
   const punches = (d?.punches ?? []) as PunchLike[];
@@ -36,10 +52,11 @@ export function useClock(enabled = true) {
     workedMinutes: work.workedMinutes,
     shift,
     nudge,
-    busy: clockIn.isPending || clockOut.isPending || startLunch.isPending || endLunch.isPending,
-    clockIn: () => clockIn.mutate(),
-    clockOut: () => clockOut.mutate(),
-    startLunch: () => startLunch.mutate(),
-    endLunch: () => endLunch.mutate(),
+    busy: locating || clockIn.isPending || clockOut.isPending || startLunch.isPending || endLunch.isPending,
+    locating,
+    clockIn: withPosition((position) => clockIn.mutate({ position })),
+    clockOut: withPosition((position) => clockOut.mutate({ position })),
+    startLunch: withPosition((position) => startLunch.mutate({ position })),
+    endLunch: withPosition((position) => endLunch.mutate({ position })),
   };
 }

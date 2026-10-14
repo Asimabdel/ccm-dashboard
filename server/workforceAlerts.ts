@@ -188,6 +188,29 @@ export async function runWorkforceAlerts(now: Date = new Date()) {
     counts.alerts++;
   }
 
+  // Clocked in / out away from their clinic (2026-10-14: allowed, but their manager checks it).
+  const { clockCheckLabel } = await import("../shared/clockLocation");
+  const { clinicHhmm } = await import("../shared/attendance");
+  for (const x of punches) {
+    const p = tracked.find((t) => t.userId === x.userId);
+    if (!p) continue;
+    for (const side of ["in", "out"] as const) {
+      const check = side === "in" ? x.inCheck : x.outCheck;
+      if (check !== "away" && check !== "other_clinic") continue;
+      const at = side === "in" ? x.clockInAt : x.clockOutAt;
+      if (!at) continue;
+      const ref = `away:${x.id}:${side}`;
+      if (!(await claim(p.userId, x.workDate, ref))) continue;
+      const home = x.clinicId ? clinicName.get(x.clinicId) ?? null : null;
+      const near = side === "in" && x.inNearClinicId ? clinicName.get(x.inNearClinicId) ?? null : null;
+      const what = clockCheckLabel(check, side === "in" ? x.inDistanceM : x.outDistanceM, near, home);
+      await managerAlert(counts, p, { date: x.workDate, ref, priority: "normal",
+        title: `Clocked ${side} ${what}: ${p.name}`,
+        detail: `${p.name} clocked ${side} at ${fmtTime(clinicHhmm(at))} on ${fmtDay(x.workDate)}, ${what}. If that's fine (an errand, a home visit, a different clinic that day), mark it "Looks right" in Needs fixing.` });
+      counts.alerts++;
+    }
+  }
+
   counts.shoutout = await mondayShoutout(now, people);
   return counts;
 }

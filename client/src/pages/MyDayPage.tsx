@@ -8,6 +8,7 @@ import { Loader2, LogIn, LogOut, CheckCircle2, Circle, MapPin, Clock, ClipboardC
 import { fmtDay, fmtDuration, fmtTime, localMinutes, timeToMinutes, type DutyFrequency } from "@shared/workforce";
 import { dayWork } from "@shared/attendance";
 import { FixPunchDialog } from "@/components/workforce/FixPunchDialog";
+import { awayNote, getClockPosition, type ClockPosition } from "@/lib/clockPosition";
 
 const FREQ_LABEL: Record<DutyFrequency, string> = {
   daily: "Today", weekly: "This week", monthly: "This month", as_needed: "As needed",
@@ -25,16 +26,30 @@ export default function MyDayPage() {
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 30000); return () => clearInterval(t); }, []);
 
   const refresh = () => utils.workforce.me.today.invalidate();
+  const locationError = (e: { message: string }) => toast.error(e.message, { duration: e.message.startsWith("Turn on location") ? 12_000 : 5_000 });
   const clockIn = trpc.workforce.me.clockIn.useMutation({
-    onSuccess: (r) => { refresh(); r.minutesLate > 0 ? toast.warning(`Clocked in — ${r.minutesLate} min after your shift start`) : toast.success("Clocked in. Have a great shift!"); },
-    onError: (e) => toast.error(e.message),
+    onSuccess: (r) => {
+      refresh();
+      r.minutesLate > 0 ? toast.warning(`Clocked in — ${r.minutesLate} min after your shift start`) : toast.success("Clocked in. Have a great shift!");
+      const note = awayNote(r);
+      if (note) toast.info(note, { duration: 8_000 });
+    },
+    onError: locationError,
   });
   const clockOut = trpc.workforce.me.clockOut.useMutation({
     onSuccess: () => { refresh(); toast.success("Clocked out"); },
     onError: (e) => toast.error(e.message),
   });
   const startLunch = trpc.workforce.me.startLunch.useMutation({ onSuccess: () => { refresh(); toast.success("Enjoy your lunch. Tap End lunch when you're back."); }, onError: (e) => toast.error(e.message) });
-  const endLunch = trpc.workforce.me.endLunch.useMutation({ onSuccess: () => { refresh(); toast.success("Welcome back. You're on the clock."); }, onError: (e) => toast.error(e.message) });
+  const endLunch = trpc.workforce.me.endLunch.useMutation({ onSuccess: () => { refresh(); toast.success("Welcome back. You're on the clock."); }, onError: locationError });
+  // Every clock in / out first asks the device where it is (only at that moment).
+  const [locating, setLocating] = useState(false);
+  const withPosition = (run: (position: ClockPosition | null) => void) => async () => {
+    setLocating(true);
+    const position = await getClockPosition();
+    setLocating(false);
+    run(position);
+  };
   const [fixing, setFixing] = useState<{ date: string; punchId?: number } | null>(null);
   const toggle = trpc.workforce.me.toggleDuty.useMutation({
     // Optimistic check-off so the list feels instant on a busy clinic floor.
@@ -69,7 +84,7 @@ export default function MyDayPage() {
   const dailyDone = daily.filter((x) => x.done).length;
   const pct = daily.length ? Math.round((dailyDone / daily.length) * 100) : 0;
   const reference = (d?.duties || []).filter((x) => x.frequency === "as_needed");
-  const busy = clockIn.isPending || clockOut.isPending || startLunch.isPending || endLunch.isPending;
+  const busy = locating || clockIn.isPending || clockOut.isPending || startLunch.isPending || endLunch.isPending;
   // On lunch: the last punch ended with Start lunch, and today's shift isn't over.
   const lastEnd = Math.max(0, ...(d?.shifts || []).filter((s) => s.status === "scheduled").map((s) => timeToMinutes(s.endTime)));
   const onLunch = !open && !!dayWork(d?.punches || []).onLunchSince && localMinutes() < lastEnd;
@@ -116,12 +131,12 @@ export default function MyDayPage() {
           <>
           {open ? (
             <div className="mt-5 grid grid-cols-2 gap-2">
-              <button onClick={() => startLunch.mutate()} disabled={busy} className="inline-flex items-center justify-center gap-2 px-4 py-4 rounded-2xl text-white text-lg font-bold bg-amber-500 hover:bg-amber-600 active:scale-[0.98] transition disabled:opacity-60"><Coffee size={20} /> Start lunch</button>
-              <button onClick={() => clockOut.mutate()} disabled={busy} className="inline-flex items-center justify-center gap-2 px-4 py-4 rounded-2xl text-white text-lg font-bold bg-slate-900 hover:bg-slate-800 active:scale-[0.98] transition disabled:opacity-60">{busy ? <Loader2 size={20} className="animate-spin" /> : <LogOut size={20} />} Clock out</button>
+              <button onClick={withPosition((position) => startLunch.mutate({ position }))} disabled={busy} className="inline-flex items-center justify-center gap-2 px-4 py-4 rounded-2xl text-white text-lg font-bold bg-amber-500 hover:bg-amber-600 active:scale-[0.98] transition disabled:opacity-60"><Coffee size={20} /> Start lunch</button>
+              <button onClick={withPosition((position) => clockOut.mutate({ position }))} disabled={busy} className="inline-flex items-center justify-center gap-2 px-4 py-4 rounded-2xl text-white text-lg font-bold bg-slate-900 hover:bg-slate-800 active:scale-[0.98] transition disabled:opacity-60">{busy ? <Loader2 size={20} className="animate-spin" /> : <LogOut size={20} />} Clock out</button>
             </div>
           ) : (
             <button
-              onClick={() => (onLunch ? endLunch.mutate() : clockIn.mutate())}
+              onClick={withPosition((position) => (onLunch ? endLunch.mutate({ position }) : clockIn.mutate({ position })))}
               disabled={busy}
               className="mt-5 w-full inline-flex items-center justify-center gap-2 px-5 py-4 rounded-2xl text-white text-lg font-bold active:scale-[0.98] transition disabled:opacity-60 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700"
             >

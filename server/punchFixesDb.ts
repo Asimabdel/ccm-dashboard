@@ -65,8 +65,15 @@ async function load(from: string, to: string, scope: Scope, onlyUserId?: number)
   return { people, profiles, punchRows, shiftRows };
 }
 
-function problemsFor(people: FixPerson[], from: string, now = new Date()): PunchProblem[] {
-  return findPunchProblems(people, { from, today: localDateStr(now), nowMinutes: localMinutes(now), now });
+let clinicNameCache: { at: number; names: Map<number, string> } | null = null;
+async function clinicNames() {
+  if (clinicNameCache && Date.now() - clinicNameCache.at < 300_000) return clinicNameCache.names;
+  const rows = await (await db()).select({ id: clinics.id, name: clinics.name }).from(clinics);
+  clinicNameCache = { at: Date.now(), names: new Map(rows.map((r) => [r.id, r.name])) };
+  return clinicNameCache.names;
+}
+async function problemsFor(people: FixPerson[], from: string, now = new Date()): Promise<PunchProblem[]> {
+  return findPunchProblems(people, { from, today: localDateStr(now), nowMinutes: localMinutes(now), now, clinicNames: await clinicNames() });
 }
 
 /** Workforce → Timesheets → Needs fixing: every punch problem plus the fix-my-punch requests waiting. */
@@ -74,7 +81,7 @@ export async function needsFixing(scope: Scope, days = 14) {
   const today = localDateStr();
   const from = addDays(today, -days);
   const { people } = await load(from, today, scope);
-  const problems = problemsFor(people, from);
+  const problems = await problemsFor(people, from);
   const d = await db();
   const pending = await d.select({ r: punchRequests, userName: users.name }).from(punchRequests).innerJoin(users, eq(users.id, punchRequests.userId))
     .where(eq(punchRequests.status, "pending"));
@@ -96,7 +103,9 @@ export async function dayView(date: string, scope: Scope) {
   const today = localDateStr();
   if (date > today) throw new PunchFixError("Pick today or an earlier day.");
   const { people, punchRows, shiftRows } = await load(date, date, scope);
-  const problems = problemsFor(people, date);
+  const problems = await problemsFor(people, date);
+  const names = await clinicNames();
+  const { clockCheckLabel } = await import("../shared/clockLocation");
   const rows = people.map((p) => {
     const myShifts = shiftRows.filter((r) => r.s.userId === p.userId)
       .map((r) => ({ id: r.s.id, startTime: r.s.startTime, endTime: r.s.endTime, status: r.s.status, clinicName: r.clinicName }))
@@ -107,6 +116,8 @@ export async function dayView(date: string, scope: Scope) {
         id: x.id, clockInAt: x.clockInAt, clockOutAt: x.clockOutAt, clockIn: clinicHhmm(x.clockInAt), clockOut: x.clockOutAt ? clinicHhmm(x.clockOutAt) : null,
         minutes: x.clockOutAt ? Math.max(0, Math.round((+x.clockOutAt - +x.clockInAt) / 60000)) : 0, minutesLate: x.minutesLate,
         lunch: x.outReason === "lunch", auto: x.outReason === "auto", note: x.note, edited: !!x.editedByUserId, clinicName,
+        whereIn: clockCheckLabel(x.inCheck, x.inDistanceM, x.inNearClinicId ? names.get(x.inNearClinicId) : null, clinicName),
+        whereOut: clockCheckLabel(x.outCheck, x.outDistanceM, null, clinicName),
         shift: s ? { startTime: s.startTime, endTime: s.endTime } : null,
       };
     });
@@ -144,7 +155,7 @@ export async function resolveAlertTasks(userId: number, date: string, byUserId: 
   const mine = open.filter((t) => (t.sourceRef ?? "").startsWith(`${userId}:${date}:`));
   if (!mine.length) return 0;
   const { people } = await load(date, date, (id) => id === userId, userId);
-  const left = new Set(problemsFor(people, date).flatMap((p) => TASK_REFS_FOR[p.kind]));
+  const left = new Set((await problemsFor(people, date)).flatMap((p) => TASK_REFS_FOR[p.kind]));
   const answerable = new Set(Object.values(TASK_REFS_FOR).flat());
   let closed = 0;
   for (const t of mine) {

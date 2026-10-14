@@ -4,6 +4,7 @@
 // flagged for a manager to confirm. Times in fixes are clinic-local "HH:MM" on the problem's date.
 import { END_OF_DAY_AFTER, clinicHhmm, clinicInstant } from "./attendance";
 import { fmtTime, timeToMinutes } from "./workforce";
+import { clockCheckLabel } from "./clockLocation";
 
 /** Still clocked in this long after the scheduled end: clocked out automatically at the scheduled end. */
 export const AUTO_CLOCK_OUT_AFTER = 120;
@@ -17,7 +18,11 @@ export const TINY_PUNCH_MINUTES = 3;
 export const SUGGESTED_LUNCH_MINUTES = 30;
 
 export interface FixShift { id: number; date: string; startTime: string; endTime: string; status?: string }
-export interface FixPunch { id: number; workDate: string; clockInAt: Date | string; clockOutAt: Date | string | null; outReason: string | null; shiftId: number | null }
+export interface FixPunch {
+  id: number; workDate: string; clockInAt: Date | string; clockOutAt: Date | string | null; outReason: string | null; shiftId: number | null;
+  /** Where they clocked in / out (shared/clockLocation); optional for older callers. */
+  clinicId?: number | null; inCheck?: string | null; inDistanceM?: number | null; inNearClinicId?: number | null; outCheck?: string | null; outDistanceM?: number | null;
+}
 
 const ms = (d: Date | string) => new Date(d).getTime();
 
@@ -41,7 +46,7 @@ export function autoClockOutAt(input: { clockInAt: Date | string; shift: { date:
   return input.now.getTime() >= cap ? new Date(cap) : null;
 }
 
-export type FixKind = "missing_out" | "auto_out" | "lunch_no_return" | "no_punch" | "long_day" | "tiny_punch";
+export type FixKind = "missing_out" | "auto_out" | "lunch_no_return" | "no_punch" | "long_day" | "tiny_punch" | "away_from_clinic";
 
 /** What a button does. edit / add use clinic-local times on `date` (an out time before the in time = next day). */
 export type FixAction =
@@ -95,7 +100,7 @@ const hm = (minutes: number) => `${Math.floor(minutes / 60)}h ${String(minutes %
  * Every punch problem for these people on dates [from, today]. `nowMinutes` is clinic-local; today's shifts only
  * count once they're over (an hour after the end, like the end-of-day alerts).
  */
-export function findPunchProblems(people: FixPerson[], input: { from: string; today: string; nowMinutes: number; now: Date }): PunchProblem[] {
+export function findPunchProblems(people: FixPerson[], input: { from: string; today: string; nowMinutes: number; now: Date; clinicNames?: Map<number, string> }): PunchProblem[] {
   const out: PunchProblem[] = [];
   const { from, today, nowMinutes, now } = input;
   for (const person of people) {
@@ -138,6 +143,20 @@ export function findPunchProblems(people: FixPerson[], input: { from: string; to
             ] });
         }
         const mins = minutesOf(p);
+        // Clocked in / out away from their clinic.
+        for (const side of ["in", "out"] as const) {
+          const check = side === "in" ? p.inCheck : p.outCheck;
+          if (check !== "away" && check !== "other_clinic") continue;
+          const home = p.clinicId != null ? input.clinicNames?.get(p.clinicId) ?? null : null;
+          const near = side === "in" && p.inNearClinicId != null ? input.clinicNames?.get(p.inNearClinicId) ?? null : null;
+          add({ ref: `away_from_clinic:${p.id}:${side}`, kind: "away_from_clinic", date, severity: "check", shift: s,
+            title: `Clocked ${side} ${clockCheckLabel(check, side === "in" ? p.inDistanceM : p.outDistanceM, near, home)}`,
+            detail: `At ${t12(side === "in" ? inHhmm : outHhmm)}. Allowed, but worth a look (an errand, a home visit, another clinic that day?).`,
+            actions: [
+              { type: "dismiss", label: "Looks right" },
+              { type: "open_edit", label: "Change time…", punchId: p.id, clockIn: inHhmm, clockOut: outHhmm },
+            ] });
+        }
         if (mins < TINY_PUNCH_MINUTES && p.outReason !== "lunch") {
           add({ ref: `tiny_punch:${p.id}`, kind: "tiny_punch", date, severity: "check", shift: s,
             title: `A ${mins}-minute punch`,
@@ -199,4 +218,5 @@ export const TASK_REFS_FOR: Record<FixKind, string[]> = {
   no_punch: ["noshow"],
   long_day: [],
   tiny_punch: [],
+  away_from_clinic: ["away"],
 };

@@ -12,6 +12,7 @@ import {
   index,
   uniqueIndex,
   mediumtext,
+  double,
 } from "drizzle-orm/mysql-core";
 
 /**
@@ -52,6 +53,13 @@ export const clinics = mysqlTable("clinics", {
   location: varchar("location", { length: 255 }).notNull(),
   address: text("address"),
   phone: varchar("phone", { length: 20 }),
+  /** Where the clinic is, for the clock-in location check (set by a manager standing at the clinic, or typed in). */
+  lat: double("lat"),
+  lng: double("lng"),
+  /** Clock-ins within this many metres count as at the clinic (null = 300). */
+  clockRadiusM: int("clockRadiusM"),
+  /** The clinic's internet connections (public addresses); clocking in on one counts as at the clinic. */
+  clockNetworks: json("clockNetworks").$type<string[]>(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
@@ -687,6 +695,12 @@ export const timePunches = mysqlTable("timePunches", {
   minutesLate: int("minutesLate").default(0).notNull(),
   /** Why the punch ended: "lunch" (Start lunch) or null (clocked out). */
   outReason: varchar("outReason", { length: 10 }),
+  /** Where they clocked in / out (shared/clockLocation ClockCheck) and how far from their clinic, in metres. No coordinates are kept. */
+  inCheck: varchar("inCheck", { length: 12 }),
+  inDistanceM: int("inDistanceM"),
+  inNearClinicId: int("inNearClinicId"),
+  outCheck: varchar("outCheck", { length: 12 }),
+  outDistanceM: int("outDistanceM"),
   note: text("note"),
   // Set when a manager corrected this punch (missed clock-out, etc.).
   editedByUserId: int("editedByUserId").references(() => users.id),
