@@ -7,6 +7,7 @@ import { and, gte, isNotNull, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { appointments, patients, phoneCalls } from "../drizzle/schema";
 import { subjectKeyFor } from "./workspaceDb";
+import { nameKey } from "../shared/workspace";
 import { OPPORTUNITY_INFO, SEEN_STATUSES, evaluateOpportunities, evaluateScheduleOpportunities, type OpportunityCategory, type ScheduleVisit } from "../shared/workspace";
 
 /** The lists that are about getting the patient on the schedule (not program enrollment). */
@@ -21,7 +22,7 @@ export async function opportunityOutcomes(input: { asOf: string }) {
   const asOf = new Date(`${input.asOf}T23:59:00-05:00`);
   const [appts, roster, calls] = await Promise.all([
     d.select({ patientId: appointments.patientId, name: appointments.patientName, dob: appointments.dateOfBirth, startsAt: appointments.startsAt, status: appointments.status, visitType: appointments.visitType, createdAt: appointments.createdAt }).from(appointments),
-    d.select({ id: patients.id, chronicConditions: patients.chronicConditions, bhiConditions: patients.bhiConditions, ccmEnrollmentStatus: patients.ccmEnrollmentStatus, bhiEnrollmentStatus: patients.bhiEnrollmentStatus, rpmStatus: patients.rpmStatus, rpmEnrolled: patients.rpmEnrolled, lastOfficeVisit: patients.lastOfficeVisit })
+    d.select({ id: patients.id, name: patients.name, dob: patients.dateOfBirth, chronicConditions: patients.chronicConditions, bhiConditions: patients.bhiConditions, ccmEnrollmentStatus: patients.ccmEnrollmentStatus, bhiEnrollmentStatus: patients.bhiEnrollmentStatus, rpmStatus: patients.rpmStatus, rpmEnrolled: patients.rpmEnrolled, lastOfficeVisit: patients.lastOfficeVisit })
       .from(patients).where(sql`${patients.name} NOT LIKE '%(merged into #%'`),
     d.select({ subjectKey: phoneCalls.subjectKey, patientId: phoneCalls.patientId, at: phoneCalls.startedAt, outcome: phoneCalls.outcome, direction: phoneCalls.direction, source: phoneCalls.source })
       .from(phoneCalls).where(and(isNotNull(phoneCalls.subjectKey), gte(phoneCalls.startedAt, new Date(asOf.getTime() - 86_400_000)))),
@@ -37,12 +38,19 @@ export async function opportunityOutcomes(input: { asOf: string }) {
     .filter((v) => v.startsAt <= asOf || (v.createdAt <= asOf && v.status !== "cancelled"))
     .map((v) => ({ startsAt: v.startsAt, status: v.startsAt > asOf ? "scheduled" : v.status, visitType: v.visitType }));
 
+  // One person = one name + date of birth: a roster record ("p:<id>") and a schedule-only entry ("s:<name>|<dob>")
+  // for the same person, or two copies of either, count once.
+  const personOf = new Map<string, string>();
+  for (const p of roster) {
+    const dob = p.dob ? p.dob.toISOString().slice(0, 10) : null;
+    personOf.set(`p:${p.id}`, dob ? `${nameKey(p.name)}|${dob}` : `p:${p.id}`);
+  }
+  const person = (key: string) => personOf.get(key) ?? (key.startsWith("s:") && !key.endsWith("|") ? key.slice(2) : key);
+
   // Who was on which scheduling list that day.
   const onList = new Map<string, OpportunityCategory[]>();
-  const rosterIds = new Set<number>();
   for (const p of roster) {
     const key = `p:${p.id}`;
-    rosterIds.add(p.id);
     const visits = visitsThen(byKey.get(key) ?? []);
     let lastSeen: Date | null = null, nextBooked: Date | null = null;
     for (const v of visits) {
@@ -86,23 +94,43 @@ export async function opportunityOutcomes(input: { asOf: string }) {
     if (x.afterCall) t.scheduledAfterCall++;
     if (x.logged) t.loggedBooked++;
   };
+  // Every key (record) of each person on a list: their appointments and calls, whichever record they're under.
+  const keysOf = new Map<string, Set<string>>();
+  for (const k of [...Array.from(byKey.keys()), ...Array.from(callsBy.keys()), ...Array.from(personOf.keys())]) {
+    const p = person(k);
+    if (!keysOf.has(p)) keysOf.set(p, new Set());
+    keysOf.get(p)!.add(k);
+  }
+  const people = new Map<string, Set<OpportunityCategory>>();
   for (const [key, cats] of Array.from(onList.entries())) {
-    const newVisits = (byKey.get(key) ?? []).filter((v) => v.createdAt > asOf && v.startsAt > asOf && v.status !== "cancelled");
+    const p = person(key);
+    const set = people.get(p) ?? new Set<OpportunityCategory>();
+    cats.forEach((c) => set.add(c));
+    people.set(p, set);
+  }
+  // A person on a list who already had something booked under another record that day wasn't really on the list.
+  const bookedThen = (p: string) => Array.from(keysOf.get(p) ?? []).some((k) => (byKey.get(k) ?? []).some((v) => v.startsAt > asOf && v.createdAt <= asOf && v.status !== "cancelled"));
+  let alreadyBooked = 0;
+  for (const [p, cats] of Array.from(people.entries())) {
+    if (bookedThen(p)) { alreadyBooked++; continue; }
+    const keys = Array.from(keysOf.get(p) ?? []);
+    const newVisits = keys.flatMap((k) => byKey.get(k) ?? []).filter((v) => v.createdAt > asOf && v.startsAt > asOf && v.status !== "cancelled");
     const scheduled = newVisits.length > 0;
     const cameIn = newVisits.some((v) => v.startsAt <= now && SEEN_STATUSES.includes(v.status));
     const upcoming = !cameIn && newVisits.some((v) => v.startsAt > now);
-    const myCalls = (callsBy.get(key) ?? []).filter((c) => c.at > new Date(asOf.getTime() - 86_400_000));
+    const myCalls = keys.flatMap((k) => callsBy.get(k) ?? []).filter((c) => c.at > new Date(asOf.getTime() - 86_400_000));
     const called = myCalls.length > 0;
     const firstNew = scheduled ? new Date(Math.min(...newVisits.map((v) => v.createdAt.getTime()))) : null;
     const afterCall = !!firstNew && myCalls.some((c) => c.at <= firstNew);
     const logged = myCalls.some((c) => c.outcome === "booked");
     const x = { scheduled, cameIn, upcoming, called, afterCall, logged };
     bump(total, x);
-    for (const c of cats) { const t = byList.get(c) ?? blank(); bump(t, x); byList.set(c, t); }
+    for (const c of Array.from(cats)) { const t = byList.get(c) ?? blank(); bump(t, x); byList.set(c, t); }
   }
   const rate = (a: number, b: number) => (b ? Math.round((a / b) * 1000) / 10 : null);
   return {
     asOf: input.asOf,
+    recordsOnLists: onList.size, peopleOnLists: people.size - alreadyBooked, sameRecordTwice: onList.size - people.size, alreadyBookedUnderAnotherRecord: alreadyBooked,
     total: { ...total, scheduledRate: rate(total.scheduled, total.onList), calledRate: rate(total.calledScheduled, total.called), notCalledRate: rate(total.notCalledScheduled, total.notCalled) },
     byList: Array.from(byList.entries()).map(([c, t]) => ({ list: OPPORTUNITY_INFO[c].label, ...t, scheduledRate: rate(t.scheduled, t.onList) })).sort((a, b) => b.onList - a.onList),
   };
