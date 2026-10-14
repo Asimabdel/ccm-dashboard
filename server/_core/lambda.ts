@@ -231,6 +231,11 @@ export const handler = async (event: any, context: any) => {
     const { opportunityBookings } = await import("../outreachDb");
     return opportunityBookings({ since: typeof event.since === "string" && /^\d{4}-\d{2}-\d{2}$/.test(event.since) ? event.since : "2026-09-01" });
   }
+  // Were patients on the scheduling lists on a past date scheduled since, logged or not (IAM-only; counts only).
+  if (event && event.__job === "opportunity-outcomes" && !event.requestContext && !event.version) {
+    const { opportunityOutcomes } = await import("../opportunityOutcomes");
+    return opportunityOutcomes({ asOf: typeof event.asOf === "string" && /^\d{4}-\d{2}-\d{2}$/.test(event.asOf) ? event.asOf : "2026-09-28" });
+  }
   if (event && event.__job === "ccm-dx-stats" && !event.requestContext && !event.version) {
     const { ccmDiagnosisStats } = await import("../diagnosisStats");
     return ccmDiagnosisStats();
