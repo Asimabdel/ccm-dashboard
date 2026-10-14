@@ -262,3 +262,64 @@ export async function clinicPhones() {
   return (await (await db()).select({ id: clinics.id, name: clinics.name, phone: clinics.phone }).from(clinics));
 }
 
+
+/**
+ * IAM-only check (2026-10-14): patients booked from the Opportunity Finder (its patient lists, Fill a schedule,
+ * Testing due) since a date — distinct patients, how many of those visits are on the imported schedule
+ * afterwards (not cancelled) and how many were seen, by list and by caller. Counts and staff names only.
+ */
+export async function opportunityBookings(input: { since: string }) {
+  const d = await db();
+  const sinceAt = new Date(`${input.since}T05:00:00Z`);
+  const sources = [...OPPORTUNITY_CATEGORY_LIST, FILL_SOURCE, "testing_due"];
+  const rows = await d.select({ id: phoneCalls.id, userId: phoneCalls.userId, by: users.name, subjectKey: phoneCalls.subjectKey, at: phoneCalls.startedAt, outcome: phoneCalls.outcome, source: phoneCalls.source })
+    .from(phoneCalls).leftJoin(users, eq(users.id, phoneCalls.userId))
+    .where(and(eq(phoneCalls.direction, "outbound"), isNotNull(phoneCalls.subjectKey), gte(phoneCalls.startedAt, sinceAt), inArray(phoneCalls.source, sources)));
+  const booked = rows.filter((r) => r.outcome === "booked");
+  // Each booked patient's visit: on the schedule afterwards (created around/after the call, on or after that day, not cancelled), and seen?
+  const SEEN = ["arrived", "checked_in", "roomed", "with_provider", "checkout", "completed"];
+  const onSchedule = new Set<string>(), seen = new Set<string>(), upcoming = new Set<string>(), noShow = new Set<string>();
+  if (booked.length) {
+    const first = new Date(Math.min(...booked.map((b) => b.at.getTime())));
+    const appts = await d.select({ patientId: appointments.patientId, patientName: appointments.patientName, dob: appointments.dateOfBirth, date: appointments.date, createdAt: appointments.createdAt, status: appointments.status })
+      .from(appointments).where(and(gte(appointments.date, localDateStr(first)), gte(appointments.createdAt, new Date(first.getTime() - 3_600_000))));
+    const byKey = new Map<string, { date: string; createdAt: Date; status: string }[]>();
+    for (const a of appts) {
+      if (a.status === "cancelled") continue;
+      const k = subjectKeyFor(a.patientId, a.patientName, a.dob);
+      byKey.set(k, [...(byKey.get(k) ?? []), { date: a.date, createdAt: a.createdAt, status: a.status }]);
+    }
+    const today = localDateStr();
+    for (const b of booked) {
+      const day = localDateStr(b.at);
+      const visits = (byKey.get(b.subjectKey!) ?? []).filter((a) => a.date >= day && a.createdAt.getTime() >= b.at.getTime() - 3_600_000);
+      if (!visits.length) continue;
+      onSchedule.add(b.subjectKey!);
+      if (visits.some((v) => SEEN.includes(v.status))) seen.add(b.subjectKey!);
+      else if (visits.some((v) => v.date >= today)) upcoming.add(b.subjectKey!);
+      else if (visits.some((v) => v.status === "no_show")) noShow.add(b.subjectKey!);
+    }
+  }
+  const group = (keyOf: (r: (typeof rows)[number]) => string) => {
+    const m = new Map<string, { calls: number; called: Set<string>; booked: Set<string> }>();
+    for (const r of rows) {
+      const k = keyOf(r);
+      const t = m.get(k) ?? { calls: 0, called: new Set<string>(), booked: new Set<string>() };
+      t.calls++; t.called.add(r.subjectKey!);
+      if (r.outcome === "booked") t.booked.add(r.subjectKey!);
+      m.set(k, t);
+    }
+    return Array.from(m.entries()).map(([k, t]) => ({ name: k, calls: t.calls, patientsCalled: t.called.size, patientsBooked: t.booked.size, bookedOnSchedule: Array.from(t.booked).filter((x) => onSchedule.has(x)).length }))
+      .sort((a, b) => b.patientsBooked - a.patientsBooked || b.calls - a.calls);
+  };
+  const bookedPatients = new Set(booked.map((b) => b.subjectKey!));
+  return {
+    since: input.since,
+    firstCall: rows.length ? new Date(Math.min(...rows.map((r) => r.at.getTime()))).toISOString().slice(0, 10) : null,
+    calls: rows.length, patientsCalled: new Set(rows.map((r) => r.subjectKey!)).size,
+    patientsBooked: bookedPatients.size, bookedOnSchedule: onSchedule.size, seen: seen.size, stillUpcoming: upcoming.size, noShow: noShow.size,
+    notOnScheduleYet: bookedPatients.size - onSchedule.size,
+    byList: group((r) => listLabel(r.source) === "Other" ? (r.source === "testing_due" ? "Testing due" : r.source ?? "Other") : listLabel(r.source)),
+    byCaller: group((r) => r.by ?? "Unknown"),
+  };
+}

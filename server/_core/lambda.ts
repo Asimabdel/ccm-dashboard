@@ -226,6 +226,11 @@ export const handler = async (event: any, context: any) => {
     if (!ok(event.from) || !ok(event.to)) return { problem: "from and to must be YYYY-MM-DD" };
     return providerDays({ from: event.from, to: event.to });
   }
+  // Patients booked from the Opportunity Finder since a date, and whether they showed up (IAM-only; counts only).
+  if (event && event.__job === "opportunity-bookings" && !event.requestContext && !event.version) {
+    const { opportunityBookings } = await import("../outreachDb");
+    return opportunityBookings({ since: typeof event.since === "string" && /^\d{4}-\d{2}-\d{2}$/.test(event.since) ? event.since : "2026-09-01" });
+  }
   if (event && event.__job === "ccm-dx-stats" && !event.requestContext && !event.version) {
     const { ccmDiagnosisStats } = await import("../diagnosisStats");
     return ccmDiagnosisStats();
