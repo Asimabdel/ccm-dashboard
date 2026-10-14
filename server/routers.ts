@@ -96,7 +96,7 @@ import {
   getReachOutContacts, getReachOutStats, logReachOutCall, bulkInsertReachOut, deleteReachOutContact,
 } from "./db";
 import { getApcmOverview, applyStandardApcmCarePlan } from "./db";
-import { parsePatientCsv, findInBatchDuplicates, matchProviderId, matchWorklistStatus } from "../shared/csvImport";
+import { parsePatientCsv, findInBatchDuplicates, matchProviderId } from "../shared/csvImport";
 import { clinics, providers, appointments, workTasks } from "../drizzle/schema";
 
 // ---- Role guards ----
@@ -720,8 +720,10 @@ export const appRouter = router({
             ...r,
             resolvedProviderId: pid,
             resolvedProviderName: pid ? provById.get(pid) ?? null : null,
-            // Map the file's status onto a canonical worklist status for the preview.
-            resolvedStatus: matchWorklistStatus(r.wellnessCallStatus) ?? null,
+            // New patients always start fresh (2026-10-14, the practice's choice): the file's call status and
+            // called / completed dates are shown as ignored, not carried over.
+            resolvedStatus: null as string | null,
+            fileStatus: r.wellnessCallStatus || null,
           };
         });
         return {
@@ -786,12 +788,14 @@ export const appRouter = router({
           rpmEnrolled: r.rpmEnrolled ?? false,
           rpmStatus: (r.rpmEnrolled ? "enrolled" : "not_enrolled") as any,
           rpmDeviceType: r.rpmDeviceType,
-          lastCalledAt: r.lastCalled ? new Date(r.lastCalled) : null,
+          // New patients start fresh (2026-10-14, the practice's choice): never completed, no call history.
+          // This month's task is "Assigned" to the coordinator picked (else "Not started"); the file's status
+          // ("Completed", "Left voicemail" …) and its called / completed dates are ignored.
+          lastCalledAt: null,
           nextAppointment: r.nextAppointment ? new Date(r.nextAppointment) : null,
-          lastCCMDate: r.completed && r.lastCalled ? new Date(r.lastCalled) : null,
+          lastCCMDate: null,
           assignedStaffId: input.defaultStaffId ?? null,
-          // Carry the file's status onto this month's worklist task.
-          worklistStatus: matchWorklistStatus(r.wellnessCallStatus),
+          worklistStatus: null,
           ccmEnrollmentStatus: r.enrollmentStatus,
           // BHI: per-row "BHI" column OR the whole-file toggle enrolls the patient;
           // conditions come from the row's "BHI Conditions" column or the shared default.

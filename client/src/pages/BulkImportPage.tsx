@@ -5,7 +5,6 @@ import { useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { Loader2, Upload, FileText, AlertTriangle, CheckCircle2, ArrowLeft, Download, Brain } from "lucide-react";
-import { STATUS_LABELS } from "@/lib/ccm";
 
 const SAMPLE_DRMAI = `Name,Provider,Wellness Call,Date Completed,Next Appointment,Notes
 Doe, Jane,Dr. Mai,Completed,6/3,8/15,Doing well
@@ -165,6 +164,9 @@ export default function BulkImportPage() {
           )}
           {data && !data.headerError && (
             <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
+              <p className="px-5 py-2.5 border-b border-slate-200 bg-emerald-50/60 text-xs text-emerald-900">
+                New patients always start fresh: this month they're <b>Assigned</b> to the care coordinator you pick (or <b>Not started</b> if you don't pick one), never completed. Status and called / completed dates in the file are ignored.
+              </p>
               <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
                 <p className="text-sm font-semibold text-slate-800">{data.rows.length} rows · {validCount} valid · {data.rows.length - validCount} with errors</p>
                 <div className="flex items-center gap-3 text-[11px]">
@@ -178,9 +180,8 @@ export default function BulkImportPage() {
                       <th className="px-4 py-2 font-medium">Row</th>
                       <th className="px-4 py-2 font-medium">Name</th>
                       <th className="px-4 py-2 font-medium">Provider</th>
-                      <th className="px-4 py-2 font-medium">Last Called</th>
                       <th className="px-4 py-2 font-medium">Next Appt</th>
-                      <th className="px-4 py-2 font-medium">Status</th>
+                      <th className="px-4 py-2 font-medium">Starts as</th>
                       <th className="px-4 py-2 font-medium">Flags</th>
                     </tr>
                   </thead>
@@ -206,19 +207,14 @@ export default function BulkImportPage() {
                               <span className="text-amber-700" title="No matching provider in the system — will be left blank">{r.provider} <span className="text-[10px]">(unmatched)</span></span>
                             ) : <span className="text-slate-400">—</span>}
                           </td>
-                          <td className="px-4 py-2 text-slate-700">{r.lastCalled || <span className="text-slate-400">—</span>}</td>
                           <td className="px-4 py-2 text-slate-700">{r.nextAppointment || <span className="text-slate-400">—</span>}</td>
                           <td className="px-4 py-2 text-slate-700">
-                            {r.resolvedStatus ? (
-                              <div>
-                                <span className={r.resolvedStatus === "completed" ? "text-emerald-700 font-medium" : "text-slate-800"}>{STATUS_LABELS[r.resolvedStatus] ?? r.resolvedStatus}</span>
-                                {r.wellnessCallStatus && (STATUS_LABELS[r.resolvedStatus] ?? "").toLowerCase() !== r.wellnessCallStatus.toLowerCase() && (
-                                  <span className="block text-[10px] text-slate-400">from "{r.wellnessCallStatus}"</span>
-                                )}
-                              </div>
-                            ) : r.wellnessCallStatus ? (
-                              <span className="text-amber-700" title="No matching status — task will start as Not Started">{r.wellnessCallStatus} <span className="text-[10px]">(unmatched)</span></span>
-                            ) : <span className="text-slate-400">—</span>}
+                            <span className="font-medium text-slate-800">New</span>
+                            {(r.fileStatus || r.lastCalled) && (
+                              <span className="block text-[10px] text-slate-400" title="New patients always start fresh: the file's status and dates aren't carried over">
+                                file says {[r.fileStatus ? `"${r.fileStatus}"` : null, r.lastCalled ? `called ${r.lastCalled}` : null].filter(Boolean).join(", ")}: ignored
+                              </span>
+                            )}
                           </td>
                           <td className="px-4 py-2">
                             <div className="flex flex-wrap gap-1">
