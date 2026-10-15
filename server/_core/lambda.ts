@@ -248,6 +248,19 @@ export const handler = async (event: any, context: any) => {
     const d = await getDb();
     return d ? await d.select({ id: clinics.id, name: clinics.name, location: clinics.location, address: clinics.address, lat: clinics.lat, lng: clinics.lng, networks: clinics.clockNetworks }).from(clinics) : [];
   }
+  // One person's punches for a day; with apply, set the day to one punch (IAM-only; dry run unless apply).
+  if (event && event.__job === "set-day" && !event.requestContext && !event.version) {
+    const { adminSetDay } = await import("../punchFixesDb");
+    if (typeof event.name !== "string" || typeof event.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(event.date)) return { problem: "name and date (YYYY-MM-DD) required" };
+    const time = (x: unknown) => (typeof x === "string" && /^\d{2}:\d{2}$/.test(x) ? x : undefined);
+    return adminSetDay({ name: event.name, date: event.date, clockIn: time(event.clockIn), clockOut: time(event.clockOut), byAdmin: String(event.byAdmin ?? "Asim"), apply: event.apply === true });
+  }
+  // Time clock health per day: scheduled vs clocked in, who has no punch, how punches checked out (IAM-only).
+  if (event && event.__job === "clock-health" && !event.requestContext && !event.version) {
+    const { clockHealth } = await import("../punchFixesDb");
+    const dates = Array.isArray(event.dates) ? (event.dates as unknown[]).filter((x): x is string => typeof x === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x)).slice(0, 7) : [];
+    return clockHealth({ dates });
+  }
   if (event && event.__job === "ccm-dx-stats" && !event.requestContext && !event.version) {
     const { ccmDiagnosisStats } = await import("../diagnosisStats");
     return ccmDiagnosisStats();

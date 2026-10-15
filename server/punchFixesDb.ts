@@ -197,3 +197,70 @@ export async function autoClockOuts(now: Date = new Date()) {
   }
   return closed;
 }
+
+/**
+ * IAM-only (2026-10-15): look at one person's punches for a day and, on request, set the day to one punch
+ * (e.g. "Paola worked 11–5 yesterday"). Dry run unless apply. Staff names and times only. The change is marked
+ * as edited by the named admin, respects closed pay periods, and closes the day's alert tasks if nothing's left.
+ */
+export async function adminSetDay(input: { name: string; date: string; clockIn?: string; clockOut?: string; byAdmin: string; apply?: boolean }) {
+  const d = await db();
+  const { clinicHhmm, clinicInstant } = await import("../shared/attendance");
+  const people = await d.select({ id: users.id, name: users.name, role: users.role }).from(users);
+  const hits = people.filter((u) => (u.name ?? "").toLowerCase().includes(input.name.trim().toLowerCase()));
+  if (hits.length !== 1) return { problem: `"${input.name}" matches ${hits.length ? hits.map((h) => h.name).join(", ") : "nobody"}` };
+  const who = hits[0]!;
+  const admins = people.filter((u) => u.role === "admin" && (u.name ?? "").toLowerCase().includes(input.byAdmin.trim().toLowerCase()));
+  if (admins.length !== 1) return { problem: `admin "${input.byAdmin}" matches ${admins.length}` };
+  const [punchRows, shiftRows, profile] = await Promise.all([
+    d.select().from(timePunches).where(and(eq(timePunches.userId, who.id), eq(timePunches.workDate, input.date))),
+    d.select({ id: shifts.id, start: shifts.startTime, end: shifts.endTime, clinicId: shifts.clinicId, status: shifts.status }).from(shifts).where(and(eq(shifts.userId, who.id), eq(shifts.date, input.date))),
+    d.select({ homeClinicId: staffProfiles.homeClinicId, usesTimeClock: staffProfiles.usesTimeClock }).from(staffProfiles).where(eq(staffProfiles.userId, who.id)).limit(1),
+  ]);
+  const now = {
+    person: `${who.name} (${who.role})`, date: input.date, onTimeClock: !!profile[0]?.usesTimeClock,
+    shifts: shiftRows.map((s) => `${s.start}–${s.end}${s.status !== "scheduled" ? ` (${s.status})` : ""}`),
+    punches: punchRows.map((p) => ({ id: p.id, in: clinicHhmm(p.clockInAt), out: p.clockOutAt ? clinicHhmm(p.clockOutAt) : null, outReason: p.outReason, inCheck: p.inCheck, outCheck: p.outCheck, note: p.note })),
+  };
+  if (!input.apply || !input.clockIn || !input.clockOut) return { dryRun: true, ...now };
+  const { assertOpenDate } = await import("./payPeriodsDb");
+  await assertOpenDate(input.date);
+  const inAt = clinicInstant(input.date, input.clockIn), outAt = clinicInstant(input.date, input.clockOut);
+  if (+outAt <= +inAt) return { problem: "clock-out must be after clock-in" };
+  const note = `Set by ${admins[0]!.name}: worked ${input.clockIn}–${input.clockOut}`;
+  const shift = shiftRows.find((s) => s.status === "scheduled") ?? null;
+  if (punchRows.length) {
+    const [keep, ...rest] = punchRows.sort((a, b) => +a.clockInAt - +b.clockInAt);
+    await d.update(timePunches).set({ clockInAt: inAt, clockOutAt: outAt, outReason: null, editedByUserId: admins[0]!.id, note }).where(eq(timePunches.id, keep!.id));
+    if (rest.length) await d.delete(timePunches).where(inArray(timePunches.id, rest.map((p) => p.id)));
+  } else {
+    await d.insert(timePunches).values({ userId: who.id, clinicId: shift?.clinicId ?? profile[0]?.homeClinicId ?? null, shiftId: shift?.id ?? null, workDate: input.date, clockInAt: inAt, clockOutAt: outAt, editedByUserId: admins[0]!.id, note });
+  }
+  await resolveAlertTasks(who.id, input.date, admins[0]!.id).catch(() => 0);
+  const after = await d.select().from(timePunches).where(and(eq(timePunches.userId, who.id), eq(timePunches.workDate, input.date)));
+  return { applied: true, before: now.punches, after: after.map((p) => ({ in: clinicHhmm(p.clockInAt), out: p.clockOutAt ? clinicHhmm(p.clockOutAt) : null, note: p.note })) };
+}
+
+/** IAM-only (2026-10-15): per day, who on the time clock was scheduled but has no punch, and how punches checked out (staff names only). */
+export async function clockHealth(input: { dates: string[] }) {
+  const d = await db();
+  const out = [];
+  for (const date of input.dates) {
+    const [shiftRows, punchRows, profiles, clinicRows] = await Promise.all([
+      d.select({ userId: shifts.userId, clinicId: shifts.clinicId, start: shifts.startTime, status: shifts.status }).from(shifts).where(eq(shifts.date, date)),
+      d.select({ userId: timePunches.userId, inCheck: timePunches.inCheck, inDistanceM: timePunches.inDistanceM, clinicId: timePunches.clinicId, outCheck: timePunches.outCheck, outDistanceM: timePunches.outDistanceM }).from(timePunches).where(eq(timePunches.workDate, date)),
+      d.select({ userId: staffProfiles.userId, name: users.name, clock: staffProfiles.usesTimeClock, active: staffProfiles.active }).from(staffProfiles).innerJoin(users, eq(users.id, staffProfiles.userId)),
+      d.select({ id: clinics.id, name: clinics.name }).from(clinics),
+    ]);
+    const onClock = new Map(profiles.filter((p) => p.clock && p.active).map((p) => [p.userId, p.name ?? "?"]));
+    const punched = new Set(punchRows.map((p) => p.userId));
+    const scheduled = shiftRows.filter((s) => s.status === "scheduled" && onClock.has(s.userId));
+    const noPunch = scheduled.filter((s) => !punched.has(s.userId)).map((s) => `${onClock.get(s.userId)} (${s.clinicId ? clinicRows.find((c) => c.id === s.clinicId)?.name ?? "?" : "remote"}, ${s.start})`);
+    const checks: Record<string, number> = {};
+    for (const p of punchRows) checks[p.inCheck ?? "before the check"] = (checks[p.inCheck ?? "before the check"] ?? 0) + 1;
+    const flagged = punchRows.filter((p) => ["away", "other_clinic"].includes(p.inCheck ?? "") || ["away", "other_clinic"].includes(p.outCheck ?? ""))
+      .map((p) => `${onClock.get(p.userId) ?? "?"} @ ${clinicRows.find((c) => c.id === p.clinicId)?.name ?? "?"}: in ${p.inCheck}${p.inDistanceM != null ? " " + p.inDistanceM + " m" : ""}, out ${p.outCheck ?? "-"}${p.outDistanceM != null ? " " + p.outDistanceM + " m" : ""}`);
+    out.push({ date, flagged, scheduledOnClock: new Set(scheduled.map((s) => s.userId)).size, clockedIn: new Set(punchRows.filter((p) => onClock.has(p.userId)).map((p) => p.userId)).size, noPunch: Array.from(new Set(noPunch)), punchChecks: checks });
+  }
+  return out;
+}
