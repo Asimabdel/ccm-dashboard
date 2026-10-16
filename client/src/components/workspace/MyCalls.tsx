@@ -32,7 +32,7 @@ export function MyCalls() {
         <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-slate-50"><PhoneCall size={15} className="text-brand" /> My calls</h3>
         <input type="date" aria-label="Day" className={cn(inputCls, "w-auto py-1 text-xs")} value={d.date} max={today} onChange={(e) => setDate(e.target.value || today)} />
         {!isToday && <button className="text-xs font-semibold text-slate-500 hover:text-slate-800" onClick={() => setDate(today)}>Back to today</button>}
-        <span className="ml-auto flex items-center gap-1 text-[11px] text-slate-400"><Lock size={11} /> Only you see these{d.ringCentral ? " · from RingCentral, updates about every 10 minutes" : ""}</span>
+        <span className="ml-auto flex items-center gap-1 text-[11px] text-slate-400"><Lock size={11} /> Only you see these{d.ringCentral ? " · from RingCentral, a call shows about a minute after it ends" : ""}</span>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_auto]">

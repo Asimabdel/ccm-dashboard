@@ -329,7 +329,9 @@ export const handler = async (event: any, context: any) => {
   if (event && event.__job === "ringcentral-sync" && !event.requestContext && !event.version) {
     const { runRingCentralSync } = await import("../ringcentralSync");
     const started = Date.now();
-    const sync = await runRingCentralSync({ maxRequests: 8, maxMs: 20_000, manual: false });
+    // Every minute (2026-10-16, so Top callers / My calls stay live): normally 1–2 call-log reads; capped at 5 a run
+    // (RingCentral allows ~10 a minute); after an outage the backlog catches up over a few runs.
+    const sync = await runRingCentralSync({ maxRequests: 5, maxMs: 20_000, manual: false });
     // Faxes sent from MyPCP: has RingCentral sent them yet?
     const { refreshFaxStatuses } = await import("../faxSendDb");
     const faxes = await refreshFaxStatuses({ deadline: started + 26_000 }).catch((e) => ({ error: String(e?.message ?? e).slice(0, 120) }));

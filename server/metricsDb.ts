@@ -424,7 +424,7 @@ async function callCounts(period: LeaderboardPeriod) {
   const today = localDateStr();
   const from = period === "today" ? today : addDays(today, -((new Date(`${today}T12:00:00Z`).getUTCDay() + 6) % 7));
   const key = `${period}|${from}|${today}`;
-  if (boardCache && boardCache.key === key && Date.now() - boardCache.at < 60_000) return { from, rows: boardCache.rows };
+  if (boardCache && boardCache.key === key && Date.now() - boardCache.at < 15_000) return { from, rows: boardCache.rows };
   const d = await db();
   const ctx = await loadContext(today);
   const start = clinicLocalToUtc(from, "00:00");

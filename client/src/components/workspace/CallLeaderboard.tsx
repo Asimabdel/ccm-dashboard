@@ -13,7 +13,8 @@ const MEDAL = ["bg-amber-400 text-amber-950", "bg-slate-300 text-slate-800", "bg
  */
 export function CallLeaderboard() {
   const [period, setPeriod] = useState<"today" | "week">("today");
-  const q = trpc.workspace.metrics.leaderboard.useQuery({ period }, { refetchInterval: 60_000, placeholderData: (prev) => prev });
+  // Live: every 30 seconds (and as soon as the tab is back in view); RingCentral calls arrive about a minute after they end.
+  const q = trpc.workspace.metrics.leaderboard.useQuery({ period }, { refetchInterval: 30_000, refetchOnWindowFocus: true, staleTime: 10_000, placeholderData: (prev) => prev });
   const d = q.data;
   if (!d) return null;
   const top = Math.max(1, ...d.top.map((r) => r.calls));
@@ -50,7 +51,7 @@ export function CallLeaderboard() {
         {d.you.inTop ? "You're in the top 5. Keep it up!"
           : d.you.rank ? <>You're <b className="text-slate-700 dark:text-slate-200">#{d.you.rank}</b> of {d.callers} with {d.you.calls} call{d.you.calls === 1 ? "" : "s"}.</>
           : d.top.length ? "Make a call to get on the board." : null}
-        <span className="text-slate-400"> · Calls made + answered (RingCentral and MyPCP){period === "week" ? ", Monday to today" : ""}.</span>
+        <span className="text-slate-400"> · Calls made + answered{period === "week" ? ", Monday to today" : ""}. Updated {new Date(q.dataUpdatedAt || Date.now()).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}; a call shows about a minute after it ends.</span>
       </p>
     </section>
   );

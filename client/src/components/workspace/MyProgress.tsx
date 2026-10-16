@@ -90,7 +90,7 @@ export function MyProgress({ isAdmin }: { isAdmin: boolean }) {
             {open && <ProvidersToday />}
           </div>
           <div className="flex items-center justify-between gap-2 border-t border-slate-100 dark:border-slate-700 px-4 py-2.5">
-            <span className="text-[11px] text-slate-400">Updates every minute. Calls from RingCentral can take ~10 minutes to show.</span>
+            <span className="text-[11px] text-slate-400">Updates every minute. A RingCentral call shows about a minute after it ends.</span>
             {isAdmin && <Btn size="sm" variant="ghost" onClick={() => { setOpen(false); setGoalsOpen(true); }}><Settings2 size={13} /> Goals</Btn>}
           </div>
         </PopoverContent>
