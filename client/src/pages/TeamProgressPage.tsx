@@ -10,7 +10,8 @@ import { cn } from "@/lib/utils";
 import { addDays, fmtDay, localDateStr } from "@shared/workforce";
 import { ROLE_METRIC_LABELS, ROLE_PRIMARY, fmtMinutes, progressOf, type Metric, type MetricKey } from "@shared/metrics";
 
-const ROLE_ORDER = ["front_desk", "staff", "medical_assistant", "provider", "billing", "admin"];
+// Every role Team progress loads (server TEAM_ROLES); office managers were missing until 2026-10-16.
+const ROLE_ORDER = ["front_desk", "office_manager", "staff", "medical_assistant", "provider", "billing", "admin"];
 /** After each role's key numbers: the columns everyone shares. */
 const COMMON: MetricKey[] = ["calls", "missed", "talk", "tasks_done", "hours"];
 
