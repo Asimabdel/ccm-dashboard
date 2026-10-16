@@ -472,3 +472,22 @@ export async function callLeaderboard(userId: number, period: LeaderboardPeriod)
     you: me ? { rank: me.rank, calls: me.calls, inTop: me.order < 5 } : { rank: null, calls: 0, inTop: false },
   };
 }
+
+/** IAM-only (2026-10-16): per person, calls (made + answered) and minutes on the phone for a date range (names + numbers). */
+export async function talkSummary(input: { from: string; to: string }) {
+  const d = await db();
+  const ctx = await loadContext(input.to);
+  const rc = await d.select({ extensionId: rcCallStats.extensionId, direction: rcCallStats.direction, durationSec: rcCallStats.durationSec, answered: rcCallStats.answered })
+    .from(rcCallStats).where(and(gte(rcCallStats.workDate, input.from), lte(rcCallStats.workDate, input.to)));
+  const people = new Map((await d.select({ id: users.id, name: users.name }).from(users)).map((p) => [p.id, p.name ?? "?"]));
+  const by = new Map<string, { calls: number; sec: number }>();
+  for (const c of rc) {
+    if (!madeOrTaken(c)) continue;
+    const uid = c.extensionId ? ctx.extToUser.get(c.extensionId) : undefined;
+    const k = uid ? people.get(uid) ?? `User #${uid}` : "(lines not linked to a person)";
+    const t = by.get(k) ?? { calls: 0, sec: 0 };
+    t.calls++; t.sec += c.durationSec;
+    by.set(k, t);
+  }
+  return Array.from(by.entries()).map(([name, t]) => ({ name, calls: t.calls, minutes: Math.round(t.sec / 60) })).sort((a, b) => b.minutes - a.minutes);
+}

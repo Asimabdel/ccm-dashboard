@@ -9,7 +9,7 @@
 import { and, eq, gte, lte, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { appSettings, phoneCalls, rcCallStats, users } from "../drizzle/schema";
-import { mapCallLogRecord, mapCallStat } from "../shared/phone";
+import { mapCallLogRecord, mapCallStats } from "../shared/phone";
 import { localDateStr } from "../shared/workforce";
 import { openSecret, sealSecret } from "./secretBox";
 import { buildPhoneIndex, type WorkspaceActor, audit } from "./workspaceDb";
@@ -154,7 +154,7 @@ export async function saveSyncConfig(actor: WorkspaceActor, input: { enabled: bo
 // ---- The sync ----
 
 async function saveCallStats(records: unknown[], exts: Map<string, { name: string; email: string | null }>) {
-  const rows = records.map((r) => mapCallStat(r as Parameters<typeof mapCallStat>[0])).filter((s): s is NonNullable<typeof s> => !!s).map((s) => {
+  const rows = records.flatMap((r) => mapCallStats(r as Parameters<typeof mapCallStats>[0])).map((s) => {
     const ext = s.extensionId ? exts.get(s.extensionId) : undefined;
     return {
       rcId: s.rcId.slice(0, 120), startedAt: s.startedAt, workDate: localDateStr(s.startedAt), direction: s.direction,
@@ -284,4 +284,48 @@ export async function runRingCentralSync(opts: { maxRequests: number; maxMs: num
   // Counts only — no numbers or names in the logs.
   console.log(`[ringcentral-sync] ${JSON.stringify({ ...stats, cursor: state.cursor, error: state.lastError })}`);
   return { stats, cursor: state.cursor, error: state.lastError };
+}
+
+/**
+ * IAM-only check (2026-10-16): how RingCentral times calls, to get "on the phone" right. The last few hours of
+ * call-log records reduced to durations, results and leg shapes — no phone numbers, names or extension ids.
+ */
+export async function probeCallDurations(input: { hours: number }) {
+  const creds = await loadCredentials();
+  if (!creds) return { skipped: "not set up" };
+  const token = await accessToken(creds);
+  const from = new Date(Date.now() - input.hours * 3600_000).toISOString();
+  const r = await rcGet<{ records: Record<string, unknown>[] }>(token, `/restapi/v1.0/account/~/call-log?view=Detailed&type=Voice&perPage=200&dateFrom=${encodeURIComponent(from)}`);
+  const recs = r.records ?? [];
+  type Leg = { legType?: string; direction?: string; result?: string; duration?: number; action?: string; extension?: unknown; master?: boolean; startTime?: string };
+  const sample = recs.slice(0, 40).map((x) => {
+    const legs = ((x.legs as Leg[] | undefined) ?? []);
+    const start = Date.parse(String(x.startTime));
+    return {
+      dir: x.direction, result: x.result, duration: x.duration, action: x.action, hasExt: !!x.extension,
+      legs: legs.map((l) => ({ type: l.legType, dir: l.direction, result: l.result, dur: l.duration, action: l.action, ext: !!l.extension, master: l.master, offsetSec: l.startTime ? Math.round((Date.parse(l.startTime) - start) / 1000) : null })),
+    };
+  });
+  // Totals: how much of the time the record counts vs the answering legs.
+  let top = 0, answeredLegs = 0, inboundAnswered = 0, outboundUnanswered = 0, outboundUnansweredSec = 0;
+  for (const x of recs) {
+    const legs = ((x.legs as Leg[] | undefined) ?? []);
+    const dur = Number(x.duration ?? 0);
+    if (String(x.direction).startsWith("In")) {
+      const ans = legs.filter((l) => l.extension && /accepted|connected/i.test(l.result ?? ""));
+      if (ans.length) { inboundAnswered++; top += dur; answeredLegs += ans.reduce((s, l) => s + Number(l.duration ?? 0), 0); }
+    } else if (!/connected|accepted/i.test(String(x.result ?? ""))) { outboundUnanswered++; outboundUnansweredSec += dur; }
+  }
+  const results: Record<string, number> = {};
+  for (const x of recs) { const k = `${x.direction}/${x.result}`; results[k] = (results[k] ?? 0) + 1; }
+  return { records: recs.length, results, inboundAnswered, inboundTopSec: top, inboundAnsweringLegSec: answeredLegs, outboundUnanswered, outboundUnansweredSec, sample };
+}
+
+/** IAM-only (2026-10-16): re-read the call log from a date (e.g. after changing how calls are credited). The next runs catch up. */
+export async function rewindCallSync(fromIso: string) {
+  const state: SyncState = { ...EMPTY_STATE, ...((await readSetting<SyncState>(STATE_KEY)) ?? {}) };
+  const before = state.cursor;
+  state.cursor = new Date(fromIso).toISOString();
+  await writeSetting(STATE_KEY, state, null);
+  return { before, cursor: state.cursor };
 }

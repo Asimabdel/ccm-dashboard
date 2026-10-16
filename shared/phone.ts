@@ -92,7 +92,7 @@ interface RcCallLogRecord {
   startTime?: string; duration?: number; direction?: string; result?: string;
   from?: RcParty; to?: RcParty;
   extension?: { id?: string | number };
-  legs?: { extension?: { id?: string | number }; result?: string; duration?: number }[];
+  legs?: { extension?: { id?: string | number }; result?: string; duration?: number; legType?: string; master?: boolean; startTime?: string }[];
 }
 
 /** One call for the productivity numbers: who handled it and how it went. Never the outside number. */
@@ -111,29 +111,49 @@ export interface CallStat {
 const ANSWERED = /accepted|connected/i;
 const MISSED = /missed|voicemail|no answer|rejected|busy|hang ?up|abandon/i;
 
-/** Map a company call-log record to a CallStat. Internal extension-to-extension calls are skipped. */
-export function mapCallStat(r: RcCallLogRecord): CallStat | null {
+/**
+ * One stat per person who handled a call (2026-10-16). Outbound: the caller, the whole call. Inbound: everyone whose
+ * own phone connected to it, each with only their connected time — a transferred call counts for both people, with
+ * their own minutes, and the phone menu / ringing before anyone picked up isn't anyone's time. Nobody answered: one
+ * missed stat for the extension it rang. RingCentral's "Call connected" device legs carry each person's talk time;
+ * when a call has only "Accepted" legs, those are used. The first person keeps the call's own id; others get "#ext".
+ */
+export function mapCallStats(r: RcCallLogRecord): CallStat[] {
   const base = mapCallLogRecord(r);
-  if (!base || !base.ids.length || !base.otherNumber) return null;
-  let extensionId = base.extensionId;
-  let answered = false;
-  if (base.direction === "inbound") {
-    // A call to a queue rings several people; credit the one who picked up.
-    const leg = (r.legs ?? []).find((l) => l.extension?.id != null && ANSWERED.test(l.result ?? ""));
-    if (leg) extensionId = String(leg.extension!.id);
-    answered = !!leg || ANSWERED.test(base.result ?? "");
+  if (!base || !base.ids.length || !base.otherNumber) return [];
+  const id = base.ids[0]!;
+  const common = { direction: base.direction, startedAt: base.startedAt, result: base.result };
+  if (base.direction === "outbound") return [{ ...common, rcId: id, durationSec: base.durationSec, extensionId: base.extensionId, answered: false, missed: false }];
+  const legs = (r.legs ?? []).filter((l) => l.extension?.id != null && !l.master);
+  const connected = legs.filter((l) => /call connected/i.test(l.result ?? ""));
+  const handled = connected.length ? connected : legs.filter((l) => ANSWERED.test(l.result ?? ""));
+  if (!handled.length) {
+    const answered = ANSWERED.test(base.result ?? "");
+    return [{ ...common, rcId: id, durationSec: base.durationSec, extensionId: base.extensionId, answered, missed: !answered && MISSED.test(base.result ?? "") }];
   }
-  return {
-    rcId: base.ids[0]!,
-    direction: base.direction,
-    startedAt: base.startedAt,
-    durationSec: base.durationSec,
-    result: base.result,
-    extensionId,
-    answered,
-    missed: base.direction === "inbound" && !answered && MISSED.test(base.result ?? ""),
-  };
+  const byExt = new Map<string, { sec: number; first: number }>();
+  for (const l of handled) {
+    const ext = String(l.extension!.id);
+    const at = l.startTime ? Date.parse(l.startTime) : base.startedAt.getTime();
+    const cur = byExt.get(ext) ?? { sec: 0, first: at };
+    cur.sec += Math.max(0, Math.round(Number(l.duration ?? 0)));
+    cur.first = Math.min(cur.first, at);
+    byExt.set(ext, cur);
+  }
+  const people = Array.from(byExt.entries()).sort((a, b) => a[1].first - b[1].first);
+  // Legs without durations (older records): one person gets the call's time.
+  const noTimes = people.every(([, v]) => v.sec === 0);
+  return people.map(([ext, v], i) => ({
+    ...common, rcId: i === 0 ? id : `${id}#${ext}`.slice(0, 120), extensionId: ext, answered: true, missed: false,
+    durationSec: noTimes ? (i === 0 ? base.durationSec : 0) : Math.min(v.sec, base.durationSec || v.sec),
+  }));
 }
+
+/** The first person's stat for a call (see mapCallStats). Internal extension-to-extension calls are skipped. */
+export function mapCallStat(r: RcCallLogRecord): CallStat | null {
+  return mapCallStats(r)[0] ?? null;
+}
+
 
 /**
  * Map a call-log record (account-level, Detailed view). Internal extension-to-extension

@@ -272,6 +272,23 @@ export const handler = async (event: any, context: any) => {
     const { callRanking } = await import("../metricsDb");
     return { today: await callRanking("today"), week: await callRanking("week") };
   }
+  // How RingCentral times calls (durations / results / leg shapes only; IAM-only).
+  if (event && event.__job === "rc-probe-durations" && !event.requestContext && !event.version) {
+    const { probeCallDurations } = await import("../ringcentralSync");
+    return probeCallDurations({ hours: Math.min(24, Math.max(1, Number(event.hours) || 3)) });
+  }
+  // Calls + minutes on the phone per person for a range (IAM-only; names + numbers).
+  if (event && event.__job === "talk-summary" && !event.requestContext && !event.version) {
+    const { talkSummary } = await import("../metricsDb");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(event.from)) || !/^\d{4}-\d{2}-\d{2}$/.test(String(event.to))) return { problem: "from / to YYYY-MM-DD" };
+    return talkSummary({ from: event.from, to: event.to });
+  }
+  // Re-read the RingCentral call log from a date (IAM-only).
+  if (event && event.__job === "rc-rewind" && !event.requestContext && !event.version) {
+    const { rewindCallSync } = await import("../ringcentralSync");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(event.from))) return { problem: "from YYYY-MM-DD" };
+    return rewindCallSync(`${event.from}T05:00:00.000Z`);
+  }
   if (event && event.__job === "ccm-dx-stats" && !event.requestContext && !event.version) {
     const { ccmDiagnosisStats } = await import("../diagnosisStats");
     return ccmDiagnosisStats();

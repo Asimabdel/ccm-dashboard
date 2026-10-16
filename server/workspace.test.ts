@@ -25,7 +25,7 @@ import {
   type ScheduleVisit,
 } from "../shared/workspace";
 import { appointmentKey } from "./workspaceDb";
-import { formatPhone, mapCallLogRecord, mapCallStat, normalizePhone, parseRingCentralCall } from "../shared/phone";
+import { formatPhone, mapCallLogRecord, mapCallStat, mapCallStats, normalizePhone, parseRingCentralCall } from "../shared/phone";
 import { extractPhones, matchEmailSender, parseFromHeader, stripQuotedText } from "../shared/email";
 import { ageOn, evaluateTesting, parseSex, recognizeTest } from "../shared/testing";
 import { PLANS, checkInsurance, patientLine } from "../shared/insurance";
@@ -553,6 +553,28 @@ describe("RingCentral call stats (every call, per person)", () => {
       .toMatchObject({ answered: false, missed: true, extensionId: "205" });
     expect(mapCallStat({ id: "a4", startTime: "2026-09-26T17:05:00.000Z", direction: "Inbound", result: "Voicemail", duration: 40, from: { phoneNumber: "+12815550002" } })!.missed).toBe(true);
     expect(mapCallStat({ id: "a5", startTime: "2026-09-26T17:10:00.000Z", direction: "Outbound", result: "Call connected", to: { extensionNumber: "102" }, extension: { id: 101 } })).toBeNull();
+  });
+  it("a transferred call counts for both people, each with only their own connected time", () => {
+    // The shape RingCentral sent on 2026-10-16 (made-up ids): 288 s call; A talked 31 s from +7 s, then B talked 249 s from +39 s.
+    const t0 = "2026-10-16T15:00:00.000Z", at = (s: number) => new Date(Date.parse(t0) + s * 1000).toISOString();
+    const stats = mapCallStats({ telephonySessionId: "s9", startTime: t0, duration: 288, direction: "Inbound", result: "Accepted", from: { phoneNumber: "+12815550003" },
+      legs: [
+        { legType: "Accept", result: "Accepted", duration: 288, master: true, startTime: at(0) },
+        { legType: "Accept", result: "Accepted", duration: 39, extension: { id: 300 }, startTime: at(0) },
+        { legType: "PstnToSip", result: "Call connected", duration: 31, extension: { id: 301 }, startTime: at(7) },
+        { legType: "PstnToSip", result: "IP Phone Offline", duration: 0, extension: { id: 305 }, startTime: at(7) },
+        { legType: "Accept", result: "Accepted", duration: 249, extension: { id: 302 }, startTime: at(39) },
+        { legType: "PstnToSip", result: "Stopped", duration: 3, extension: { id: 306 }, startTime: at(39) },
+        { legType: "PstnToSip", result: "Call connected", duration: 249, extension: { id: 302 }, startTime: at(39) },
+      ] });
+    expect(stats.map((x) => [x.rcId, x.extensionId, x.durationSec, x.answered])).toEqual([["s9", "301", 31, true], ["s9#302", "302", 249, true]]);
+  });
+  it("only Accepted legs: each person gets their leg; outbound is the whole call", () => {
+    const s2 = mapCallStats({ id: "s10", startTime: "2026-10-16T16:00:00.000Z", duration: 60, direction: "Inbound", result: "Accepted", from: { phoneNumber: "+12815550004" },
+      legs: [{ result: "Missed", extension: { id: 900 }, duration: 10 }, { result: "Accepted", extension: { id: 205 }, duration: 48 }] });
+    expect(s2.map((x) => [x.extensionId, x.durationSec])).toEqual([["205", 48]]);
+    expect(mapCallStats({ id: "o1", startTime: "2026-10-16T16:05:00.000Z", duration: 13, direction: "Outbound", result: "Hang Up", to: { phoneNumber: "+17135550001" }, extension: { id: 101 } })
+      .map((x) => [x.extensionId, x.durationSec, x.missed])).toEqual([["101", 13, false]]);
   });
   it("only admins can see the team's numbers", async () => {
     await expect(appRouter.createCaller(ctxFor("staff")).workspace.metrics.team({ date: "2026-09-26" })).rejects.toThrow(/admin/);
