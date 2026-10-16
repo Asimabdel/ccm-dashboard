@@ -19,6 +19,21 @@ import {
 } from "../shared/metrics";
 
 const GOALS_KEY = "daily_goals";
+/** Manual phone-line links (2026-10-16): RingCentral extension id → MyPCP user id, for lines whose email / name don't match a login. */
+const LINE_LINKS_KEY = "rc_extension_links";
+
+export async function lineLinks(): Promise<Record<string, number>> {
+  const v = await readSetting<Record<string, number>>(LINE_LINKS_KEY);
+  return v && typeof v === "object" ? Object.fromEntries(Object.entries(v).filter(([, u]) => Number.isInteger(u) && u > 0)) : {};
+}
+
+/** Credit a RingCentral line's calls to a person (null removes the manual link). */
+export async function setLineLink(extensionId: string, userId: number | null, byUserId: number) {
+  const links = await lineLinks();
+  if (userId) links[extensionId] = userId; else delete links[extensionId];
+  await (await db()).insert(appSettings).values({ key: LINE_LINKS_KEY, value: links, updatedByUserId: byUserId }).onDuplicateKeyUpdate({ set: { value: links, updatedByUserId: byUserId } });
+  boardCache = null;
+}
 const RC_STATE_KEY = "ringcentral_sync_state";
 const CCM_DONE = ["completed", "ready_for_billing", "billed"] as const;
 const PHONE_ROLES = ["staff", "front_desk"];
@@ -94,6 +109,8 @@ async function loadContext(date: string): Promise<MetricsContext> {
     const uid = (e.email ? byEmail.get(e.email.toLowerCase()) : undefined) ?? (byName?.length === 1 ? byName[0] : undefined);
     if (uid) extToUser.set(e.id, uid);
   }
+  // Manual links win (a line whose email / name doesn't match the person's MyPCP login).
+  for (const [ext, uid] of Object.entries(await lineLinks())) extToUser.set(ext, uid);
   return { goals, extToUser, rcCursor: state?.cursor ? new Date(state.cursor) : null, rcActive: !!any, rcLastSuccessAt: state?.lastSuccessAt ?? null };
 }
 
@@ -343,11 +360,11 @@ export async function teamMetrics(date: string, onlyUserIds?: Set<number> | null
     ? await d.select({ id: rcCallStats.extensionId, name: rcCallStats.extensionName, direction: rcCallStats.direction, durationSec: rcCallStats.durationSec, answered: rcCallStats.answered, missed: rcCallStats.missed })
       .from(rcCallStats).where(eq(rcCallStats.workDate, date))
     : [];
-  const lines = new Map<string, { name: string; made: number; answered: number; missed: number; talkSec: number }>();
+  const lines = new Map<string, { extensionId: string | null; name: string; made: number; answered: number; missed: number; talkSec: number }>();
   for (const r of lineRows) {
     if (r.id && ctx.extToUser.has(r.id)) continue;
     const k = r.id ?? "none";
-    const cur = lines.get(k) ?? { name: r.name ?? (r.id ? `Extension ${r.id}` : "No extension (main number / IVR)"), made: 0, answered: 0, missed: 0, talkSec: 0 };
+    const cur = lines.get(k) ?? { extensionId: r.id ?? null, name: r.name ?? (r.id ? `Extension ${r.id}` : "No extension (main number / IVR)"), made: 0, answered: 0, missed: 0, talkSec: 0 };
     if (r.direction === "outbound") cur.made++;
     if (r.direction === "inbound" && r.answered) cur.answered++;
     if (r.missed) cur.missed++;
@@ -369,6 +386,37 @@ export async function teamMetrics(date: string, onlyUserIds?: Set<number> | null
 // ---- Top callers leaderboard (2026-10-16): everyone sees the top 5 by calls made + answered ----
 
 export type LeaderboardPeriod = "today" | "week";
+
+/**
+ * IAM-only (2026-10-16): every RingCentral line with calls in the last 30 days — who it's credited to (automatic
+ * match by email / name, or a manual link) — and, with link {extensionId, user}, credit a line to a person by name.
+ */
+export async function rcLines(input: { link?: { extensionId: string; user: string | null } }) {
+  const d = await db();
+  const today = localDateStr();
+  const people = await d.select({ id: users.id, name: users.name, email: users.email, role: users.role }).from(users).where(ne(users.role, "user"));
+  if (input.link) {
+    let userId: number | null = null;
+    if (input.link.user) {
+      const hits = people.filter((p) => (p.name ?? "").toLowerCase().includes(input.link!.user!.trim().toLowerCase()));
+      if (hits.length !== 1) return { problem: `"${input.link.user}" matches ${hits.length ? hits.map((h) => h.name).join(", ") : "nobody"}` };
+      userId = hits[0]!.id;
+    }
+    const admin = people.find((p) => p.role === "admin");
+    await setLineLink(input.link.extensionId, userId, admin?.id ?? 0);
+  }
+  const ctx = await loadContext(today);
+  const links = await lineLinks();
+  const rows = await d.select({ id: rcCallStats.extensionId, name: rcCallStats.extensionName, email: rcCallStats.extensionEmail, n: sql<number>`COUNT(*)` })
+    .from(rcCallStats).where(gte(rcCallStats.workDate, addDays(today, -30))).groupBy(rcCallStats.extensionId, rcCallStats.extensionName, rcCallStats.extensionEmail);
+  const nameOf = new Map(people.map((p) => [p.id, p.name]));
+  const mask = (e: string | null) => (e ? e.replace(/^(.).*(@.*)$/, "$1…$2") : null);
+  return {
+    lines: rows.map((r) => ({ extensionId: r.id, name: r.name, email: mask(r.email), calls30d: Number(r.n), creditedTo: r.id ? nameOf.get(ctx.extToUser.get(r.id) ?? 0) ?? null : null, manual: !!(r.id && links[r.id]) }))
+      .sort((a, b) => b.calls30d - a.calls30d),
+    loginsWithoutALine: people.filter((p) => !Array.from(ctx.extToUser.values()).includes(p.id) && ["front_desk", "staff", "office_manager", "medical_assistant"].includes(p.role)).map((p) => `${p.name} (${p.role})`),
+  };
+}
 let boardCache: { key: string; at: number; rows: { userId: number; name: string; calls: number }[] } | null = null;
 
 /** Calls per person (made + answered), the same count as My calls / My progress, for today or this week (Mon–today). */
@@ -404,6 +452,12 @@ async function callCounts(period: LeaderboardPeriod) {
     .sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name));
   boardCache = { key, at: Date.now(), rows };
   return { from, rows };
+}
+
+/** Everyone's call count for the period (IAM check). */
+export async function callRanking(period: LeaderboardPeriod) {
+  const { from, rows } = await callCounts(period);
+  return { from, rows: rows.map((r) => `${r.name}: ${r.calls}`) };
 }
 
 /** The top 5 callers (ties share a rank), and where the signed-in person stands. Names and counts only. */

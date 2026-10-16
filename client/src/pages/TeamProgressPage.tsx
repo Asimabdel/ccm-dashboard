@@ -1,4 +1,5 @@
 import { Fragment, useState } from "react";
+import { toast } from "sonner";
 import { ChevronDown, ChevronLeft, ChevronRight, PhoneCall, PhoneMissed, Clock, CalendarCheck } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
@@ -26,6 +27,8 @@ export default function TeamProgressPage() {
   const [date, setDate] = useState(today);
   const allowed = user?.role === "admin" || user?.role === "office_manager";
   const q = trpc.workspace.metrics.team.useQuery({ date }, { enabled: allowed, refetchInterval: date === today ? 60_000 : false });
+  const utils = trpc.useUtils();
+  const linkLine = trpc.workspace.metrics.linkLine.useMutation({ onSuccess: () => { void utils.workspace.metrics.invalidate(); toast.success("Linked. Their calls now count for them."); }, onError: (e) => toast.error(e.message) });
   const [open, setOpen] = useState<number | null>(null);
   const data = q.data;
 
@@ -109,12 +112,12 @@ export default function TeamProgressPage() {
           })}
 
           {data.lines.length > 0 && (
-            <Panel title="Phone lines not linked to a person" subtitle="Shared phones, call queues, or RingCentral users without a matching MyPCP login. To credit someone, give their RingCentral extension the same email (or name) as their MyPCP login." bodyClassName="p-0">
+            <Panel title="Phone lines not linked to a person" subtitle="Shared phones, call queues, or RingCentral users without a matching MyPCP login. If a line is one person's, pick them under Link to: their calls then count on My calls, their progress and Top callers." bodyClassName="p-0">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-100 dark:border-slate-700">
-                      <th className="px-4 py-2.5 font-semibold">Line</th><th className="px-3 py-2.5 font-semibold">Made</th><th className="px-3 py-2.5 font-semibold">Answered</th><th className="px-3 py-2.5 font-semibold">Missed</th><th className="px-3 py-2.5 font-semibold">On phone</th>
+                      <th className="px-4 py-2.5 font-semibold">Line</th><th className="px-3 py-2.5 font-semibold">Made</th><th className="px-3 py-2.5 font-semibold">Answered</th><th className="px-3 py-2.5 font-semibold">Missed</th><th className="px-3 py-2.5 font-semibold">On phone</th><th className="px-3 py-2.5 font-semibold">Link to</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
@@ -125,6 +128,16 @@ export default function TeamProgressPage() {
                         <td className="px-3 py-2.5 tabular-nums">{l.answered}</td>
                         <td className={cn("px-3 py-2.5 tabular-nums", l.missed && "text-rose-600 font-semibold")}>{l.missed}</td>
                         <td className="px-3 py-2.5 tabular-nums">{fmtMinutes(l.talkMin)}</td>
+                        <td className="px-3 py-2">
+                          {l.extensionId ? (
+                            <select className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-800" defaultValue="" aria-label={`Link ${l.name} to a person`}
+                              disabled={linkLine.isPending}
+                              onChange={(e) => { const id = Number(e.target.value); if (id && window.confirm(`Count ${l.name}'s calls as ${data.people.find((p) => p.id === id)?.name}'s?`)) linkLine.mutate({ extensionId: l.extensionId!, userId: id }); else e.target.value = ""; }}>
+                              <option value="">Not a person</option>
+                              {data.people.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select>
+                          ) : <span className="text-xs text-slate-400">—</span>}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

@@ -261,6 +261,17 @@ export const handler = async (event: any, context: any) => {
     const dates = Array.isArray(event.dates) ? (event.dates as unknown[]).filter((x): x is string => typeof x === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x)).slice(0, 7) : [];
     return clockHealth({ dates });
   }
+  // RingCentral lines and who they're credited to; {link:{extensionId,user}} credits a line to a person (IAM-only).
+  if (event && event.__job === "rc-lines" && !event.requestContext && !event.version) {
+    const { rcLines } = await import("../metricsDb");
+    const link = event.link && typeof event.link.extensionId === "string" ? { extensionId: event.link.extensionId, user: typeof event.link.user === "string" ? event.link.user : null } : undefined;
+    return rcLines({ link });
+  }
+  // The whole calls ranking (names + counts) for today and this week, as the Top callers card sees it (IAM-only).
+  if (event && event.__job === "call-ranking" && !event.requestContext && !event.version) {
+    const { callRanking } = await import("../metricsDb");
+    return { today: await callRanking("today"), week: await callRanking("week") };
+  }
   if (event && event.__job === "ccm-dx-stats" && !event.requestContext && !event.version) {
     const { ccmDiagnosisStats } = await import("../diagnosisStats");
     return ccmDiagnosisStats();

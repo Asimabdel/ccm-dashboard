@@ -1153,6 +1153,12 @@ export const workspaceRouter = router({
       await actorFor(ctx, "tasks");
       return metrics.myMetrics({ id: ctx.user.id, name: ctx.user.name, role: ctx.user.role });
     }),
+    /** Team progress → credit a RingCentral line to a person (admins). */
+    linkLine: protectedProcedure.input(z.object({ extensionId: z.string().min(1).max(64), userId: z.number().int().positive().nullable() })).mutation(async ({ ctx, input }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only an admin can link phone lines." });
+      await metrics.setLineLink(input.extensionId, input.userId, ctx.user.id);
+      return { success: true };
+    }),
     /** Top callers (everyone sees the top 5 by calls made + answered; names and counts only). */
     leaderboard: protectedProcedure.input(z.object({ period: z.enum(["today", "week"]).default("today") })).query(async ({ ctx, input }) => {
       await actorFor(ctx, "tasks");
