@@ -1153,6 +1153,11 @@ export const workspaceRouter = router({
       await actorFor(ctx, "tasks");
       return metrics.myMetrics({ id: ctx.user.id, name: ctx.user.name, role: ctx.user.role });
     }),
+    /** Top callers (everyone sees the top 5 by calls made + answered; names and counts only). */
+    leaderboard: protectedProcedure.input(z.object({ period: z.enum(["today", "week"]).default("today") })).query(async ({ ctx, input }) => {
+      await actorFor(ctx, "tasks");
+      return metrics.callLeaderboard(ctx.user.id, input.period);
+    }),
     /** My progress → Providers: the providers this person works with — patients seen today vs their usual day. */
     providers: protectedProcedure.query(async ({ ctx }) => {
       const actor = await actorFor(ctx, "tasks");

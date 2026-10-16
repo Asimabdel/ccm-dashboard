@@ -365,3 +365,56 @@ export async function teamMetrics(date: string, onlyUserIds?: Set<number> | null
     lines: Array.from(lines.values()).map((l) => ({ ...l, talkMin: Math.round(l.talkSec / 60) })).sort((a, b) => (b.made + b.answered + b.missed) - (a.made + a.answered + a.missed)),
   };
 }
+
+// ---- Top callers leaderboard (2026-10-16): everyone sees the top 5 by calls made + answered ----
+
+export type LeaderboardPeriod = "today" | "week";
+let boardCache: { key: string; at: number; rows: { userId: number; name: string; calls: number }[] } | null = null;
+
+/** Calls per person (made + answered), the same count as My calls / My progress, for today or this week (Mon–today). */
+async function callCounts(period: LeaderboardPeriod) {
+  const today = localDateStr();
+  const from = period === "today" ? today : addDays(today, -((new Date(`${today}T12:00:00Z`).getUTCDay() + 6) % 7));
+  const key = `${period}|${from}|${today}`;
+  if (boardCache && boardCache.key === key && Date.now() - boardCache.at < 60_000) return { from, rows: boardCache.rows };
+  const d = await db();
+  const ctx = await loadContext(today);
+  const start = clinicLocalToUtc(from, "00:00");
+  const end = clinicLocalToUtc(addDays(today, 1), "00:00");
+  const [rc, app, people] = await Promise.all([
+    d.select({ extensionId: rcCallStats.extensionId, direction: rcCallStats.direction, durationSec: rcCallStats.durationSec, answered: rcCallStats.answered })
+      .from(rcCallStats).where(and(gte(rcCallStats.workDate, from), lte(rcCallStats.workDate, today))),
+    // Calls placed in MyPCP that the RingCentral log hasn't covered yet.
+    d.select({ userId: phoneCalls.userId, direction: phoneCalls.direction, durationSec: phoneCalls.durationSec, source: phoneCalls.source, rcSessionId: phoneCalls.rcSessionId, startedAt: phoneCalls.startedAt })
+      .from(phoneCalls).where(and(gte(phoneCalls.startedAt, start), sql`${phoneCalls.startedAt} < ${end}`, sql`${phoneCalls.userId} IS NOT NULL`)),
+    d.select({ id: users.id, name: users.name }).from(users).where(ne(users.role, "user")),
+  ]);
+  const counts = new Map<number, number>();
+  for (const c of rc) {
+    const uid = c.extensionId ? ctx.extToUser.get(c.extensionId) : undefined;
+    if (uid && madeOrTaken(c)) counts.set(uid, (counts.get(uid) ?? 0) + 1);
+  }
+  for (const c of app) {
+    const notYetSynced = !ctx.rcActive || (c.source !== "ringcentral" && !c.rcSessionId && (!ctx.rcCursor || c.startedAt > ctx.rcCursor));
+    if (c.userId && notYetSynced && madeOrTaken(c)) counts.set(c.userId, (counts.get(c.userId) ?? 0) + 1);
+  }
+  const nameOf = new Map(people.map((p) => [p.id, p.name ?? "Teammate"]));
+  const rows = Array.from(counts.entries()).filter(([uid, n]) => n > 0 && nameOf.has(uid))
+    .map(([userId, calls]) => ({ userId, name: nameOf.get(userId)!, calls }))
+    .sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name));
+  boardCache = { key, at: Date.now(), rows };
+  return { from, rows };
+}
+
+/** The top 5 callers (ties share a rank), and where the signed-in person stands. Names and counts only. */
+export async function callLeaderboard(userId: number, period: LeaderboardPeriod) {
+  const { from, rows } = await callCounts(period);
+  const { shortStaffName } = await import("../shared/attendance");
+  const ranked = rows.map((r, i) => ({ ...r, rank: rows.findIndex((x) => x.calls === r.calls) + 1, order: i }));
+  const me = ranked.find((r) => r.userId === userId) ?? null;
+  return {
+    period, from, to: localDateStr(), callers: rows.length,
+    top: ranked.slice(0, 5).map((r) => ({ rank: r.rank, name: shortStaffName(r.name), calls: r.calls, you: r.userId === userId })),
+    you: me ? { rank: me.rank, calls: me.calls, inTop: me.order < 5 } : { rank: null, calls: 0, inTop: false },
+  };
+}
