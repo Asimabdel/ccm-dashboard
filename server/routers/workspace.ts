@@ -410,6 +410,13 @@ export const workspaceRouter = router({
       await actorFor(ctx, "scheduleImport");
       return ws.recentImports();
     }),
+    /** The nightly "seen visits from Practice Fusion" fill-in: when it last ran and what it did (counts only). */
+    chartFill: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "scheduleImport");
+      const { getVisitFillState } = await import("../pfVisitFill");
+      const s = await getVisitFillState();
+      return { lastRunAt: s.lastRunAt, markedSeen: s.result?.markedSeen ?? 0, added: s.result?.added ?? 0, failed: !!s.error };
+    }),
   }),
 
   openings: protectedProcedure.input(z.object({ clinicId, days: z.number().int().min(0).max(14).default(3), providerIds: providerFilter })).query(async ({ ctx, input }) => {

@@ -105,8 +105,16 @@ export const handler = async (event: any, context: any) => {
   }
   // Every 2 minutes: the Practice Fusion chart sync (starts nightly or on request, then loads in chunks).
   if (event && event.__job === "pf-sync" && !event.requestContext && !event.version) {
-    const { runPfSync } = await import("../pfSync");
-    return runPfSync({ deadline: Date.now() + 18_000 });
+    const { runPfSync, getSyncState } = await import("../pfSync");
+    const out = await runPfSync({ deadline: Date.now() + 18_000 });
+    // On a tick with nothing else to do, once per finished sync: signed visits → the schedule as Seen.
+    if ("skipped" in out) {
+      const { fillVisitsAfterSync } = await import("../pfVisitFill");
+      const s = await getSyncState();
+      const filled = await fillVisitsAfterSync({ phase: s.phase, lastSuccessAt: s.lastSuccessAt ?? null });
+      if (filled) return { ...out, visitFill: filled };
+    }
+    return out;
   }
   // Every morning (EventBridge): who qualifies for care programs from their diagnoses (counts only in the log).
   if (event && event.__job === "program-suggest" && !event.requestContext && !event.version) {
@@ -127,6 +135,11 @@ export const handler = async (event: any, context: any) => {
   if (event && event.__job === "merge-duplicate-roster" && !event.requestContext && !event.version) {
     const { mergeDuplicates, mergeActor } = await import("../rosterMerge");
     return mergeDuplicates(await mergeActor(), { apply: event.apply === true, deadline: Date.now() + 22_000 });
+  }
+  // Seen visits from the Practice Fusion chart copy → the schedule (IAM-only; dry run unless apply; counts only).
+  if (event && event.__job === "pf-visit-fill" && !event.requestContext && !event.version) {
+    const { fillVisitsFromChart } = await import("../pfVisitFill");
+    return fillVisitsFromChart({ apply: event.apply === true });
   }
   // Does Practice Fusion's per-patient API return more document kinds than the export? (IAM-only; counts only)
   if (event && event.__job === "pf-doc-probe" && !event.requestContext && !event.version) {

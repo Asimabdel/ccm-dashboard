@@ -66,6 +66,7 @@ import {
   type TaskStatus,
 } from "../shared/workspace";
 import { matchProviderId } from "../shared/csvImport";
+import { CHART_VISIT_KEY_PREFIX, matchImportToChartVisits, personKeys } from "../shared/visitFill";
 import { normalizePhone } from "../shared/phone";
 
 export class WorkspaceError extends Error {
@@ -858,6 +859,31 @@ export async function commitSchedule(
   }
   for (const { diff, ids } of Array.from(updateGroups.values())) {
     for (let i = 0; i < ids.length; i += 1000) await d.update(appointments).set({ ...diff, importId }).where(inArray(appointments.id, ids.slice(i, i + 1000)));
+  }
+  // A visit the nightly Practice Fusion fill-in already added (same person, same day): the file's row takes that
+  // appointment over (it stays Seen) instead of listing the visit twice.
+  if (inserts.length) {
+    const newDates = Array.from(new Set(inserts.map((r) => r.date)));
+    const chartRows: { id: number; date: string; patientId: number | null; name: string; dob: Date | null }[] = [];
+    for (let i = 0; i < newDates.length; i += 500) {
+      chartRows.push(...(await d.select({ id: appointments.id, date: appointments.date, patientId: appointments.patientId, name: appointments.patientName, dob: appointments.dateOfBirth })
+        .from(appointments).where(and(inArray(appointments.date, newDates.slice(i, i + 500)), like(appointments.externalKey, `${CHART_VISIT_KEY_PREFIX}%`)))));
+    }
+    if (chartRows.length) {
+      const taken = matchImportToChartVisits(
+        inserts.map((r, idx) => ({ idx, date: r.date, status: r.status ?? "scheduled", keys: personKeys({ patientId: r.patientId ?? null, names: [r.patientName], dob: ymd(r.dateOfBirth ?? null) }, "appointment") })),
+        chartRows.map((c) => ({ id: c.id, date: c.date, keys: personKeys({ patientId: c.patientId, names: [c.name], dob: ymd(c.dob) }, "visit") })),
+      );
+      for (const [idx, id] of Array.from(taken.entries())) {
+        const { status: _fileStatus, ...row } = inserts[idx]!;
+        await d.update(appointments).set({ ...row, status: "completed" }).where(eq(appointments.id, id));
+      }
+      const gone = new Set(taken.keys());
+      const keep = inserts.filter((_, idx) => !gone.has(idx));
+      inserts.length = 0;
+      inserts.push(...keep);
+      updated += gone.size;
+    }
   }
   for (let i = 0; i < inserts.length; i += 400) await d.insert(appointments).values(inserts.slice(i, i + 400));
   const created = inserts.length;

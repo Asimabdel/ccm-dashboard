@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, CheckCircle2, FileUp, Loader2, UserCheck, Stethoscope, Link2Off } from "lucide-react";
+import { AlertTriangle, CheckCircle2, FileUp, Loader2, UserCheck, Stethoscope, Link2Off, RefreshCw } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { fmtDay, fmtTime } from "@shared/workforce";
@@ -37,6 +37,7 @@ export function ScheduleImportDialog({ open, onOpenChange, onImported }: { open:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  const chartFill = trpc.workspace.schedule.chartFill.useQuery(undefined, { enabled: open, staleTime: 60_000 });
   const previewM = trpc.workspace.schedule.preview.useMutation({
     onSuccess: (p) => {
       setPreview(p);
@@ -99,6 +100,19 @@ export function ScheduleImportDialog({ open, onOpenChange, onImported }: { open:
             already moved on the flow board are otherwise kept.
           </DialogDescription>
         </DialogHeader>
+
+        <p className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+          <RefreshCw size={14} className="mt-0.5 shrink-0 text-slate-400" />
+          <span>
+            <b className="font-semibold text-slate-800 dark:text-slate-100">Seen visits fill in automatically.</b> Every night, each visit a provider signed in
+            Practice Fusion marks that patient Seen here, or is added if it wasn't on an imported schedule. New bookings, cancellations and no-shows still come from this import.
+            {chartFill.data?.lastRunAt && !chartFill.data.failed && (
+              <span className="block mt-0.5 text-slate-500">
+                Last run {new Date(chartFill.data.lastRunAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}: {chartFill.data.markedSeen} marked Seen, {chartFill.data.added} added.
+              </span>
+            )}
+          </span>
+        </p>
 
         <div className="space-y-5">
           <div className="grid grid-cols-1 sm:grid-cols-[1fr_220px] gap-3 items-end">
