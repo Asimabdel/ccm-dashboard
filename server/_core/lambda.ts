@@ -130,6 +130,11 @@ export const handler = async (event: any, context: any) => {
     const { rebookMissedOfficeTests } = await import("../officeTestingDb");
     return rebookMissedOfficeTests({ apply: event.apply === true, lookbackDays: typeof event.lookbackDays === "number" ? Math.min(60, Math.max(1, event.lookbackDays)) : undefined });
   }
+  // How testing visits are labeled in the Practice Fusion chart copy (IAM-only, read-only; labels, calendars, counts, dates).
+  if (event && event.__job === "office-test-encounters" && !event.requestContext && !event.version) {
+    const { officeTestEncounterProbe } = await import("../officeTestEncounters");
+    return officeTestEncounterProbe();
+  }
   // ABI-Q / PFT / RMR already in the Practice Fusion chart copy → done tests (IAM-only; dry run unless apply; counts and test names only).
   if (event && event.__job === "office-tests-from-chart" && !event.requestContext && !event.version) {
     const { officeTestsFromChart } = await import("../officeTestingDb");
