@@ -1327,6 +1327,11 @@ const INTAKE_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: "staffProfiles", column: "mobilePhone", ddl: "`mobilePhone` varchar(10) NULL AFTER `hireDate`" },
   { table: "staffProfiles", column: "textReminders", ddl: "`textReminders` boolean NOT NULL DEFAULT false AFTER `mobilePhone`" },
   { table: "staffProfiles", column: "calendarToken", ddl: "`calendarToken` varchar(40) NULL UNIQUE AFTER `textReminders`" },
+  // Added 2026-10-19: in-office tests — results, who did it, the report in the folder, the rebook task for a missed one.
+  { table: "patientTests", column: "results", ddl: "`results` json NULL AFTER `createdAt`" },
+  { table: "patientTests", column: "performedByUserId", ddl: "`performedByUserId` int NULL AFTER `results`" },
+  { table: "patientTests", column: "fileId", ddl: "`fileId` int NULL AFTER `performedByUserId`" },
+  { table: "patientTests", column: "rebookTaskId", ddl: "`rebookTaskId` int NULL AFTER `fileId`" },
 ];
 async function upgradeIntake(db: Db): Promise<string[]> {
   const applied: string[] = [];

@@ -11,10 +11,11 @@ function ctxFor(role: string): TrpcContext {
 
 describe("patient folders", () => {
   it("each role gets the sub-folders its existing access allows", () => {
-    expect(folderSectionsFor("admin")).toEqual(["chart", "visits", "tasks", "comms", "forms", "files", "faxes", "payments", "care", "insurance"]);
-    expect(folderSectionsFor("provider")).toEqual(["chart", "visits", "tasks", "comms", "forms", "files", "faxes", "care", "insurance"]); // no payments
+    expect(folderSectionsFor("admin")).toEqual(["chart", "visits", "tasks", "comms", "forms", "files", "tests", "faxes", "payments", "care", "insurance"]);
+    expect(folderSectionsFor("provider")).toEqual(["chart", "visits", "tasks", "comms", "forms", "files", "tests", "faxes", "care", "insurance"]); // no payments
     expect(folderSectionsFor("front_desk")).toContain("payments");
     expect(folderSectionsFor("front_desk")).toContain("faxes");
+    expect(folderSectionsFor("medical_assistant")).toContain("tests"); // ABI-Q / PFT / RMR results
     expect(folderSectionsFor("office_manager")).not.toContain("faxes");
     expect(folderSectionsFor("medical_assistant")).toEqual(folderSectionsFor("front_desk")); // same as the front desk (their clinic only)
     expect(folderSectionsFor("billing")).toEqual([]);

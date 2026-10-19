@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, DoorOpen, Loader2, MoreHorizontal, Upload, CalendarX2, ArrowRight, Timer, History, CalendarCheck, Users, Hourglass, CheckCircle2, UserX, Video, Syringe } from "lucide-react";
+import { ChevronLeft, ChevronRight, DoorOpen, Loader2, MoreHorizontal, Upload, CalendarX2, ArrowRight, Timer, History, CalendarCheck, Users, Hourglass, CheckCircle2, UserX, Video, Syringe, Activity } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { DoximityButtons } from "@/components/phone/DoximityButtons";
 import { InjectionDialog } from "@/components/injections/InjectionDialog";
+import { MarkTestsDialog, TEST_PILL } from "@/components/testing/OfficeTests";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { useUrlParams, useWorkspace } from "@/components/workspace/useWorkspace";
 import { ScheduleImportDialog } from "@/components/workspace/ScheduleImportDialog";
@@ -17,9 +18,11 @@ import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { addDays, fmtDay, localDateStr } from "@shared/workforce";
 import { FLOW_COLUMNS, FLOW_LABELS, WAITING_STATUSES, checkFlowTransition, type FlowStatus } from "@shared/workspace";
 import { cn } from "@/lib/utils";
+import { OFFICE_TEST_LABELS, type OfficeTest } from "@shared/officeTests";
 
 type Board = RouterOutputs["workspace"]["flow"]["board"];
 type Card = Board["cards"][number];
+type CardTests = RouterOutputs["workspace"]["officeTests"]["badges"][string];
 
 interface PendingMove {
   card: Card;
@@ -52,6 +55,7 @@ export default function PatientFlowPage() {
   const [dragId, setDragId] = useState<number | null>(null);
   const [overCol, setOverCol] = useState<string | null>(null);
   const [injectionFor, setInjectionFor] = useState<Card | null>(null);
+  const [testFor, setTestFor] = useState<{ card: Card; tests: OfficeTest[] } | null>(null);
   const [, setTick] = useState(0);
   const utils = trpc.useUtils();
 
@@ -63,6 +67,8 @@ export default function PatientFlowPage() {
 
   const input = { clinicId: ws.clinicId, date };
   const board = trpc.workspace.flow.board.useQuery(input, { enabled: !!user && !!ws.caps?.flowView, refetchInterval: date === today ? 30_000 : false });
+  // ABI-Q / PFT / RMR due for the people on the board (the practice's criteria), so it can be done while they're here.
+  const testBadges = trpc.workspace.officeTests.badges.useQuery({ date }, { enabled: !!user && !!ws.caps?.flowView, staleTime: 60_000, refetchInterval: date === today ? 120_000 : false });
 
   const move = trpc.workspace.flow.move.useMutation({
     onMutate: async (v) => {
@@ -185,7 +191,8 @@ export default function PatientFlowPage() {
                   </header>
                   <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-2">
                     {cards.map((c) => (
-                      <FlowCard key={c.id} card={c} canMove={canMove} onMove={requestMove} onDragStart={() => setDragId(c.id)} onDragEnd={() => { setDragId(null); setOverCol(null); }} busy={move.isPending && move.variables?.appointmentId === c.id} onInjection={caps?.injections ? setInjectionFor : undefined} />
+                      <FlowCard key={c.id} card={c} canMove={canMove} onMove={requestMove} onDragStart={() => setDragId(c.id)} onDragEnd={() => { setDragId(null); setOverCol(null); }} busy={move.isPending && move.variables?.appointmentId === c.id} onInjection={caps?.injections ? setInjectionFor : undefined}
+                        tests={testBadges.data?.[c.subjectKey]} onTestDone={canMove ? (card, tests) => setTestFor({ card, tests }) : undefined} />
                     ))}
                     {cards.length === 0 && <p className="text-center text-xs text-slate-400 py-6">No patients</p>}
                   </div>
@@ -253,12 +260,13 @@ export default function PatientFlowPage() {
       </AlertDialog>
 
       <ScheduleImportDialog open={importOpen} onOpenChange={(o) => { setImportOpen(o); if (!o && params.get("import")) setParams({ import: null }); }} onImported={(first) => { if (first && first !== date) setParams({ date: first === today ? null : first, import: null }); }} />
+      {testFor && <MarkTestsDialog open onClose={() => setTestFor(null)} subjectKey={testFor.card.subjectKey} name={testFor.card.patientName} tests={testFor.tests} initial={date <= today ? "done" : "scheduled"} initialDate={date} />}
       {injectionFor && <InjectionDialog open onOpenChange={(o) => !o && setInjectionFor(null)} subjectKey={injectionFor.subjectKey} patientName={injectionFor.patientName} date={date} />}
     </CCMDashboardLayout>
   );
 }
 
-function FlowCard({ card, canMove, onMove, onDragStart, onDragEnd, busy, onInjection }: { card: Card; canMove: boolean; onMove: (c: Card, to: FlowStatus) => void; onDragStart: () => void; onDragEnd: () => void; busy: boolean; onInjection?: (c: Card) => void }) {
+function FlowCard({ card, canMove, onMove, onDragStart, onDragEnd, busy, onInjection, tests, onTestDone }: { card: Card; canMove: boolean; onMove: (c: Card, to: FlowStatus) => void; onDragStart: () => void; onDragEnd: () => void; busy: boolean; onInjection?: (c: Card) => void; tests?: CardTests; onTestDone?: (c: Card, tests: OfficeTest[]) => void }) {
   const idx = FLOW_COLUMNS.indexOf(card.status as (typeof FLOW_COLUMNS)[number]);
   const next = idx >= 0 && idx < FLOW_COLUMNS.length - 1 ? FLOW_COLUMNS[idx + 1] : null;
   return (
@@ -293,11 +301,10 @@ function FlowCard({ card, canMove, onMove, onDragStart, onDragEnd, busy, onInjec
               <DropdownMenuSeparator />
               {card.status === "scheduled" && <DropdownMenuItem className="text-rose-600" onClick={() => onMove(card, "no_show")}>No-show</DropdownMenuItem>}
               <DropdownMenuItem className="text-slate-500" onClick={() => onMove(card, "cancelled")}>Cancelled</DropdownMenuItem>
-              {onInjection && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => onInjection(card)}><Syringe size={14} className="mr-2" /> Injection given…</DropdownMenuItem>
-                </>
+              {(onInjection || (onTestDone && !!tests?.due.length)) && <DropdownMenuSeparator />}
+              {onInjection && <DropdownMenuItem onClick={() => onInjection(card)}><Syringe size={14} className="mr-2" /> Injection given…</DropdownMenuItem>}
+              {onTestDone && !!tests?.due.length && (
+                <DropdownMenuItem onClick={() => onTestDone(card, tests.due)}><Activity size={14} className="mr-2" /> Test done ({tests.due.map((t) => OFFICE_TEST_LABELS[t]).join(", ")})…</DropdownMenuItem>
               )}
             </DropdownMenuContent>
           </DropdownMenu>
@@ -311,6 +318,20 @@ function FlowCard({ card, canMove, onMove, onDragStart, onDragEnd, busy, onInjec
         </p>
       )}
       {card.reason && <p className="mt-0.5 text-xs text-slate-400 truncate" title={card.reason}>{card.reason}</p>}
+      {!!(tests?.due.length || tests?.doneThatDay.length) && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {tests!.due.map((t) => (
+            <button key={t} type="button" disabled={!onTestDone} onClick={() => onTestDone?.(card, tests!.due)}
+              title={tests!.scheduledToday.includes(t) ? "Booked for today. Mark it done once it's performed." : "Qualifies under the practice's criteria. If the provider orders it, do it while they're here."}
+              className={cn("rounded-full px-1.5 py-0.5 text-[10px] font-bold ring-1", TEST_PILL[t], onTestDone && "hover:brightness-95")}>
+              {OFFICE_TEST_LABELS[t]} {tests!.scheduledToday.includes(t) ? "booked" : "due"}
+            </button>
+          ))}
+          {tests!.doneThatDay.map((t) => (
+            <span key={`d-${t}`} className="inline-flex items-center gap-0.5 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-900"><CheckCircle2 size={10} /> {OFFICE_TEST_LABELS[t]}</span>
+          ))}
+        </div>
+      )}
       <div className="mt-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
           <WaitChip card={card} />

@@ -12,6 +12,7 @@ import { appSettings, emailContacts, fhirPatients, fhirResources, patientTests, 
 import { chartLine, patientInfo, patientOf, sectionType, type FhirResource } from "../shared/fhir";
 import { makePersonMatcher, type PersonRef } from "../shared/fax";
 import { recognizeTest } from "../shared/testing";
+import { recognizeOfficeTest } from "../shared/officeTests";
 import { localDateStr, localMinutes } from "../shared/workforce";
 import { relayFetch } from "./egress";
 import { clientAssertion, getPfConfig } from "./pfFhir";
@@ -427,6 +428,11 @@ async function loadBatch(resources: FhirResource[], ctx: LoadCtx) {
     if (who && line.date && line.title && (kind === "Observation:laboratory" || r.resourceType === "Procedure" || r.resourceType === "DiagnosticReport" || r.resourceType === "Immunization")) {
       const t = recognizeTest(line.title);
       if (t && line.date <= localDateStr()) tests.push({ subjectKey: who.key, patientId: who.patientId, testKey: t.key, method: t.method, performedOn: line.date, status: "done", result: kind === "Observation:laboratory" ? cut(line.value, 120) : null, source: "import" });
+    }
+    // In-office tests done in Practice Fusion (ABI-Q, PFT, RMR) → the Testing tab, so nobody is booked twice.
+    if (who && line.date && (r.resourceType === "Procedure" || r.resourceType === "DiagnosticReport" || r.resourceType === "Observation")) {
+      const ot = recognizeOfficeTest({ title: line.title, code: line.code, status: line.status });
+      if (ot && line.date <= localDateStr()) tests.push({ subjectKey: who.key, patientId: who.patientId, testKey: ot, performedOn: line.date, status: "done", source: "import" });
     }
   }
   await flush();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bmiOf, eligibleTests, isCurrentSmoker, officeTestState, qualifierOf, type TestFacts } from "../shared/officeTests";
+import { bmiOf, cleanResults, eligibleTests, isCurrentSmoker, officeTestState, qualifierOf, recognizeOfficeTest, resultSummary, type TestFacts } from "../shared/officeTests";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 
@@ -64,6 +64,43 @@ describe("in-office testing (ABI-Q, PFT, RMR) by the practice's criteria", () =>
     expect(officeTestState([{ status: "scheduled", date: "2026-10-14" }, { status: "done", date: "2026-10-14", id: 9 }], today).state).toBe("done");
     expect(officeTestState([{ status: "declined", date: "2026-06-01" }], today).state).toBe("declined");
     expect(officeTestState([{ status: "not_applicable", date: "2025-06-01" }], today).state).toBe("eligible");
+  });
+
+  it("a scheduled day that passes with nothing done is missed; the newest mark decides", () => {
+    const today = "2026-10-19";
+    expect(officeTestState([{ id: 1, status: "scheduled", date: "2026-10-19" }], today).state).toBe("scheduled"); // today still counts
+    expect(officeTestState([{ id: 1, status: "scheduled", date: "2026-10-16" }], today)).toMatchObject({ state: "missed", scheduledFor: "2026-10-16" });
+    // Done that day (or later): not missed.
+    expect(officeTestState([{ id: 1, status: "scheduled", date: "2026-10-16" }, { id: 2, status: "done", date: "2026-10-16" }], today).state).toBe("done");
+    // Rebooked: scheduled again.
+    expect(officeTestState([{ id: 1, status: "scheduled", date: "2026-10-16" }, { id: 2, status: "scheduled", date: "2026-10-28" }], today)).toMatchObject({ state: "scheduled", scheduledFor: "2026-10-28" });
+    // Declined after being booked: declined, not scheduled or missed.
+    expect(officeTestState([{ id: 1, status: "scheduled", date: "2026-10-28" }, { id: 2, status: "declined", date: "2026-10-19" }], today).state).toBe("declined");
+  });
+
+  it("results: only the test's own fields, in range; one-line summary", () => {
+    expect(cleanResults("abi_q", { right: "1.02", left: 0.98, extra: 5 })).toEqual({ right: 1.02, left: 0.98 });
+    expect(cleanResults("pft", { fev1: "", fvc: null })).toBeNull();
+    expect(cleanResults("pft", { reading: "normal" })).toEqual({ reading: "Normal" });
+    expect(() => cleanResults("abi_q", { right: 7 })).toThrow(/between/);
+    expect(() => cleanResults("pft", { reading: "maybe" })).toThrow(/Normal or Abnormal/);
+    expect(resultSummary("abi_q", { right: 1.02, left: 0.98 })).toBe("Right ABI 1.02 · Left ABI 0.98");
+    expect(resultSummary("pft", { fev1: 2.45, fvc: 3.1, ratio: 79, reading: "Normal" })).toBe("FEV1 2.45 L · FVC 3.1 L · FEV1/FVC 79% · Normal");
+    expect(resultSummary("rmr", { kcal: 1650 })).toBe("RMR 1,650 kcal/day");
+    expect(resultSummary("rmr", null)).toBeNull();
+  });
+
+  it("recognizes ABI-Q / PFT / RMR done in the Practice Fusion chart (by CPT code or name), not orders", () => {
+    expect(recognizeOfficeTest({ title: "Spirometry", code: "cpt|94010", status: "completed" })).toBe("pft");
+    expect(recognizeOfficeTest({ title: "Something", code: "cpt|93922" })).toBe("abi_q");
+    expect(recognizeOfficeTest({ title: "Indirect calorimetry", code: "cpt|94690" })).toBe("rmr");
+    expect(recognizeOfficeTest({ title: "Ankle brachial index", code: null })).toBe("abi_q");
+    expect(recognizeOfficeTest({ title: "FEV1/FVC", code: "loinc.org|19926-5", status: "final" })).toBe("pft");
+    expect(recognizeOfficeTest({ title: "Resting metabolic rate" })).toBe("rmr");
+    expect(recognizeOfficeTest({ title: "Pulmonary function test ordered" })).toBeNull();
+    expect(recognizeOfficeTest({ title: "Spirometry", status: "not-done" })).toBeNull();
+    expect(recognizeOfficeTest({ title: "Comprehensive metabolic panel", code: "cpt|80053" })).toBeNull();
+    expect(recognizeOfficeTest({ title: "Diabetes education" })).toBeNull();
   });
 
   it("billing and people without a role can't open the Testing tab", async () => {

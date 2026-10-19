@@ -8,6 +8,7 @@ export const FOLDER_SECTIONS = {
   comms: "Calls & emails",
   forms: "Forms & consents",
   files: "Documents & files",
+  tests: "Test results",
   faxes: "Faxes",
   payments: "Payments",
   care: "Care programs",
@@ -23,6 +24,8 @@ export const PATIENT_FILE_TYPES = {
   id_card: "ID / driver's license",
   lab_report: "Lab report",
   imaging_report: "Imaging report",
+  /** In-office test reports (ABI-Q, PFT, RMR): shown in the Test results sub-folder. */
+  test_result: "Test result (ABI-Q / PFT / RMR)",
   referral: "Referral",
   letter: "Letter",
   other: "Other",

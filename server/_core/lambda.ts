@@ -113,6 +113,10 @@ export const handler = async (event: any, context: any) => {
       const s = await getSyncState();
       const filled = await fillVisitsAfterSync({ phase: s.phase, lastSuccessAt: s.lastSuccessAt ?? null });
       if (filled) return { ...out, visitFill: filled };
+      // Once a day from 6 AM: scheduled ABI-Q / PFT / RMR whose day passed with nothing done → a rebook call task.
+      const { dailyRebookTick } = await import("../officeTestingDb");
+      const rebook = await dailyRebookTick().catch((e) => { console.error("[office-tests-rebook] failed", (e as Error).message); return null; });
+      if (rebook) { console.log("[office-tests-rebook]", JSON.stringify(rebook)); return { ...out, officeTestRebook: rebook }; }
     }
     return out;
   }
@@ -120,6 +124,16 @@ export const handler = async (event: any, context: any) => {
   if (event && event.__job === "program-suggest" && !event.requestContext && !event.version) {
     const { scanProgramSuggestions } = await import("../programsDb");
     return scanProgramSuggestions();
+  }
+  // Missed in-office tests → rebook call tasks (IAM-only; dry run unless apply; counts only). Runs once a day on a quiet pf-sync tick.
+  if (event && event.__job === "office-tests-rebook" && !event.requestContext && !event.version) {
+    const { rebookMissedOfficeTests } = await import("../officeTestingDb");
+    return rebookMissedOfficeTests({ apply: event.apply === true, lookbackDays: typeof event.lookbackDays === "number" ? Math.min(60, Math.max(1, event.lookbackDays)) : undefined });
+  }
+  // ABI-Q / PFT / RMR already in the Practice Fusion chart copy → done tests (IAM-only; dry run unless apply; counts and test names only).
+  if (event && event.__job === "office-tests-from-chart" && !event.requestContext && !event.version) {
+    const { officeTestsFromChart } = await import("../officeTestingDb");
+    return officeTestsFromChart({ apply: event.apply === true });
   }
   // One-time fill of the latest smoking status / BMI per chart from the chart copy (IAM-only; re-run until done).
   if (event && event.__job === "chart-facts-backfill" && !event.requestContext && !event.version) {

@@ -10,8 +10,9 @@ import { and, desc, eq, inArray, isNull, ne, or, sql, type SQL } from "drizzle-o
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import { getDb } from "./db";
 import {
-  clinics, documents, eligibilityChecks, emailMessages, faxes, fhirPatients, fhirResources, intakePackets, outboundFaxes, patientFiles, patients, phoneCalls, squarePayments, users, workTasks,
+  clinics, documents, eligibilityChecks, emailMessages, faxes, fhirPatients, fhirResources, intakePackets, outboundFaxes, patientFiles, patientTests, patients, phoneCalls, squarePayments, users, workTasks,
 } from "../drizzle/schema";
+import { OFFICE_TESTS, OFFICE_TEST_NAMES, resultSummary, type OfficeTest, type OfficeTestResults } from "../shared/officeTests";
 import { OUTBOUND_FAX_STATUS } from "../shared/faxSend";
 import { can, FLOW_LABELS, TASK_CATEGORY_LABELS, TASK_STATUS_LABELS, type FlowStatus, type TaskCategory, type TaskStatus, type WorkspaceCap } from "../shared/workspace";
 import {
@@ -50,6 +51,7 @@ const SECTION_CAPS: Record<FolderSection, WorkspaceCap[]> = {
   comms: ["patientFull"],
   forms: ["intakeForms"],
   files: ["documents"],
+  tests: ["flowView", "chartBasic"],
   faxes: ["emailTriage", "chartFull"],
   payments: ["payments"],
   care: ["patientFull"],
@@ -250,8 +252,9 @@ async function collect(actor: WorkspaceActor, key: string, sections: FolderSecti
         open: { type: "document", id: doc.id, ready },
       });
     }
+    // In-office test reports are in the Test results sub-folder.
     const files = await d.select({ f: patientFiles, by: users.name }).from(patientFiles).leftJoin(users, eq(users.id, patientFiles.uploadedByUserId))
-      .where(and(whose(patientFiles.subjectKey, patientFiles.patientId, key), eq(patientFiles.status, "ready"), isNull(patientFiles.removedAt)))
+      .where(and(whose(patientFiles.subjectKey, patientFiles.patientId, key), eq(patientFiles.status, "ready"), isNull(patientFiles.removedAt), ne(patientFiles.fileType, "test_result")))
       .orderBy(desc(patientFiles.createdAt)).limit(300);
     for (const { f, by } of files) {
       out.push({
@@ -259,6 +262,31 @@ async function collect(actor: WorkspaceActor, key: string, sections: FolderSecti
         detail: [PATIENT_FILE_TYPES[f.fileType as PatientFileType] ?? f.fileType, by ? `added by ${by}` : null, f.note].filter(Boolean).join(" · "),
         date: iso(f.createdAt), status: null, open: { type: "file", id: f.id },
       });
+    }
+  }
+
+  if (want("tests")) {
+    // ABI-Q / PFT / RMR: every mark (scheduled, done with its results, declined, not needed) and the reports.
+    const marks = await d.select({ t: patientTests, by: users.name }).from(patientTests).leftJoin(users, eq(users.id, patientTests.performedByUserId))
+      .where(and(whose(patientTests.subjectKey, patientTests.patientId, key), inArray(patientTests.testKey, [...OFFICE_TESTS])))
+      .orderBy(desc(patientTests.performedOn)).limit(300);
+    const linked = new Set<number>();
+    for (const { t, by } of marks) {
+      const test = t.testKey as OfficeTest;
+      if (t.fileId) linked.add(t.fileId);
+      const status = t.status === "done" ? "Done" : t.status === "scheduled" ? "Scheduled" : t.status === "declined" ? "Declined" : "Not needed";
+      out.push({
+        key: `test:${t.id}`, section: "tests", kind: "test", title: OFFICE_TEST_NAMES[test] ?? t.testKey,
+        detail: [resultSummary(test, t.results as OfficeTestResults | null), by ? `by ${by}` : null, t.source === "import" ? "from Practice Fusion" : null, t.fileId ? "report attached" : null, t.note].filter(Boolean).join(" · ") || null,
+        date: t.performedOn, status, open: t.fileId ? { type: "file", id: t.fileId } : { type: "none" },
+      });
+    }
+    const reports = await d.select({ f: patientFiles, by: users.name }).from(patientFiles).leftJoin(users, eq(users.id, patientFiles.uploadedByUserId))
+      .where(and(whose(patientFiles.subjectKey, patientFiles.patientId, key), eq(patientFiles.status, "ready"), isNull(patientFiles.removedAt), eq(patientFiles.fileType, "test_result")))
+      .orderBy(desc(patientFiles.createdAt)).limit(300);
+    for (const { f, by } of reports) {
+      if (linked.has(f.id)) continue;
+      out.push({ key: `file:${f.id}`, section: "tests", kind: "file", title: f.title, detail: [PATIENT_FILE_TYPES.test_result, by ? `added by ${by}` : null, f.note].filter(Boolean).join(" · "), date: iso(f.createdAt), status: null, open: { type: "file", id: f.id } });
     }
   }
 
@@ -381,7 +409,7 @@ export async function folderSearch(actor: WorkspaceActor, key: string, q: string
 // ---------------------------------------------------------------------------
 
 export async function startFileUpload(actor: WorkspaceActor, input: { subjectKey: string; fileName: string; mimeType: string; size: number; fileType: PatientFileType; title: string; note?: string | null }) {
-  const { care } = await assertFolder(actor, input.subjectKey, "files");
+  const { care } = await assertFolder(actor, input.subjectKey, input.fileType === "test_result" && !folderSectionsFor(actor.role).includes("files") ? "tests" : "files");
   if (!(PATIENT_FILE_MIME as readonly string[]).includes(input.mimeType)) throw new WorkspaceError("Add a PDF, JPG or PNG.");
   if (input.size <= 0 || input.size > MAX_PATIENT_FILE_BYTES) throw new WorkspaceError("Files can be up to 25 MB.");
   const storageKey = `documents/patient-files/${randomUUID()}`;
@@ -440,7 +468,8 @@ export async function addFileFromStorage(actor: WorkspaceActor, input: { subject
 async function readyFile(actor: WorkspaceActor, id: number) {
   const [f] = await (await db()).select().from(patientFiles).where(and(eq(patientFiles.id, id), eq(patientFiles.status, "ready"), isNull(patientFiles.removedAt))).limit(1);
   if (!f) throw new WorkspaceError("That file wasn't found.", "NOT_FOUND");
-  await assertFolder(actor, f.subjectKey, "files");
+  // Test reports open for whoever sees the Test results sub-folder.
+  await assertFolder(actor, f.subjectKey, f.fileType === "test_result" && !folderSectionsFor(actor.role).includes("files") ? "tests" : "files");
   return f;
 }
 
@@ -455,6 +484,7 @@ export async function removeFile(actor: WorkspaceActor, id: number) {
   const f = await readyFile(actor, id);
   // Hidden from the folder, kept for the record.
   await (await db()).update(patientFiles).set({ removedAt: new Date(), removedByUserId: actor.id }).where(eq(patientFiles.id, id));
+  if (f.fileType === "test_result") await (await db()).update(patientTests).set({ fileId: null }).where(eq(patientTests.fileId, id));
   await audit(actor, "update_patient", { entityType: "patientFile", entityId: id, description: `Removed from the patient's folder: ${f.title}` });
   return { ok: true };
 }

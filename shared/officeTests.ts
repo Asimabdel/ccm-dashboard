@@ -123,9 +123,10 @@ export function eligibleTests(f: TestFacts): { test: OfficeTest; reasons: { q: Q
 
 export type OfficeTestRecordStatus = "scheduled" | "done" | "declined" | "not_applicable";
 export interface OfficeTestRecord { id?: number; status: OfficeTestRecordStatus; date: string; note?: string | null }
-export type OfficeTestState = "eligible" | "scheduled" | "done" | "declined" | "not_needed";
+export type OfficeTestState = "eligible" | "scheduled" | "missed" | "done" | "declined" | "not_needed";
+export const OFFICE_TEST_STATES: OfficeTestState[] = ["eligible", "scheduled", "missed", "done", "declined", "not_needed"];
 export const OFFICE_TEST_STATE_LABELS: Record<OfficeTestState, string> = {
-  eligible: "Eligible", scheduled: "Scheduled", done: "Done this year", declined: "Declined", not_needed: "Not needed",
+  eligible: "Eligible", scheduled: "Scheduled", missed: "Missed", done: "Done this year", declined: "Declined", not_needed: "Not needed",
 };
 
 const addMonths = (ymd: string, n: number) => {
@@ -136,7 +137,9 @@ const addMonths = (ymd: string, n: number) => {
 
 /**
  * Done in the last 12 months = done (eligible again a year later). A declined or "not needed" answer
- * stands for 12 months too. A scheduled date (after the last test) = scheduled. Otherwise eligible.
+ * stands for 12 months too. The newest mark after the last test decides: scheduled for today or later =
+ * scheduled; scheduled for a day that has passed with nothing marked done = missed (rebook it).
+ * Otherwise eligible.
  */
 export function officeTestState(records: OfficeTestRecord[], today: string): { state: OfficeTestState; lastDone: string | null; scheduledFor: string | null; eligibleAgainOn: string | null; record: OfficeTestRecord | null } {
   const sorted = [...records].sort((a, b) => b.date.localeCompare(a.date) || (b.id ?? 0) - (a.id ?? 0));
@@ -145,10 +148,101 @@ export function officeTestState(records: OfficeTestRecord[], today: string): { s
   const lastDone = done?.date ?? null;
   const eligibleAgainOn = lastDone ? addMonths(lastDone, OFFICE_TEST_REPEAT_MONTHS) : null;
   const after = (r: OfficeTestRecord) => !done || r.date > done.date || (r.date === done.date && (r.id ?? 0) > (done.id ?? 0));
-  const scheduled = sorted.find((r) => r.status === "scheduled" && after(r));
-  if (scheduled) return { state: "scheduled", lastDone, scheduledFor: scheduled.date, eligibleAgainOn, record: scheduled };
+  // Marks made after the last test, newest first (by when they were made; by date when that isn't known).
+  const marks = sorted.filter((r) => r.status !== "done" && after(r)).sort((a, b) => (b.id ?? 0) - (a.id ?? 0) || b.date.localeCompare(a.date));
+  const latest = marks[0];
+  if (latest?.status === "scheduled") return { state: latest.date < today ? "missed" : "scheduled", lastDone, scheduledFor: latest.date, eligibleAgainOn, record: latest };
   if (done && done.date > yearAgo) return { state: "done", lastDone, scheduledFor: null, eligibleAgainOn, record: done };
-  const answer = sorted.find((r) => (r.status === "declined" || r.status === "not_applicable") && r.date > yearAgo && after(r));
+  const answer = latest && (latest.status === "declined" || latest.status === "not_applicable") && latest.date > yearAgo ? latest : null;
   if (answer) return { state: answer.status === "declined" ? "declined" : "not_needed", lastDone, scheduledFor: null, eligibleAgainOn: addMonths(answer.date, OFFICE_TEST_REPEAT_MONTHS), record: answer };
   return { state: "eligible", lastDone, scheduledFor: null, eligibleAgainOn: null, record: null };
+}
+
+/** Still to do: worth flagging while the patient is in the office. */
+export const isOpenState = (s: OfficeTestState) => s === "eligible" || s === "scheduled" || s === "missed";
+
+// ---- Results (what the machine reports), entered when a test is marked done ----
+
+export interface ResultField {
+  key: string;
+  label: string;
+  unit?: string;
+  kind: "number" | "choice";
+  min?: number;
+  max?: number;
+  step?: number;
+  choices?: string[];
+}
+export const OFFICE_TEST_RESULT_FIELDS: Record<OfficeTest, ResultField[]> = {
+  abi_q: [
+    { key: "right", label: "Right ABI", kind: "number", min: 0, max: 3, step: 0.01 },
+    { key: "left", label: "Left ABI", kind: "number", min: 0, max: 3, step: 0.01 },
+  ],
+  pft: [
+    { key: "fev1", label: "FEV1", unit: "L", kind: "number", min: 0, max: 10, step: 0.01 },
+    { key: "fvc", label: "FVC", unit: "L", kind: "number", min: 0, max: 10, step: 0.01 },
+    { key: "ratio", label: "FEV1/FVC", unit: "%", kind: "number", min: 0, max: 100, step: 1 },
+    { key: "reading", label: "Reading", kind: "choice", choices: ["Normal", "Abnormal"] },
+  ],
+  rmr: [
+    { key: "kcal", label: "RMR", unit: "kcal/day", kind: "number", min: 200, max: 8000, step: 1 },
+  ],
+};
+export type OfficeTestResults = Record<string, number | string>;
+
+/** Keep only the fields this test has, numbers in range and known choices (null when nothing is left). */
+export function cleanResults(test: OfficeTest, input: Record<string, unknown> | null | undefined): OfficeTestResults | null {
+  if (!input) return null;
+  const out: OfficeTestResults = {};
+  for (const f of OFFICE_TEST_RESULT_FIELDS[test]) {
+    const v = input[f.key];
+    if (v == null || v === "") continue;
+    if (f.kind === "number") {
+      const n = typeof v === "number" ? v : Number(String(v).replace(/,/g, ""));
+      if (!Number.isFinite(n) || (f.min != null && n < f.min) || (f.max != null && n > f.max)) throw new Error(`${f.label} should be between ${f.min} and ${f.max}${f.unit ? ` ${f.unit}` : ""}.`);
+      out[f.key] = Math.round(n * 1000) / 1000;
+    } else {
+      const c = f.choices?.find((x) => x.toLowerCase() === String(v).trim().toLowerCase());
+      if (!c) throw new Error(`Pick ${f.choices?.join(" or ")} for ${f.label}.`);
+      out[f.key] = c;
+    }
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/** "Right ABI 1.02 · Left ABI 0.98": the results on one line (null when there are none). */
+export function resultSummary(test: OfficeTest, results: OfficeTestResults | null | undefined): string | null {
+  if (!results) return null;
+  const parts = OFFICE_TEST_RESULT_FIELDS[test].filter((f) => results[f.key] != null && results[f.key] !== "").map((f) => {
+    const v = results[f.key]!;
+    const shown = typeof v === "number" && f.key === "kcal" ? Math.round(v).toLocaleString("en-US") : String(v);
+    return f.kind === "choice" ? shown : `${f.label} ${shown}${f.unit ? (f.unit === "%" ? "%" : ` ${f.unit}`) : ""}`;
+  });
+  return parts.length ? parts.join(" · ") : null;
+}
+
+// ---- Tests already in the Practice Fusion chart ----
+
+const OFFICE_TEST_NAMES_RE: [RegExp, OfficeTest][] = [
+  [/ankle.?brachial|\babi\b|abi-?q\b|toe.?brachial/i, "abi_q"],
+  [/spirometr|pulmonary function|\bpfts?\b|\bfev ?1\b|forced vital capacity|\bfvc\b|flow.?volume loop|bronchodilator responsiveness|lung function test/i, "pft"],
+  [/resting metabolic|indirect calorimetr|\brmr\b|resting energy expenditure|metabolic rate (test|measure)/i, "rmr"],
+];
+/** CPT codes: ABI 93922-93924; spirometry / PFT 94010, 94060, 94375, 94726-94729; RMR (indirect calorimetry) 94690. */
+const OFFICE_TEST_CODES_RE: [RegExp, OfficeTest][] = [
+  [/^cpt\|9392[234]$/i, "abi_q"],
+  [/^cpt\|(94010|94060|94375|9472[6-9])$/i, "pft"],
+  [/^cpt\|94690$/i, "rmr"],
+];
+/** Orders, plans and screening questions are not a test that was done. */
+const NOT_A_TEST = /\b(order(ed)?|referral|refer(red)?|recommend(ed)?|plan(ned)?|schedul(e|ed)|due|declined|education|counsel(ing)?)\b/i;
+
+/** A Practice Fusion chart line → the in-office test it shows was done (or null). */
+export function recognizeOfficeTest(line: { title: string | null; code?: string | null; status?: string | null }): OfficeTest | null {
+  if (line.status && /not-?done|cancel|entered.in.error|revoked|stopped|preliminary|registered/i.test(line.status)) return null;
+  const byCode = line.code ? OFFICE_TEST_CODES_RE.find(([re]) => re.test(line.code!))?.[1] : undefined;
+  if (byCode) return byCode;
+  const title = (line.title ?? "").trim();
+  if (!title || NOT_A_TEST.test(title)) return null;
+  return OFFICE_TEST_NAMES_RE.find(([re]) => re.test(title))?.[1] ?? null;
 }

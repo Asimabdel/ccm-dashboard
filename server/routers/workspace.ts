@@ -147,6 +147,8 @@ const subjectKeyRe = /^(p:\d+|s:.{1,110})$/;
 const paymentSubjectRe = /^(p:\d+|s:.{1,110}|f:.{1,120})$/;
 /** Any patient: roster (p:), schedule (s:) or Practice Fusion-only (f:). */
 const patientKey = z.string().regex(paymentSubjectRe);
+/** An in-office test's numbers (checked against that test's fields in shared/officeTests.ts). */
+const officeTestResults = z.record(z.string().max(20), z.union([z.number(), z.string().max(40)]));
 const newPaymentRequest = z.object({
   amountCents: z.number().int().min(50).max(5_000_000),
   category: z.enum(PAYMENT_CATEGORY_LIST as [PaymentCategory, ...PaymentCategory[]]),
@@ -1884,7 +1886,7 @@ export const workspaceRouter = router({
     list: protectedProcedure
       .input(z.object({
         test: z.enum(OFFICE_TESTS).nullish(),
-        state: z.enum(["eligible", "scheduled", "done", "declined", "not_needed"]).default("eligible"),
+        state: z.enum(["eligible", "scheduled", "missed", "done", "declined", "not_needed"]).default("eligible"),
         clinicId,
         providerId: z.number().int().positive().nullish(),
         comingWithinDays: z.number().int().min(1).max(90).nullish(),
@@ -1900,10 +1902,48 @@ export const workspaceRouter = router({
       return run(() => officeTests.officeTestingFor(input.key));
     }),
     record: protectedProcedure
-      .input(z.object({ subjectKey: patientKey, tests: z.array(z.enum(OFFICE_TESTS)).min(1).max(3), status: z.enum(["scheduled", "done", "declined", "not_applicable"]), date: dateStr, note: z.string().max(1000).nullish() }))
+      .input(z.object({
+        subjectKey: patientKey, tests: z.array(z.enum(OFFICE_TESTS)).min(1).max(3), status: z.enum(["scheduled", "done", "declined", "not_applicable"]), date: dateStr, note: z.string().max(1000).nullish(),
+        results: z.object({ abi_q: officeTestResults.nullish(), pft: officeTestResults.nullish(), rmr: officeTestResults.nullish() }).nullish(), performedByUserId: z.number().int().positive().nullish(),
+      }))
       .mutation(async ({ ctx, input }) => {
         const actor = await actorFor(ctx, "flowView");
         return run(() => officeTests.recordOfficeTest(actor, input));
+      }),
+    /** A done test: the numbers, who did it, the report in the folder. */
+    saveDetails: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), results: officeTestResults.nullish(), performedByUserId: z.number().int().positive().nullish(), fileId: z.number().int().positive().nullish(), note: z.string().max(1000).nullish() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "flowView");
+        return run(() => officeTests.saveOfficeTestDetails(actor, input));
+      }),
+    /** Who's on the schedule that day with a test to do (Testing → Today). */
+    day: protectedProcedure.input(z.object({ date: dateStr })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "flowView");
+      return run(() => officeTests.officeTestsDay(actor, input));
+    }),
+    /** Patient Flow card badges for that day. */
+    badges: protectedProcedure.input(z.object({ date: dateStr })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "flowView");
+      return run(() => officeTests.officeTestBadges(actor, input));
+    }),
+    /** Seen in the last week with a test still open: was it done? */
+    checks: protectedProcedure.query(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "flowView");
+      return run(() => officeTests.officeTestChecks(actor));
+    }),
+    answerChecks: protectedProcedure
+      .input(z.object({ items: z.array(z.object({ subjectKey: patientKey, date: dateStr })).min(1).max(100) }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "flowView");
+        return run(() => officeTests.answerOfficeTestChecks(actor, input));
+      }),
+    /** Monthly testing report per clinic and provider. */
+    report: protectedProcedure
+      .input(z.object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/), clinicId }))
+      .query(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "flowView");
+        return run(() => officeTests.officeTestingReport(actor, input));
       }),
     undo: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "flowView");

@@ -963,6 +963,14 @@ export const patientTests = mysqlTable("patientTests", {
   source: varchar("source", { length: 20 }).notNull(),
   createdByUserId: int("createdByUserId").references(() => users.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
+  /** In-office tests marked done: the machine's numbers (shared/officeTests.ts OFFICE_TEST_RESULT_FIELDS). */
+  results: json("results").$type<Record<string, number | string>>(),
+  /** Who performed the in-office test. */
+  performedByUserId: int("performedByUserId"),
+  /** The machine's report in the patient's folder (patientFiles, type test_result). */
+  fileId: int("fileId"),
+  /** A scheduled in-office test whose day passed: the call task made to rebook it. */
+  rebookTaskId: int("rebookTaskId"),
 }, (t) => ({
   subjectIdx: index("patientTests_subject_idx").on(t.subjectKey),
   oneRecord: uniqueIndex("patientTests_one_record").on(t.subjectKey, t.testKey, t.performedOn, t.status),

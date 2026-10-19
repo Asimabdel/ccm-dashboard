@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
 import {
-  CalendarDays, ClipboardList, ClipboardSignature, Database, Download, FileSignature, FileText, FileUp, FlaskConical, FolderOpen, HeartPulse, Image as ImageIcon,
+  Activity, CalendarDays, ClipboardList, ClipboardSignature, Database, Download, FileSignature, FileText, FileUp, FlaskConical, FolderOpen, HeartPulse, Image as ImageIcon,
   Loader2, Mail, Phone, Printer, Search, ShieldCheck, StickyNote, Trash2, Wallet, X,
 } from "lucide-react";
 import { Btn, EmptyState, ErrorNote, Loading, Panel, inputCls } from "@/components/workspace/ui";
@@ -21,12 +21,12 @@ import { FOLDER_SECTIONS, type FolderItem, type FolderSection } from "@shared/fo
 type View = FolderSection | "everything";
 
 const SECTION_ICON: Record<FolderSection, React.ElementType> = {
-  chart: Database, visits: CalendarDays, tasks: ClipboardList, comms: Mail, forms: ClipboardSignature, files: FileText,
+  chart: Database, visits: CalendarDays, tasks: ClipboardList, comms: Mail, forms: ClipboardSignature, files: FileText, tests: Activity,
   faxes: Printer, payments: Wallet, care: HeartPulse, insurance: ShieldCheck,
 };
 const KIND_ICON: Record<string, React.ElementType> = {
   visit: CalendarDays, task: ClipboardList, call: Phone, email: Mail, fax: Printer, form: ClipboardSignature, document: FileSignature,
-  file: FileText, payment: Wallet, eligibility: ShieldCheck, note: StickyNote, report: FlaskConical, chart: Database,
+  file: FileText, payment: Wallet, eligibility: ShieldCheck, note: StickyNote, report: FlaskConical, chart: Database, test: Activity,
 };
 const when = (d: string | null) => {
   if (!d) return "";
@@ -147,7 +147,7 @@ export function PatientFolder({ subjectKey, initialSection }: { subjectKey: stri
               action={opening ? <Loader2 size={15} className="animate-spin text-slate-400" /> : view === "files" && s.canUpload && term.length < 2 ? <Btn size="sm" onClick={() => setUploading(true)}><FileUp size={13} /> Add a file</Btn> : undefined}>
               {loadingList ? <Loading /> : (search.error && term.length >= 2) ? <div className="p-4"><ErrorNote message={search.error.message} /></div> : !results?.length ? (
                 <EmptyState icon={term.length >= 2 ? Search : FolderOpen} title={term.length >= 2 ? "Nothing matches" : "Nothing here yet"}
-                  body={term.length >= 2 ? "Try another word." : view === "files" ? "Signed documents and files added to this folder show here." : undefined} />
+                  body={term.length >= 2 ? "Try another word." : view === "files" ? "Signed documents and files added to this folder show here." : view === "tests" ? "ABI-Q, PFT and RMR tests, their results and reports show here." : undefined} />
               ) : (
                 <ul className="divide-y divide-slate-100 dark:divide-slate-700">
                   {results.map((it) => {
@@ -168,7 +168,7 @@ export function PatientFolder({ subjectKey, initialSection }: { subjectKey: stri
                             </p>
                           </div>
                         </Row>
-                        {it.open.type === "file" && s.canRemoveFiles && (
+                        {it.open.type === "file" && it.kind !== "test" && s.canRemoveFiles && (
                           <button className="mr-2 mt-3 rounded p-1.5 text-slate-300 hover:bg-rose-50 hover:text-rose-600" title="Remove from the folder (kept for the record)"
                             onClick={() => { if (window.confirm(`Remove "${it.title}" from this folder? It's kept for the record but won't show here.`)) removeFile.mutate({ id: (it.open as { id: number }).id }); }}>
                             <Trash2 size={14} />
