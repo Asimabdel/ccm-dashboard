@@ -346,10 +346,10 @@ export const handler = async (event: any, context: any) => {
     const { resetClockHistory } = await import("../clockReset");
     return resetClockHistory({ before: String(event.before ?? ""), apply: event.apply === true });
   }
-  // Who assigns CCM patients like an admin (Staff Assignment), by name (IAM-only; dry run unless apply).
-  if (event && event.__job === "ccm-assigners" && !event.requestContext && !event.version) {
-    const { ccmAssignersJob } = await import("../ccmAssigners");
-    return ccmAssignersJob({ names: Array.isArray(event.names) ? event.names.map(String) : [], apply: event.apply === true });
+  // Who assigns CCM / BHI patients like an admin (Staff Assignment), by name (IAM-only; dry run unless apply).
+  if (event && (event.__job === "ccm-assigners" || event.__job === "bhi-assigners") && !event.requestContext && !event.version) {
+    const { assignersJob } = await import("../ccmAssigners");
+    return assignersJob({ program: event.__job === "bhi-assigners" ? "bhi" : "ccm", names: Array.isArray(event.names) ? event.names.map(String) : [], apply: event.apply === true });
   }
   // Every 5 minutes (EventBridge): copy new and changed Square payments (the webhook is the fast path).
   if (event && event.__job === "square-sync" && !event.requestContext && !event.version) {

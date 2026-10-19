@@ -1003,8 +1003,8 @@ export async function getEnrichedFollowUps(filters?: { status?: string; type?: s
     .orderBy(desc(followUpItems.createdAt));
 }
 
-/** Staff workload: number of active assigned patients & open tasks per staff */
-export async function getStaffWorkload(month: string) {
+/** Staff workload: number of active assigned patients & open tasks per staff, for one program (CCM includes APCM). */
+export async function getStaffWorkload(month: string, program: "ccm" | "bhi" = "ccm") {
   const db = await getDb();
   if (!db) return [];
   const staffUsers = await db
@@ -1012,10 +1012,13 @@ export async function getStaffWorkload(month: string) {
     .from(users)
     .where(inArray(users.role, ["staff"] as any));
 
-  const tasks = await db.select().from(ccmTasks).where(eq(ccmTasks.month, month));
+  const tasks = (await db.select().from(ccmTasks).where(eq(ccmTasks.month, month)))
+    .filter((t) => (program === "bhi") === (t.program === "bhi"));
   const completedStatuses = ["completed", "ready_for_billing", "billed"];
+  // BHI: just the coordinators carrying BHI patients this month (everyone when nobody does yet).
+  const carrying = program === "bhi" ? staffUsers.filter((s) => tasks.some((t) => t.assignedStaffId === s.id)) : [];
 
-  return staffUsers.map((s) => {
+  return (carrying.length ? carrying : staffUsers).map((s) => {
     const theirs = tasks.filter((t) => t.assignedStaffId === s.id);
     const open = theirs.filter((t) => !completedStatuses.includes(t.status as string)).length;
     return {

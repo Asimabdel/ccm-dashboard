@@ -34,11 +34,14 @@ describe("role-based access control", () => {
     await expect(caller.billing.list({ month: "2025-01" })).rejects.toThrow();
   });
 
-  it("blocks staff from Staff Assignment unless they are a named CCM assigner", async () => {
+  it("blocks staff from Staff Assignment unless they are a named CCM / BHI assigner", async () => {
     const caller = appRouter.createCaller(ctxFor("staff"));
     await expect(caller.staff.workload({ month: "2025-01" })).rejects.toThrow();
+    await expect(caller.staff.workload({ month: "2025-01", program: "bhi" })).rejects.toThrow();
+    await expect(caller.staff.all()).rejects.toThrow();
     await expect(caller.worklist.assign({ taskIds: [1], staffId: 2 })).rejects.toThrow();
     await expect(caller.worklist.autoBalance({})).rejects.toThrow();
+    await expect(caller.worklist.autoBalance({ program: "bhi" })).rejects.toThrow();
   });
 
   it("prevents a non-admin worker from self-escalating via auth.setRole", async () => {

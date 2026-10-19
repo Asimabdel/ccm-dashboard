@@ -56,6 +56,8 @@ export function useWorkspace() {
     programApprover: q.data?.programApprover ?? false,
     /** A named CCM assigner (not an admin) who gets Staff Assignment. */
     ccmAssigner: q.data?.ccmAssigner ?? false,
+    /** A named BHI assigner (not an admin) who gets Staff Assignment for BHI patients. */
+    bhiAssigner: q.data?.bhiAssigner ?? false,
     clinicId: effectiveClinic,
     setClinicId,
   };

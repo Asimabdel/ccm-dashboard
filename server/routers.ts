@@ -7,7 +7,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { eq, and, ne, sql } from "drizzle-orm";
+import { eq, and, ne, sql, inArray } from "drizzle-orm";
 import {
   getPatientById,
   getCCMTaskById,
@@ -79,7 +79,7 @@ import {
 import { ccmNotesRouter } from "./routers/ccmNotes";
 import { getMaClinicIds, officeClinicIds, officeStaff } from "./workspaceDb";
 import { OFFICE_ASSIGNABLE_ROLES, officeCanManageLogin } from "../shared/workspace";
-import { canAssignCcm } from "./ccmAssigners";
+import { assignProgramOf, canAssign, canAssignAny, type AssignProgram } from "./ccmAssigners";
 import { staffProfiles } from "../drizzle/schema";
 import { workforceRouter } from "./routers/workforce";
 import { workspaceRouter } from "./routers/workspace";
@@ -106,12 +106,13 @@ function requireRole(ctx: any, roles: string[]) {
   }
 }
 
-/** Staff Assignment: admins and the named CCM assigners (see server/ccmAssigners.ts). */
-async function requireCcmAssigner(ctx: any) {
-  if (!ctx.user || !(await canAssignCcm(ctx.user))) {
+/** Staff Assignment: admins and the named assigners for that program (see server/ccmAssigners.ts); no program = any. */
+async function requireAssigner(ctx: any, program?: AssignProgram) {
+  if (!ctx.user || !(await (program ? canAssign(ctx.user, program) : canAssignAny(ctx.user)))) {
     throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this resource." });
   }
 }
+const assignProgramInput = z.enum(["ccm", "bhi"]).optional();
 
 /** Fire-and-forget HIPAA audit logging from a tRPC context. */
 function logAudit(
@@ -1013,9 +1014,14 @@ export const appRouter = router({
     assign: protectedProcedure
       .input(z.object({ taskIds: z.array(z.number()), staffId: z.number() }))
       .mutation(async ({ input, ctx }) => {
-        await requireCcmAssigner(ctx);
+        await requireAssigner(ctx);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        // Each task's program decides who may assign it (a BHI assigner can't move CCM patients, and the reverse).
+        const programs = input.taskIds.length
+          ? new Set((await db.select({ program: ccmTasks.program }).from(ccmTasks).where(inArray(ccmTasks.id, input.taskIds))).map((t) => assignProgramOf(t.program)))
+          : new Set<AssignProgram>();
+        for (const p of Array.from(programs)) await requireAssigner(ctx, p);
         for (const id of input.taskIds) {
           await db.update(ccmTasks).set({ assignedStaffId: input.staffId, status: "assigned", updatedAt: new Date() }).where(eq(ccmTasks.id, id));
         }
@@ -1023,15 +1029,19 @@ export const appRouter = router({
       }),
 
     autoBalance: protectedProcedure
-      .input(z.object({ month: z.string().optional() }).optional())
+      .input(z.object({ month: z.string().optional(), program: assignProgramInput }).optional())
       .mutation(async ({ input, ctx }) => {
-        await requireCcmAssigner(ctx);
+        const program = input?.program ?? "ccm";
+        await requireAssigner(ctx, program);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const month = input?.month || currentMonth();
-        const staff = (await getAllStaffUsers()).filter((s) => s.role === "staff");
-        if (!staff.length) return { success: false, assigned: 0 };
-        const tasks = await getWorklistForMonth(month, {});
+        const allStaff = (await getAllStaffUsers()).filter((s) => s.role === "staff");
+        if (!allStaff.length) return { success: false, assigned: 0 };
+        const tasks = await getWorklistForMonth(month, { program });
+        // BHI goes to the coordinators who already carry BHI patients (else everyone), not to every CCM coordinator.
+        const carrying = program === "bhi" ? allStaff.filter((s) => tasks.some((t) => t.task.assignedStaffId === s.id)) : [];
+        const staff = carrying.length ? carrying : allStaff;
         const unassigned = tasks.filter((t) => !t.task.assignedStaffId);
         let i = 0;
         for (const t of unassigned) {
@@ -1583,14 +1593,15 @@ export const appRouter = router({
   }),
   staff: router({
     all: protectedProcedure.query(async ({ ctx }) => {
-      await requireCcmAssigner(ctx);
+      await requireAssigner(ctx);
       return getAllStaffUsers();
     }),
     workload: protectedProcedure
-      .input(z.object({ month: z.string().optional() }).optional())
+      .input(z.object({ month: z.string().optional(), program: assignProgramInput }).optional())
       .query(async ({ input, ctx }) => {
-        await requireCcmAssigner(ctx);
-        return getStaffWorkload(input?.month || currentMonth());
+        const program = input?.program ?? "ccm";
+        await requireAssigner(ctx, program);
+        return getStaffWorkload(input?.month || currentMonth(), program);
       }),
   }),
 

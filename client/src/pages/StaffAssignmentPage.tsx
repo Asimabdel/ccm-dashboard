@@ -7,20 +7,30 @@ import { Loader2, Users, Wand2 } from "lucide-react";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell } from "recharts";
 import { StatusBadge } from "@/components/CCMBadges";
 import { currentMonthStr } from "@/lib/ccm";
+import { useWorkspace } from "@/components/workspace/useWorkspace";
 
 const ACCENT = "hsl(200 80% 62%)";
 const PINK = "hsl(345 80% 80%)";
 
+type Program = "ccm" | "bhi";
+
 export default function StaffAssignmentPage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
+  const ws = useWorkspace();
   const [month] = useState(currentMonthStr());
   const [selected, setSelected] = useState<number[]>([]);
   const [bulkStaffId, setBulkStaffId] = useState<string>("");
+  // Admins assign both programs; named assigners only the program(s) they were given.
+  const isAdmin = user?.role === "admin";
+  const programs: Program[] = isAdmin ? ["ccm", "bhi"] : ([ws.ccmAssigner && "ccm", ws.bhiAssigner && "bhi"].filter(Boolean) as Program[]);
+  const [picked, setPicked] = useState<Program | null>(null);
+  const program: Program = picked && programs.includes(picked) ? picked : programs[0] ?? "ccm";
+  const ready = !!user && (isAdmin || programs.length > 0);
 
-  const monthInput = useMemo(() => ({ month }), [month]);
-  const workload = trpc.staff.workload.useQuery(monthInput, { enabled: !!user });
-  const staffAll = trpc.staff.all.useQuery(undefined, { enabled: !!user });
-  const worklist = trpc.worklist.forMonth.useQuery(monthInput, { enabled: !!user });
+  const monthInput = useMemo(() => ({ month, program }), [month, program]);
+  const workload = trpc.staff.workload.useQuery(monthInput, { enabled: ready });
+  const staffAll = trpc.staff.all.useQuery(undefined, { enabled: ready });
+  const worklist = trpc.worklist.forMonth.useQuery(monthInput, { enabled: ready });
 
   const utils = trpc.useUtils();
   const refresh = () => { utils.staff.workload.invalidate(); utils.worklist.forMonth.invalidate(); };
@@ -34,7 +44,7 @@ export default function StaffAssignmentPage() {
     onError: (e) => toast.error(e.message),
   });
 
-  if (loading || !user) {
+  if (loading || !user || (!isAdmin && ws.loading)) {
     return <div className="min-h-screen flex items-center justify-center bg-white"><Loader2 className="animate-spin text-slate-400" /></div>;
   }
 
@@ -47,6 +57,14 @@ export default function StaffAssignmentPage() {
 
   return (
     <CCMDashboardLayout title="Staff Assignment">
+      <div className="flex items-center gap-2 mb-4">
+        {programs.length > 1 ? programs.map((p) => (
+          <button key={p} onClick={() => { setPicked(p); setSelected([]); setBulkStaffId(""); }}
+            className={`px-4 py-2 rounded-xl text-sm font-semibold border transition ${p === program ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"}`}>
+            {p === "bhi" ? "BHI patients" : "CCM patients"}
+          </button>
+        )) : <span className="text-sm font-semibold text-slate-600">{program === "bhi" ? "BHI patients" : "CCM patients"}</span>}
+      </div>
       <div className="grid lg:grid-cols-2 gap-5 mb-6">
         <div className="bg-white rounded-3xl border border-slate-100 p-6">
           <h3 className="font-semibold text-slate-900 mb-4">Workload by Staff</h3>
@@ -67,8 +85,10 @@ export default function StaffAssignmentPage() {
 
         <div className="bg-white rounded-3xl border border-slate-100 p-6 flex flex-col">
           <h3 className="font-semibold text-slate-900 mb-1 flex items-center gap-2"><Wand2 size={16} className="text-[hsl(17_60%_55%)]" /> Rule-Based Assignment</h3>
-          <p className="text-sm text-slate-500 mb-4">Distribute all unassigned tasks evenly, preferring staff at the matching clinic location.</p>
-          <button disabled={autoBalance.isPending} onClick={() => autoBalance.mutate({ month })}
+          <p className="text-sm text-slate-500 mb-4">{program === "bhi"
+            ? "Distribute all unassigned BHI tasks evenly among the coordinators who carry BHI patients, preferring staff at the matching clinic location."
+            : "Distribute all unassigned tasks evenly, preferring staff at the matching clinic location."}</p>
+          <button disabled={autoBalance.isPending} onClick={() => autoBalance.mutate({ month, program })}
             className="self-start px-4 py-2.5 rounded-xl text-sm font-semibold bg-slate-900 text-white hover:bg-slate-700 disabled:bg-slate-300 transition inline-flex items-center gap-2">
             {autoBalance.isPending ? <Loader2 size={15} className="animate-spin" /> : <Wand2 size={15} />} Auto-Balance Workload
           </button>
