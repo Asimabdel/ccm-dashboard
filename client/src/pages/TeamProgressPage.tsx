@@ -1,6 +1,6 @@
 import { Fragment, useState } from "react";
 import { toast } from "sonner";
-import { ChevronDown, ChevronLeft, ChevronRight, PhoneCall, PhoneMissed, Clock, CalendarCheck } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, PhoneCall, PhoneMissed, Clock, CalendarCheck, MessagesSquare } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { ICON, MetricRow, SHORT } from "@/components/workspace/MyProgress";
@@ -8,12 +8,12 @@ import { Btn, ErrorNote, Loading, PageHeader, Panel, inputCls } from "@/componen
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { addDays, fmtDay, localDateStr } from "@shared/workforce";
-import { ROLE_METRIC_LABELS, ROLE_PRIMARY, fmtMinutes, progressOf, type Metric, type MetricKey } from "@shared/metrics";
+import { CONVERSATION_MIN_SEC, QUICK_HANGUP_MAX_SEC, ROLE_METRIC_LABELS, ROLE_PRIMARY, fmtMinutes, progressOf, type Metric, type MetricKey } from "@shared/metrics";
 
 // Every role Team progress loads (server TEAM_ROLES); office managers were missing until 2026-10-16.
 const ROLE_ORDER = ["front_desk", "office_manager", "staff", "medical_assistant", "provider", "billing", "admin"];
 /** After each role's key numbers: the columns everyone shares. */
-const COMMON: MetricKey[] = ["calls", "missed", "talk", "tasks_done", "hours"];
+const COMMON: MetricKey[] = ["calls", "conversations", "quick_hangups", "missed", "talk", "tasks_done", "hours"];
 
 const ago = (iso: string | null) => {
   if (!iso) return "never";
@@ -60,8 +60,9 @@ export default function TeamProgressPage() {
           </p>
 
           {data.totals && (
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
             <Tile icon={PhoneCall} label="Calls" value={data.totals.calls} sub={`${data.totals.made} made · ${data.totals.answered} answered`} />
+            <Tile icon={MessagesSquare} label="Conversations" value={data.totals.conversations} sub={`${CONVERSATION_MIN_SEC} s or longer · ${data.totals.quickHangups} hung up within ${QUICK_HANGUP_MAX_SEC} s`} />
             <Tile icon={PhoneMissed} label="Missed" value={data.totals.missed} sub={data.ringcentral.active ? "Rang and nobody picked up" : "Needs RingCentral"} />
             <Tile icon={Clock} label="Time on the phone" value={fmtMinutes(data.totals.talkMin)} sub="All calls" />
             <Tile icon={CalendarCheck} label="Appointments booked" value={data.totals.booked} sub="From call outcomes" />
@@ -118,7 +119,7 @@ export default function TeamProgressPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-100 dark:border-slate-700">
-                      <th className="px-4 py-2.5 font-semibold">Line</th><th className="px-3 py-2.5 font-semibold">Made</th><th className="px-3 py-2.5 font-semibold">Answered</th><th className="px-3 py-2.5 font-semibold">Missed</th><th className="px-3 py-2.5 font-semibold">On phone</th><th className="px-3 py-2.5 font-semibold">Link to</th>
+                      <th className="px-4 py-2.5 font-semibold">Line</th><th className="px-3 py-2.5 font-semibold">Made</th><th className="px-3 py-2.5 font-semibold">Answered</th><th className="px-3 py-2.5 font-semibold">Conversations</th><th className="px-3 py-2.5 font-semibold">Missed</th><th className="px-3 py-2.5 font-semibold">On phone</th><th className="px-3 py-2.5 font-semibold">Link to</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
@@ -127,6 +128,7 @@ export default function TeamProgressPage() {
                         <td className="px-4 py-2.5 text-slate-800 dark:text-slate-100">{l.name}</td>
                         <td className="px-3 py-2.5 tabular-nums">{l.made}</td>
                         <td className="px-3 py-2.5 tabular-nums">{l.answered}</td>
+                        <td className="px-3 py-2.5 tabular-nums">{l.conversations}</td>
                         <td className={cn("px-3 py-2.5 tabular-nums", l.missed && "text-rose-600 font-semibold")}>{l.missed}</td>
                         <td className="px-3 py-2.5 tabular-nums">{fmtMinutes(l.talkMin)}</td>
                         <td className="px-3 py-2">

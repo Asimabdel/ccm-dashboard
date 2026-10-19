@@ -29,7 +29,7 @@ import { formatPhone, mapCallLogRecord, mapCallStat, mapCallStats, normalizePhon
 import { extractPhones, matchEmailSender, parseFromHeader, stripQuotedText } from "../shared/email";
 import { ageOn, evaluateTesting, parseSex, recognizeTest } from "../shared/testing";
 import { PLANS, checkInsurance, patientLine } from "../shared/insurance";
-import { orderMetrics, progressOf, usualPerDay, weekdaysLeftInMonth } from "../shared/metrics";
+import { isConversation, isMadeOrTaken, isQuickHangup, orderMetrics, progressOf, usualPerDay, weekdaysLeftInMonth } from "../shared/metrics";
 import { isFaxEmail, makePersonMatcher, matchFaxPatient, parseFaxMeta, parseFaxReading } from "../shared/fax";
 import { chartLine, patientInfo, patientOf, sectionType } from "../shared/fhir";
 import { clinicForLocation, parseBookingEmail, parsePreferred } from "../shared/booking";
@@ -514,6 +514,19 @@ describe("insurance checker", () => {
 });
 
 describe("my progress metrics", () => {
+  it("conversations = calls made or answered lasting 30 s+; quick hang-ups = dials that ended within 5 s", () => {
+    expect(isConversation({ direction: "outbound", durationSec: 30 })).toBe(true);
+    expect(isConversation({ direction: "outbound", durationSec: 29 })).toBe(false);
+    expect(isConversation({ direction: "inbound", durationSec: 81, answered: true })).toBe(true);
+    expect(isConversation({ direction: "inbound", durationSec: 45, answered: false })).toBe(false); // rang out / voicemail
+    expect(isQuickHangup({ direction: "outbound", durationSec: 2 })).toBe(true);
+    expect(isQuickHangup({ direction: "outbound", durationSec: 5 })).toBe(true);
+    expect(isQuickHangup({ direction: "outbound", durationSec: 6 })).toBe(false);
+    expect(isQuickHangup({ direction: "inbound", durationSec: 2, answered: true })).toBe(false);
+    // Calls placed in MyPCP not synced yet have no "answered": an inbound call with time counts.
+    expect(isMadeOrTaken({ direction: "inbound", durationSec: 40 })).toBe(true);
+    expect(isMadeOrTaken({ direction: "inbound", durationSec: 0 })).toBe(false);
+  });
   it("usual day = average of active days before today (needs 3+)", () => {
     const m = new Map([["2026-09-20", 10], ["2026-09-21", 20], ["2026-09-22", 0], ["2026-09-26", 99]]);
     expect(usualPerDay(m, "2026-09-26")).toBeNull();

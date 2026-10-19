@@ -2,7 +2,7 @@
 // Counts only (no patient details), so every role can see their own.
 
 export type MetricKey =
-  | "calls" | "talk" | "booked" | "missed"
+  | "calls" | "conversations" | "quick_hangups" | "talk" | "booked" | "missed"
   | "tasks_done" | "tasks_left" | "hours"
   | "care_calls" | "ccm_month"
   | "checkins" | "roomed"
@@ -90,6 +90,20 @@ export function weekdaysLeftInMonth(date: string): number {
   }
   return n;
 }
+
+// ---- Calls: which ones were real conversations (2026-10-19) ----
+// A dial count alone can look busy when calls end in 2-3 seconds, so conversations are counted too.
+
+/** A real conversation: a call made or answered that lasted at least this long. */
+export const CONVERSATION_MIN_SEC = 30;
+/** A call dialed that ended this fast: nobody could have answered (hung up right after dialing, or it failed). */
+export const QUICK_HANGUP_MAX_SEC = 5;
+
+export interface CallLike { direction: string; durationSec: number; answered?: boolean }
+/** A call "made or taken": every outbound attempt, plus inbound calls someone answered. */
+export const isMadeOrTaken = (c: CallLike) => c.direction === "outbound" || (c.answered ?? c.durationSec > 0);
+export const isConversation = (c: CallLike) => isMadeOrTaken(c) && c.durationSec >= CONVERSATION_MIN_SEC;
+export const isQuickHangup = (c: CallLike) => c.direction === "outbound" && c.durationSec <= QUICK_HANGUP_MAX_SEC;
 
 export function fmtMinutes(mins: number): string {
   const h = Math.floor(mins / 60);

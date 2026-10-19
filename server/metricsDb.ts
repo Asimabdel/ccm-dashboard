@@ -14,7 +14,7 @@ import {
 import { clinicLocalToUtc, nameKey, OPEN_TASK_STATUSES } from "../shared/workspace";
 import { addDays, localDateStr } from "../shared/workforce";
 import {
-  GOAL_METRICS, ROLE_GOAL_KEYS, fmtMinutes, orderMetrics, usualPerDay, weekdaysLeftInMonth,
+  CONVERSATION_MIN_SEC, GOAL_METRICS, QUICK_HANGUP_MAX_SEC, ROLE_GOAL_KEYS, fmtMinutes, isConversation, isMadeOrTaken, isQuickHangup, orderMetrics, usualPerDay, weekdaysLeftInMonth,
   type DailyGoals, type Metric, type MetricKey, type MyMetrics,
 } from "../shared/metrics";
 
@@ -75,9 +75,8 @@ function byDay(dates: (Date | null)[]): Map<string, number> {
   return m;
 }
 
-/** A call "made or taken": every outbound attempt, plus inbound calls someone answered. */
-const madeOrTaken = (c: { direction: string; durationSec: number; answered?: boolean }) =>
-  c.direction === "outbound" || (c.answered ?? c.durationSec > 0);
+/** A call "made or taken": every outbound attempt, plus inbound calls someone answered (shared/metrics.ts). */
+const madeOrTaken = isMadeOrTaken;
 
 // ---- Shared context (computed once per request; the team view reuses it for everyone) ----
 
@@ -146,11 +145,18 @@ async function phoneStats(user: Person, date: string, ctx: MetricsContext) {
     : app;
   const perDay = new Map<string, number>();
   const missedPerDay = new Map<string, number>();
+  const conversationsPerDay = new Map<string, number>();
+  const bump = (m: Map<string, number>, k: string) => m.set(k, (m.get(k) ?? 0) + 1);
   for (const c of rc) {
-    if (madeOrTaken(c)) perDay.set(c.workDate, (perDay.get(c.workDate) ?? 0) + 1);
-    if (c.missed) missedPerDay.set(c.workDate, (missedPerDay.get(c.workDate) ?? 0) + 1);
+    if (madeOrTaken(c)) bump(perDay, c.workDate);
+    if (isConversation(c)) bump(conversationsPerDay, c.workDate);
+    if (c.missed) bump(missedPerDay, c.workDate);
   }
-  for (const c of notYetSynced) if (madeOrTaken(c)) { const k = localDateStr(c.startedAt); perDay.set(k, (perDay.get(k) ?? 0) + 1); }
+  for (const c of notYetSynced) {
+    const k = localDateStr(c.startedAt);
+    if (madeOrTaken(c)) bump(perDay, k);
+    if (isConversation(c)) bump(conversationsPerDay, k);
+  }
   const rcDay = rc.filter((c) => c.workDate === date);
   const appDay = notYetSynced.filter((c) => c.startedAt >= start && c.startedAt < end);
   const booked = app.filter((c) => c.outcome === "booked");
@@ -160,6 +166,9 @@ async function phoneStats(user: Person, date: string, ctx: MetricsContext) {
     linked: myExts.length > 0,
     perDay,
     missedPerDay,
+    conversationsPerDay,
+    conversations: rcDay.filter(isConversation).length + appDay.filter(isConversation).length,
+    quickHangups: rcDay.filter(isQuickHangup).length + appDay.filter(isQuickHangup).length,
     made: rcDay.filter((c) => c.direction === "outbound").length + appDay.filter((c) => c.direction === "outbound").length,
     answered: rcDay.filter((c) => c.direction === "inbound" && c.answered).length + appDay.filter((c) => c.direction === "inbound" && c.durationSec > 0).length,
     missed: rcDay.filter((c) => c.missed).length,
@@ -191,6 +200,11 @@ async function metricsFor(user: Person, date: string, ctx: MetricsContext): Prom
       key: "calls", label: `Calls ${dayWord}`, value: ph.perDay.get(date) ?? 0, usual: usualPerDay(ph.perDay, date),
       hint: `${ph.made} made · ${ph.answered} answered${ctx.rcActive ? ` · ${ph.missed} missed` : ""}`, href: "/my-work",
     });
+    add({
+      key: "conversations", label: "Conversations", value: ph.conversations, usual: usualPerDay(ph.conversationsPerDay, date),
+      hint: `Calls made or answered that lasted ${CONVERSATION_MIN_SEC} seconds or more`, href: "/my-work",
+    });
+    add({ key: "quick_hangups", label: "Quick hang-ups", value: ph.quickHangups, hint: `Calls dialed that ended within ${QUICK_HANGUP_MAX_SEC} seconds: nobody could have answered` });
     add({ key: "booked", label: "Appointments booked", value: ph.booked, usual: usualPerDay(ph.bookedPerDay, date) });
     add({ key: "talk", label: "Time on the phone", value: ph.talkMin, display: fmtMinutes(ph.talkMin) });
     if (ctx.rcActive) add({ key: "missed", label: "Missed calls", value: ph.missed, hint: "Rang this person's line and nobody picked up (includes voicemails)" });
@@ -258,7 +272,7 @@ async function metricsFor(user: Person, date: string, ctx: MetricsContext): Prom
     const booked = appts.filter((a) => a.status !== "cancelled" && a.status !== "no_show");
     add({ key: "practice_visits", label: "Visits done (all clinics)", value: booked.filter((a) => a.status === "completed" || a.status === "checkout").length, goal: booked.length || null, goalLabel: "scheduled", href: "/patient-flow" });
     const p = await practiceCalls(date, ctx);
-    add({ key: "practice_calls", label: `Practice calls ${dayWord}`, value: p.calls, hint: `${p.made} made · ${p.answered} answered${ctx.rcActive ? ` · ${p.missed} missed` : ""} · ${p.booked} booked an appointment`, href: "/team-progress" });
+    add({ key: "practice_calls", label: `Practice calls ${dayWord}`, value: p.calls, hint: `${p.made} made · ${p.answered} answered${ctx.rcActive ? ` · ${p.missed} missed` : ""} · ${p.conversations} conversations (${CONVERSATION_MIN_SEC} s+) · ${p.booked} booked an appointment`, href: "/team-progress" });
     const [cm] = await d.select({ n: sql<number>`count(*)` }).from(ccmTasks).where(and(eq(ccmTasks.month, month), inArray(ccmTasks.status, [...CCM_DONE])));
     const [cg] = await d.select({ n: sql<number>`coalesce(sum(${monthlyGoals.goal}), 0)` }).from(monthlyGoals).where(eq(monthlyGoals.month, month));
     add({ key: "practice_ccm", label: "Care calls this month (practice)", value: Number(cm?.n ?? 0), goal: Number(cg?.n ?? 0) || null, goalLabel: "team goals", href: "/admin" });
@@ -301,7 +315,7 @@ async function practiceCalls(date: string, ctx: MetricsContext) {
     .from(phoneCalls).where(and(gte(phoneCalls.startedAt, start), sql`${phoneCalls.startedAt} < ${end}`));
   const booked = app.filter((c) => c.outcome === "booked").length;
   if (!ctx.rcActive) {
-    return { calls: app.filter(madeOrTaken).length, made: app.filter((c) => c.direction === "outbound").length, answered: app.filter((c) => c.direction === "inbound" && c.durationSec > 0).length, missed: 0, talkMin: Math.round(app.reduce((s, c) => s + c.durationSec, 0) / 60), booked };
+    return { calls: app.filter(madeOrTaken).length, made: app.filter((c) => c.direction === "outbound").length, answered: app.filter((c) => c.direction === "inbound" && c.durationSec > 0).length, missed: 0, conversations: app.filter(isConversation).length, quickHangups: app.filter(isQuickHangup).length, talkMin: Math.round(app.reduce((s, c) => s + c.durationSec, 0) / 60), booked };
   }
   const rc = await d.select({ direction: rcCallStats.direction, durationSec: rcCallStats.durationSec, answered: rcCallStats.answered, missed: rcCallStats.missed })
     .from(rcCallStats).where(eq(rcCallStats.workDate, date));
@@ -309,7 +323,9 @@ async function practiceCalls(date: string, ctx: MetricsContext) {
   const made = rc.filter((c) => c.direction === "outbound").length + pending.filter((c) => c.direction === "outbound").length;
   const answered = rc.filter((c) => c.direction === "inbound" && c.answered).length + pending.filter((c) => c.direction === "inbound" && c.durationSec > 0).length;
   const talk = rc.filter(madeOrTaken).reduce((s, c) => s + c.durationSec, 0) + pending.reduce((s, c) => s + c.durationSec, 0);
-  return { calls: made + answered, made, answered, missed: rc.filter((c) => c.missed).length, talkMin: Math.round(talk / 60), booked };
+  const conversations = rc.filter(isConversation).length + pending.filter(isConversation).length;
+  const quickHangups = rc.filter(isQuickHangup).length + pending.filter(isQuickHangup).length;
+  return { calls: made + answered, made, answered, missed: rc.filter((c) => c.missed).length, conversations, quickHangups, talkMin: Math.round(talk / 60), booked };
 }
 
 export async function myMetrics(user: Person): Promise<MyMetrics> {
@@ -335,6 +351,8 @@ export async function myCalls(user: Person, date: string) {
     answered: ph.answered,
     missed: ph.missed,
     talkMin: ph.talkMin,
+    conversations: ph.conversations,
+    quickHangups: ph.quickHangups,
     booked: ph.booked,
     usual: usualPerDay(ph.perDay, date),
     days,
@@ -360,14 +378,15 @@ export async function teamMetrics(date: string, onlyUserIds?: Set<number> | null
     ? await d.select({ id: rcCallStats.extensionId, name: rcCallStats.extensionName, direction: rcCallStats.direction, durationSec: rcCallStats.durationSec, answered: rcCallStats.answered, missed: rcCallStats.missed })
       .from(rcCallStats).where(eq(rcCallStats.workDate, date))
     : [];
-  const lines = new Map<string, { extensionId: string | null; name: string; made: number; answered: number; missed: number; talkSec: number }>();
+  const lines = new Map<string, { extensionId: string | null; name: string; made: number; answered: number; missed: number; conversations: number; talkSec: number }>();
   for (const r of lineRows) {
     if (r.id && ctx.extToUser.has(r.id)) continue;
     const k = r.id ?? "none";
-    const cur = lines.get(k) ?? { extensionId: r.id ?? null, name: r.name ?? (r.id ? `Extension ${r.id}` : "No extension (main number / IVR)"), made: 0, answered: 0, missed: 0, talkSec: 0 };
+    const cur = lines.get(k) ?? { extensionId: r.id ?? null, name: r.name ?? (r.id ? `Extension ${r.id}` : "No extension (main number / IVR)"), made: 0, answered: 0, missed: 0, conversations: 0, talkSec: 0 };
     if (r.direction === "outbound") cur.made++;
     if (r.direction === "inbound" && r.answered) cur.answered++;
     if (r.missed) cur.missed++;
+    if (isConversation(r)) cur.conversations++;
     if (madeOrTaken(r)) cur.talkSec += r.durationSec;
     lines.set(k, cur);
   }
@@ -383,7 +402,8 @@ export async function teamMetrics(date: string, onlyUserIds?: Set<number> | null
   };
 }
 
-// ---- Top callers leaderboard (2026-10-16): everyone sees the top 5 by calls made + answered ----
+// ---- Top callers leaderboard (2026-10-16): everyone sees the top 5. Ranked by conversations (calls of 30 s+)
+// since 2026-10-19, then by calls made + answered, so quick hang-ups don't win it. ----
 
 export type LeaderboardPeriod = "today" | "week";
 
@@ -417,9 +437,10 @@ export async function rcLines(input: { link?: { extensionId: string; user: strin
     loginsWithoutALine: people.filter((p) => !Array.from(ctx.extToUser.values()).includes(p.id) && ["front_desk", "staff", "office_manager", "medical_assistant"].includes(p.role)).map((p) => `${p.name} (${p.role})`),
   };
 }
-let boardCache: { key: string; at: number; rows: { userId: number; name: string; calls: number }[] } | null = null;
+type BoardRow = { userId: number; name: string; calls: number; conversations: number };
+let boardCache: { key: string; at: number; rows: BoardRow[] } | null = null;
 
-/** Calls per person (made + answered), the same count as My calls / My progress, for today or this week (Mon–today). */
+/** Calls (made + answered) and conversations per person, the same counts as My calls / My progress, for today or this week (Mon–today). */
 async function callCounts(period: LeaderboardPeriod) {
   const today = localDateStr();
   const from = period === "today" ? today : addDays(today, -((new Date(`${today}T12:00:00Z`).getUTCDay() + 6) % 7));
@@ -437,19 +458,26 @@ async function callCounts(period: LeaderboardPeriod) {
       .from(phoneCalls).where(and(gte(phoneCalls.startedAt, start), sql`${phoneCalls.startedAt} < ${end}`, sql`${phoneCalls.userId} IS NOT NULL`)),
     d.select({ id: users.id, name: users.name }).from(users).where(ne(users.role, "user")),
   ]);
-  const counts = new Map<number, number>();
+  const counts = new Map<number, { calls: number; conversations: number }>();
+  const count = (uid: number, c: { direction: string; durationSec: number; answered?: boolean }) => {
+    if (!madeOrTaken(c)) return;
+    const t = counts.get(uid) ?? { calls: 0, conversations: 0 };
+    t.calls++;
+    if (isConversation(c)) t.conversations++;
+    counts.set(uid, t);
+  };
   for (const c of rc) {
     const uid = c.extensionId ? ctx.extToUser.get(c.extensionId) : undefined;
-    if (uid && madeOrTaken(c)) counts.set(uid, (counts.get(uid) ?? 0) + 1);
+    if (uid) count(uid, c);
   }
   for (const c of app) {
     const notYetSynced = !ctx.rcActive || (c.source !== "ringcentral" && !c.rcSessionId && (!ctx.rcCursor || c.startedAt > ctx.rcCursor));
-    if (c.userId && notYetSynced && madeOrTaken(c)) counts.set(c.userId, (counts.get(c.userId) ?? 0) + 1);
+    if (c.userId && notYetSynced) count(c.userId, c);
   }
   const nameOf = new Map(people.map((p) => [p.id, p.name ?? "Teammate"]));
-  const rows = Array.from(counts.entries()).filter(([uid, n]) => n > 0 && nameOf.has(uid))
-    .map(([userId, calls]) => ({ userId, name: nameOf.get(userId)!, calls }))
-    .sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name));
+  const rows: BoardRow[] = Array.from(counts.entries()).filter(([uid, t]) => t.calls > 0 && nameOf.has(uid))
+    .map(([userId, t]) => ({ userId, name: nameOf.get(userId)!, ...t }))
+    .sort((a, b) => b.conversations - a.conversations || b.calls - a.calls || a.name.localeCompare(b.name));
   boardCache = { key, at: Date.now(), rows };
   return { from, rows };
 }
@@ -457,19 +485,19 @@ async function callCounts(period: LeaderboardPeriod) {
 /** Everyone's call count for the period (IAM check). */
 export async function callRanking(period: LeaderboardPeriod) {
   const { from, rows } = await callCounts(period);
-  return { from, rows: rows.map((r) => `${r.name}: ${r.calls}`) };
+  return { from, rows: rows.map((r) => `${r.name}: ${r.conversations} conversations, ${r.calls} calls`) };
 }
 
-/** The top 5 callers (ties share a rank), and where the signed-in person stands. Names and counts only. */
+/** The top 5 by conversations, then calls (ties share a rank), and where the signed-in person stands. Names and counts only. */
 export async function callLeaderboard(userId: number, period: LeaderboardPeriod) {
   const { from, rows } = await callCounts(period);
   const { shortStaffName } = await import("../shared/attendance");
-  const ranked = rows.map((r, i) => ({ ...r, rank: rows.findIndex((x) => x.calls === r.calls) + 1, order: i }));
+  const ranked = rows.map((r, i) => ({ ...r, rank: rows.findIndex((x) => x.conversations === r.conversations && x.calls === r.calls) + 1, order: i }));
   const me = ranked.find((r) => r.userId === userId) ?? null;
   return {
     period, from, to: localDateStr(), callers: rows.length,
-    top: ranked.slice(0, 5).map((r) => ({ rank: r.rank, name: shortStaffName(r.name), calls: r.calls, you: r.userId === userId })),
-    you: me ? { rank: me.rank, calls: me.calls, inTop: me.order < 5 } : { rank: null, calls: 0, inTop: false },
+    top: ranked.slice(0, 5).map((r) => ({ rank: r.rank, name: shortStaffName(r.name), calls: r.calls, conversations: r.conversations, you: r.userId === userId })),
+    you: me ? { rank: me.rank, calls: me.calls, conversations: me.conversations, inTop: me.order < 5 } : { rank: null, calls: 0, conversations: 0, inTop: false },
   };
 }
 
@@ -480,14 +508,16 @@ export async function talkSummary(input: { from: string; to: string }) {
   const rc = await d.select({ extensionId: rcCallStats.extensionId, direction: rcCallStats.direction, durationSec: rcCallStats.durationSec, answered: rcCallStats.answered })
     .from(rcCallStats).where(and(gte(rcCallStats.workDate, input.from), lte(rcCallStats.workDate, input.to)));
   const people = new Map((await d.select({ id: users.id, name: users.name }).from(users)).map((p) => [p.id, p.name ?? "?"]));
-  const by = new Map<string, { calls: number; sec: number }>();
+  const by = new Map<string, { calls: number; sec: number; conversations: number; quickHangups: number }>();
   for (const c of rc) {
     if (!madeOrTaken(c)) continue;
     const uid = c.extensionId ? ctx.extToUser.get(c.extensionId) : undefined;
     const k = uid ? people.get(uid) ?? `User #${uid}` : "(lines not linked to a person)";
-    const t = by.get(k) ?? { calls: 0, sec: 0 };
+    const t = by.get(k) ?? { calls: 0, sec: 0, conversations: 0, quickHangups: 0 };
     t.calls++; t.sec += c.durationSec;
+    if (isConversation(c)) t.conversations++;
+    if (isQuickHangup(c)) t.quickHangups++;
     by.set(k, t);
   }
-  return Array.from(by.entries()).map(([name, t]) => ({ name, calls: t.calls, minutes: Math.round(t.sec / 60) })).sort((a, b) => b.minutes - a.minutes);
+  return Array.from(by.entries()).map(([name, t]) => ({ name, calls: t.calls, conversations: t.conversations, quickHangups: t.quickHangups, minutes: Math.round(t.sec / 60) })).sort((a, b) => b.minutes - a.minutes);
 }

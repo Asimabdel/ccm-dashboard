@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { Clock, PhoneCall, PhoneIncoming, PhoneMissed, PhoneOutgoing, CalendarCheck, Lock } from "lucide-react";
+import { Clock, PhoneCall, PhoneIncoming, PhoneMissed, PhoneOutgoing, CalendarCheck, Lock, MessagesSquare } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { fmtDay, localDateStr } from "@shared/workforce";
-import { fmtMinutes } from "@shared/metrics";
+import { CONVERSATION_MIN_SEC, QUICK_HANGUP_MAX_SEC, fmtMinutes } from "@shared/metrics";
 import { cardCls, inputCls } from "./ui";
 
 /**
@@ -18,9 +18,10 @@ export function MyCalls() {
   if (!d || !d.show) return null;
   const isToday = d.date === today;
   const top = Math.max(1, ...d.days.map((x) => x.calls));
-  const tiles: { label: string; value: string; icon: React.ElementType; tone?: "bad" }[] = [
+  const tiles: { label: string; value: string; icon: React.ElementType; tone?: "bad"; hint?: string }[] = [
     { label: "Made", value: String(d.made), icon: PhoneOutgoing },
     { label: "Answered", value: String(d.answered), icon: PhoneIncoming },
+    { label: "Conversations", value: String(d.conversations), icon: MessagesSquare, hint: `Calls of ${CONVERSATION_MIN_SEC} seconds or more${d.quickHangups ? ` · ${d.quickHangups} ended within ${QUICK_HANGUP_MAX_SEC} s` : ""}` },
     { label: "Missed", value: String(d.missed), icon: PhoneMissed, tone: d.missed ? "bad" : undefined },
     { label: "On the phone", value: fmtMinutes(d.talkMin), icon: Clock },
     { label: "Booked", value: String(d.booked), icon: CalendarCheck },
@@ -36,14 +37,14 @@ export function MyCalls() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_auto]">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
           <div className="rounded-xl bg-orange-50 px-3 py-2.5 ring-1 ring-orange-200 dark:bg-orange-950/40 dark:ring-orange-900">
             <p className="text-[11px] font-medium text-orange-700 dark:text-orange-300">Calls {isToday ? "today" : fmtDay(d.date)}</p>
             <p className="text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-50">{d.calls}</p>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">{d.usual != null ? `Your usual day: ${d.usual}` : "Made + answered"}</p>
           </div>
           {tiles.map((t) => (
-            <div key={t.label} className="rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800">
+            <div key={t.label} title={t.hint} className="rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800">
               <p className="flex items-center gap-1 text-[11px] font-medium text-slate-500"><t.icon size={11} /> {t.label}</p>
               <p className={cn("text-xl font-bold tabular-nums", t.tone === "bad" ? "text-rose-600 dark:text-rose-400" : "text-slate-900 dark:text-slate-50")}>{t.value}</p>
             </div>
