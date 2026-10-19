@@ -309,6 +309,12 @@ export const handler = async (event: any, context: any) => {
     const { probeCallDurations } = await import("../ringcentralSync");
     return probeCallDurations({ hours: Math.min(24, Math.max(1, Number(event.hours) || 3)) });
   }
+  // One person's calls on a day: RingCentral's log read fresh vs what MyPCP saved (IAM-only; times, results, seconds; no numbers).
+  if (event && event.__job === "rc-compare-person" && !event.requestContext && !event.version) {
+    const { compareCallsForPerson } = await import("../ringcentralSync");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(event.date)) || !String(event.name ?? "").trim()) return { problem: "name + date YYYY-MM-DD" };
+    return compareCallsForPerson({ name: String(event.name).slice(0, 80), date: event.date });
+  }
   // Calls + minutes on the phone per person for a range (IAM-only; names + numbers).
   if (event && event.__job === "talk-summary" && !event.requestContext && !event.version) {
     const { talkSummary } = await import("../metricsDb");

@@ -321,6 +321,52 @@ export async function probeCallDurations(input: { hours: number }) {
   return { records: recs.length, results, inboundAnswered, inboundTopSec: top, inboundAnsweringLegSec: answeredLegs, outboundUnanswered, outboundUnansweredSec, sample };
 }
 
+/**
+ * IAM-only (2026-10-19): one person's calls on a day — RingCentral's call log read fresh vs what MyPCP saved
+ * (rcCallStats). Clinic time, direction, result and seconds per call; no phone numbers. For checking talk time.
+ */
+export async function compareCallsForPerson(input: { name: string; date: string }) {
+  const creds = await loadCredentials();
+  if (!creds) return { skipped: "not set up" };
+  const token = await accessToken(creds);
+  const exts = await extensions(token);
+  const words = input.name.toLowerCase().split(/\s+/).filter(Boolean);
+  const mine = new Map(Array.from(exts.entries()).filter(([, e]) => words.length && words.every((w) => e.name.toLowerCase().includes(w))));
+  if (!mine.size) return { problem: `No RingCentral line named like "${input.name}".` };
+  // The clinic day sits inside these UTC hours whether it's daylight time or not; trimmed by clinic date below.
+  const from = new Date(`${input.date}T04:00:00.000Z`).toISOString();
+  const to = new Date(new Date(`${input.date}T07:00:00.000Z`).getTime() + 86_400_000).toISOString();
+  const records: Parameters<typeof mapCallStats>[0][] = [];
+  for (let page = 1; page <= 10; page++) {
+    const r = await rcGet<{ records: Parameters<typeof mapCallStats>[0][]; navigation?: { nextPage?: unknown } }>(token,
+      `/restapi/v1.0/account/~/call-log?view=Detailed&type=Voice&perPage=500&page=${page}&dateFrom=${encodeURIComponent(from)}&dateTo=${encodeURIComponent(to)}`);
+    records.push(...(r.records ?? []));
+    if (!r.navigation?.nextPage) break;
+  }
+  const fresh = records.flatMap((r) => mapCallStats(r)).filter((s) => s.extensionId && mine.has(s.extensionId) && localDateStr(s.startedAt) === input.date);
+  const d = await db();
+  const stored = await d.select({ rcId: rcCallStats.rcId, startedAt: rcCallStats.startedAt, direction: rcCallStats.direction, durationSec: rcCallStats.durationSec, result: rcCallStats.result, answered: rcCallStats.answered })
+    .from(rcCallStats).where(and(eq(rcCallStats.workDate, input.date), sql`${rcCallStats.extensionId} IN (${sql.join(Array.from(mine.keys()).map((k) => sql`${k}`), sql`, `)})`));
+  const storedById = new Map(stored.map((s) => [s.rcId, s]));
+  const freshIds = new Set(fresh.map((f) => f.rcId.slice(0, 120)));
+  const clock = (t: Date) => t.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" });
+  const counts = (x: { direction: string; answered: boolean; durationSec: number }[]) => {
+    const made = x.filter((c) => c.direction === "outbound");
+    const taken = x.filter((c) => c.direction === "inbound" && c.answered);
+    return { made: made.length, answered: taken.length, talkMin: Math.round([...made, ...taken].reduce((s, c) => s + c.durationSec, 0) / 60) };
+  };
+  return {
+    lines: Array.from(mine.values()).map((e) => e.name),
+    ringcentral: counts(fresh),
+    mypcp: counts(stored),
+    calls: fresh.sort((a, b) => +a.startedAt - +b.startedAt).map((f) => {
+      const s = storedById.get(f.rcId.slice(0, 120));
+      return { at: clock(f.startedAt), dir: f.direction, rcResult: f.result, rcSec: f.durationSec, savedSec: s ? s.durationSec : null, savedResult: s ? s.result : null };
+    }),
+    savedButNotInRingCentral: stored.filter((s) => !freshIds.has(s.rcId)).map((s) => ({ at: clock(s.startedAt), dir: s.direction, savedSec: s.durationSec, savedResult: s.result })),
+  };
+}
+
 /** IAM-only (2026-10-16): re-read the call log from a date (e.g. after changing how calls are credited). The next runs catch up. */
 export async function rewindCallSync(fromIso: string) {
   const state: SyncState = { ...EMPTY_STATE, ...((await readSetting<SyncState>(STATE_KEY)) ?? {}) };
