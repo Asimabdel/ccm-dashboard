@@ -361,6 +361,11 @@ export const handler = async (event: any, context: any) => {
     const { officeTestingSummary } = await import("../officeTestingDb");
     return officeTestingSummary();
   }
+  // Who else gets the APCM tab, by name (IAM-only; the whole list; dry run unless apply).
+  if (event && event.__job === "apcm-access" && !event.requestContext && !event.version) {
+    const { apcmAccessJob } = await import("../apcmAccess");
+    return apcmAccessJob({ names: Array.isArray(event.names) ? event.names.map(String) : [], apply: event.apply === true });
+  }
   // Who approves program suggestions, by name (IAM-only; dry run unless apply).
   if (event && event.__job === "program-approvers" && !event.requestContext && !event.version) {
     const { programApproversJob } = await import("../programsDb");

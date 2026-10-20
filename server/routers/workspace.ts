@@ -170,10 +170,12 @@ export const workspaceRouter = router({
     const assigns = ctx.user.role !== "admin" ? await assignerPrograms(ctx.user.id) : [];
     const ccmAssigner = assigns.includes("ccm");
     const bhiAssigner = assigns.includes("bhi");
-    if (!caps.tasks && !caps.playbooksView) return { caps, clinics: [], limitedToClinics: false, noClinicAccess: false, programApprover, ccmAssigner, bhiAssigner };
+    // Named APCM people (server/apcmAccess.ts) get the APCM tab whatever their role.
+    const apcmAccess = !["admin", "staff"].includes(role) && await (await import("../apcmAccess")).hasNamedApcmAccess(ctx.user.id);
+    if (!caps.tasks && !caps.playbooksView) return { caps, clinics: [], limitedToClinics: false, noClinicAccess: false, programApprover, ccmAssigner, bhiAssigner, apcmAccess };
     const actor = await actorFor(ctx, caps.tasks ? "tasks" : "playbooksView");
     const clinics = await ws.listClinics(actor);
-    return { caps, clinics, limitedToClinics: actor.clinicIds !== null, noClinicAccess: actor.clinicIds !== null && actor.clinicIds.length === 0, programApprover, ccmAssigner, bhiAssigner };
+    return { caps, clinics, limitedToClinics: actor.clinicIds !== null, noClinicAccess: actor.clinicIds !== null && actor.clinicIds.length === 0, programApprover, ccmAssigner, bhiAssigner, apcmAccess };
   }),
 
   home: protectedProcedure.input(z.object({ clinicId })).query(async ({ ctx, input }) => {

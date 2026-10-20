@@ -106,6 +106,15 @@ function requireRole(ctx: any, roles: string[]) {
   }
 }
 
+/** These roles, or a named APCM person (server/apcmAccess.ts) for the APCM tab and what it opens. */
+async function requireRoleOrApcm(ctx: any, roles: string[]) {
+  if (ctx.user && roles.includes(ctx.user.role)) return;
+  const { hasNamedApcmAccess } = await import("./apcmAccess");
+  if (!ctx.user || !(await hasNamedApcmAccess(ctx.user.id))) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this resource." });
+  }
+}
+
 /** Staff Assignment: admins and the named assigners for that program (see server/ccmAssigners.ts); no program = any. */
 async function requireAssigner(ctx: any, program?: AssignProgram) {
   if (!ctx.user || !(await (program ? canAssign(ctx.user, program) : canAssignAny(ctx.user)))) {
@@ -533,7 +542,7 @@ export const appRouter = router({
     detail: protectedProcedure
       .input(z.number())
       .query(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin", "staff", "provider", "billing", "front_desk"]);
+        await requireRoleOrApcm(ctx, ["admin", "staff", "provider", "billing", "front_desk"]);
         void logAudit(ctx, "view_patient", { entityType: "patient", entityId: input, description: `Viewed patient #${input}` });
         return getPatientDetail(input);
       }),
@@ -654,7 +663,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin", "staff", "front_desk"]);
+        await requireRoleOrApcm(ctx, ["admin", "staff", "front_desk"]);
         const { id, ...data } = input;
         const result = await updatePatientAPCM(id, data, currentMonth());
         void logAudit(ctx, "update_patient", { entityType: "patient", entityId: id, description: `Updated APCM enrollment for patient #${id}` });
@@ -1329,7 +1338,7 @@ export const appRouter = router({
         offset: z.number().optional(),
       }).optional())
       .query(async ({ input, ctx }) => {
-        requireRole(ctx, ["admin", "staff", "billing"]);
+        await requireRoleOrApcm(ctx, ["admin", "staff", "billing"]);
         return getApcmOverview(input?.month || currentMonth(), input || {});
       }),
 

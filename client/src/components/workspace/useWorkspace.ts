@@ -58,6 +58,8 @@ export function useWorkspace() {
     ccmAssigner: q.data?.ccmAssigner ?? false,
     /** A named BHI assigner (not an admin) who gets Staff Assignment for BHI patients. */
     bhiAssigner: q.data?.bhiAssigner ?? false,
+    /** A named APCM person (not an admin or coordinator) who gets the APCM tab. */
+    apcmAccess: q.data?.apcmAccess ?? false,
     clinicId: effectiveClinic,
     setClinicId,
   };

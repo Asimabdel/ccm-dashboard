@@ -1,5 +1,6 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
+import { useWorkspace } from "@/components/workspace/useWorkspace";
 import { trpc } from "@/lib/trpc";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -58,6 +59,8 @@ const CATEGORY: Record<string, { label: string; cls: string }> = {
 
 export default function ApcmPage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
+  // Named APCM people (server/apcmAccess.ts) work this tab like a coordinator, whatever their role.
+  const ws = useWorkspace();
   const utils = trpc.useUtils();
   const [month, setMonthState] = useState(monthFromUrl);
   const [category, setCategory] = useState<"" | "ready" | "needs_setup" | "ccm_done">("");
@@ -87,8 +90,8 @@ export default function ApcmPage() {
     onError: (e) => toast.error(e.message),
   });
 
-  if (loading || !user) return <div className="min-h-screen flex items-center justify-center bg-white"><Loader2 className="animate-spin text-slate-400" /></div>;
-  if (!["admin", "staff", "billing"].includes(user.role)) {
+  if (loading || !user || (ws.loading && !["admin", "staff", "billing"].includes(user.role))) return <div className="min-h-screen flex items-center justify-center bg-white"><Loader2 className="animate-spin text-slate-400" /></div>;
+  if (!["admin", "staff", "billing"].includes(user.role) && !ws.apcmAccess) {
     return <CCMDashboardLayout title="APCM"><p className="text-slate-400 font-light">This area is for care coordinators and billing.</p></CCMDashboardLayout>;
   }
 
