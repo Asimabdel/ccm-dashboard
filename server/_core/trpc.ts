@@ -37,6 +37,9 @@ const OFFICE_MANAGER_ALLOWED = [...WORKFORCE_ONLY_ALLOWED_PREFIXES, "users.", "m
 // MAs (since 2026-10-01: the front desk's pages, at their clinic): plus the older procedures those pages use, each limited to their clinic.
 const MEDICAL_ASSISTANT_ALLOWED = [...WORKFORCE_ONLY_ALLOWED_PREFIXES, "patients.list", "patients.duplicates", "clinics.list", "followUps.list", "followUps.updateStatus"];
 const allowedFor = (list: string[], path: string) => list.some((p) => (p.endsWith(".") ? path.startsWith(p) : path === p));
+// The APCM tab's procedures: also open to the named APCM people (server/apcmAccess.ts, e.g. an MA), whatever their role.
+const APCM_PATHS = ["apcm.overview", "patients.detail", "patients.updateAPCM"];
+const namedApcm = async (userId: number) => (await import("../apcmAccess")).hasNamedApcmAccess(userId);
 
 const requireUser = t.middleware(async opts => {
   const { ctx, next, path } = opts;
@@ -45,13 +48,11 @@ const requireUser = t.middleware(async opts => {
     throw new TRPCError({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
   }
 
-  if (
-    (WORKFORCE_ONLY_ROLES as readonly string[]).includes(ctx.user.role) &&
-    !allowedFor(ctx.user.role === "medical_assistant" ? MEDICAL_ASSISTANT_ALLOWED : WORKFORCE_ONLY_ALLOWED_PREFIXES, path)
-  ) {
-    throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this resource." });
-  }
-  if (ctx.user.role === "office_manager" && !allowedFor(OFFICE_MANAGER_ALLOWED, path)) {
+  const fenced =
+    ((WORKFORCE_ONLY_ROLES as readonly string[]).includes(ctx.user.role) &&
+      !allowedFor(ctx.user.role === "medical_assistant" ? MEDICAL_ASSISTANT_ALLOWED : WORKFORCE_ONLY_ALLOWED_PREFIXES, path)) ||
+    (ctx.user.role === "office_manager" && !allowedFor(OFFICE_MANAGER_ALLOWED, path));
+  if (fenced && !(APCM_PATHS.includes(path) && (await namedApcm(ctx.user.id)))) {
     throw new TRPCError({ code: "FORBIDDEN", message: "You do not have access to this resource." });
   }
 
