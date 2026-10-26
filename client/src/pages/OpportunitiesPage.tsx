@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
-import { BarChart3, CalendarPlus, CheckSquare, ChevronDown, EyeOff, Info, ListPlus, Loader2, PhoneCall, Radar, Square, CalendarClock, Clock, Stethoscope, UserSearch } from "lucide-react";
+import { BarChart3, CalendarPlus, CheckSquare, ChevronDown, EyeOff, Info, ListPlus, Loader2, PhoneCall, Radar, Search, Square, CalendarClock, Clock, Stethoscope, UserSearch } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { LogCallDialog, OutreachCell, SUGGESTED_SORT, SortHeader, SortNote, StatusTabs, type ListSortState } from "@/components/outreach/Outreach";
 import { CallingMode } from "@/components/outreach/CallingMode";
 import { CallResults } from "@/components/outreach/CallResults";
+import { OpportunitySearch } from "@/components/outreach/OpportunitySearch";
 import { OUTREACH_TABS, type OutreachStatus } from "@shared/outreach";
 import { FillSchedule } from "@/components/workspace/FillSchedule";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -104,7 +105,7 @@ export default function OpportunitiesPage() {
   const ws = useWorkspace();
   const [params, setParams] = useUrlParams();
   const t = params.get("tab");
-  const tab = t === "openings" || t === "fill" || t === "testing" || t === "results" ? t : "patients";
+  const tab = t === "search" || t === "openings" || t === "fill" || t === "testing" || t === "results" ? t : "patients";
   const fillProvider = Number(params.get("provider")) || null;
   // ?providers=3,5 — the providers picked (admins and office managers); none = all.
   const picked = (params.get("providers") ?? "").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0);
@@ -125,6 +126,7 @@ export default function OpportunitiesPage() {
       <div className="flex gap-1 mb-5 border-b border-slate-200 dark:border-slate-700 overflow-x-auto" role="tablist">
         {[
           { key: "patients", label: "Patient opportunities", icon: Radar },
+          { key: "search", label: "Search", icon: Search },
           { key: "fill", label: "Fill a schedule", icon: UserSearch },
           { key: "testing", label: "Testing due", icon: FlaskConical },
           { key: "openings", label: "Open slots", icon: CalendarPlus },
@@ -143,7 +145,8 @@ export default function OpportunitiesPage() {
       </div>
       {user && ws.caps?.opportunitiesView === false && <ErrorNote message="You don't have access to Opportunity Finder." />}
       {user && ws.caps?.opportunitiesView && (
-        tab === "openings" ? <Openings clinicId={ws.clinicId} providerIds={providerIds} />
+        tab === "search" ? <OpportunitySearch providerIds={providerIds} />
+          : tab === "openings" ? <Openings clinicId={ws.clinicId} providerIds={providerIds} />
           : tab === "fill" ? <FillSchedule providerParam={fillProvider} onProvider={(id) => setParams({ provider: id })} providerIds={providerIds} />
           : tab === "testing" ? <TestingDue clinicId={ws.clinicId} providerIds={providerIds} />
           : tab === "results" ? <CallResults />

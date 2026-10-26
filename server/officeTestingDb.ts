@@ -210,6 +210,22 @@ export async function listOfficeTesting(actor: WorkspaceActor, f: OfficeTestFilt
   };
 }
 
+/** Opportunity Finder search: the in-office tests each patient still needs (eligible, scheduled or missed). */
+export async function officeTestsDueFor(keys: string[]): Promise<Map<string, { test: OfficeTest; label: string; state: OfficeTestState }[]>> {
+  const out = new Map<string, { test: OfficeTest; label: string; state: OfficeTestState }[]>();
+  if (!keys.length) return out;
+  const today = localDateStr();
+  const [eligible, records] = await Promise.all([loadEligible(), recordsFor(keys)]);
+  for (const k of keys) {
+    const p = eligible.get(k);
+    if (!p) continue;
+    const due = statesOf(p, records.get(k) ?? [], today).filter((t) => t.state === "eligible" || t.state === "scheduled" || t.state === "missed")
+      .map((t) => ({ test: t.test, label: OFFICE_TEST_LABELS[t.test], state: t.state }));
+    if (due.length) out.set(k, due);
+  }
+  return out;
+}
+
 /** Patient 360: the in-office tests this patient qualifies for and where each stands. */
 export async function officeTestingFor(subjectKey: string) {
   const today = localDateStr();

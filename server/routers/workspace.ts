@@ -1293,6 +1293,11 @@ export const workspaceRouter = router({
         const actor = await oppActor(ctx, "opportunitiesView", input.providerIds);
         return run(() => ws.opportunityList(actor, input as Parameters<typeof ws.opportunityList>[1]));
       }),
+    /** Search: find a patient and see every list they're on, their calls, visits and tests due. */
+    search: protectedProcedure.input(z.object({ q: z.string().trim().min(2).max(100), providerIds: providerFilter })).query(async ({ ctx, input }) => {
+      const actor = await oppActor(ctx, "opportunitiesView", input.providerIds);
+      return run(() => ws.opportunitySearch(actor, input.q));
+    }),
     // Fill a provider's schedule: who is most likely to book with them.
     fillProviders: protectedProcedure.input(z.object({ providerIds: providerFilter }).optional()).query(async ({ ctx, input }) => {
       const actor = await oppActor(ctx, "opportunitiesView", input?.providerIds);

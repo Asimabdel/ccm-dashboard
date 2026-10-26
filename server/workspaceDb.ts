@@ -58,6 +58,7 @@ import {
   sameProviderName,
   officeCanManageLogin,
   nextClinicDay,
+  OPPORTUNITY_INFO,
   type FlowStatus,
   type OpportunityCategory,
   type ParsedAppointmentRow,
@@ -1394,6 +1395,68 @@ export async function opportunityList(actor: WorkspaceActor, input: { category: 
   // Each status tab, sorted for calling (call-backs due, then retries due, then the highest priority).
   const { counts, rows } = filterByStatus(out, input.status, { by: input.sort ?? "suggested", dir: input.dir ?? "asc" }, (r) => r.lastOfficeVisit);
   return { total: rows.length, counts, rows: rows.slice(0, OPPORTUNITY_LIST_LIMIT) };
+}
+
+const SEARCH_LIMIT = 25;
+
+/**
+ * Opportunity Finder → Search (2026-10-26): find one patient (any name order, DOB, phone or MRN, like the Patients
+ * tab) and see every list they're on, their calls, visits and in-office tests due. Anyone can be found (the
+ * directory is open to all staff); lists, phone and call logging only for patients within this person's
+ * Opportunity Finder (their clinic / their patients).
+ */
+export async function opportunitySearch(actor: WorkspaceActor, q: string) {
+  const { loadDirectory } = await import("./directoryDb");
+  const { parseDirectoryQuery, matchesQuery, isEmptyQuery } = await import("../shared/directory");
+  const query = parseDirectoryQuery(q);
+  if (isEmptyQuery(query) || (!query.dob && !query.digits && query.words.join("").length < 2)) return { rows: [], total: 0 };
+  const found = Array.from((await loadDirectory()).values())
+    .filter((e) => matchesQuery(e, query))
+    .sort((a, b) => a.sortName.localeCompare(b.sortName) || (a.dob ?? "").localeCompare(b.dob ?? ""));
+  const shown = found.slice(0, SEARCH_LIMIT);
+  if (!shown.length) return { rows: [], total: 0 };
+
+  const d = await db();
+  const [data, { loadOutreach }, { officeTestsDueFor }, clinicRows] = await Promise.all([
+    loadOpportunityData(actor, null),
+    import("./outreachDb"),
+    import("./officeTestingDb"),
+    d.select({ id: clinics.id, name: clinics.name }).from(clinics),
+  ]);
+  const byKey = new Map(data.map((c) => [c.key, c]));
+  const outreach = await loadOutreach();
+  const clinicName = new Map(clinicRows.map((c) => [c.id, c.name]));
+  const isoDate = (v: Date | string | null | undefined) => (v == null ? null : typeof v === "string" ? v : v.toISOString());
+  const reach = shown.filter((e) => byKey.has(e.key) || (inClinics(actor.clinicIds, e.clinicId) && ownsPatient(actor, e.providerId)));
+  const tests = await officeTestsDueFor(reach.map((e) => e.key));
+  const inReach = new Set(reach.map((e) => e.key));
+
+  const rows = shown.map((e) => {
+    const c = byKey.get(e.key);
+    const mine = inReach.has(e.key);
+    const lists = (c?.matches ?? []).map((m) => ({ category: m.category, label: OPPORTUNITY_INFO[m.category as OpportunityCategory]?.label ?? m.category, reason: m.reason }));
+    const primary = lists[0]?.category ?? null;
+    const clinicId = c?.clinicId ?? e.clinicId;
+    return {
+      key: e.key,
+      patientId: e.patientId,
+      name: c?.name ?? e.name,
+      dob: e.dob,
+      clinicName: clinicId ? clinicName.get(clinicId) ?? null : null,
+      providerName: c?.providerName ?? e.providerName,
+      lastVisit: isoDate(c?.lastVisit ?? e.lastVisit),
+      nextVisit: isoDate(c?.nextVisit ?? e.nextVisit),
+      // Their phone, lists and calls only within this person's Opportunity Finder.
+      inScope: mine,
+      phone: mine ? c?.phoneNumber ?? e.phone : null,
+      lists: mine ? lists : [],
+      primaryCategory: mine ? primary : null,
+      tests: mine ? tests.get(e.key) ?? [] : [],
+      outreach: mine ? outreach.stateFor(e.key, primary && c ? c.acted(primary) : null, actor.id) : null,
+    };
+  });
+  await audit(actor, "view_patient", { entityType: "opportunity", description: `Opportunity Finder search: ${rows.length} result(s)` });
+  return { rows, total: found.length };
 }
 
 export async function actOnOpportunities(
