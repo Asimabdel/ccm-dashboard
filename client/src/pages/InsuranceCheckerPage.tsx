@@ -89,7 +89,8 @@ export default function InsuranceCheckerPage() {
             <ul className="space-y-2.5 text-sm text-slate-700 dark:text-slate-200">
               <li><b>Self-pay:</b> ${SELF_PAY.firstVisit} first visit, ${SELF_PAY.followUp} follow-ups. No membership.</li>
               <li><b>Medicaid and CHIP</b> (including STAR, STAR+PLUS, STAR Kids): not accepted.</li>
-              <li><b>Medicare:</b> Original Medicare and the Medicare Advantage plans listed here.</li>
+              <li><b>Humana</b> (all plans, including Humana Medicare Advantage): not accepted.</li>
+              <li><b>Medicare:</b> Original Medicare and the Medicare Advantage plans listed here (not Humana).</li>
               <li><b>No referral</b> needed. Same-day visits at all 4 locations.</li>
               <li><b>Phone:</b> {CLINIC_PHONE}</li>
             </ul>
@@ -111,10 +112,11 @@ export default function InsuranceCheckerPage() {
 
 function Result({ answer, lang, setLang }: { answer: InsuranceAnswer; lang: "en" | "es"; setLang: (l: "en" | "es") => void }) {
   const st = RESULT_STYLE[answer.result];
+  const title = answer.result === "no" && answer.carrier ? `Not accepted: ${answer.carrier}` : st.title;
   const line = patientLine(answer, lang);
   return (
     <div className={cn("mt-4 rounded-xl border p-4", st.cls)} role="status">
-      <p className="flex items-center gap-2 font-semibold text-slate-900 dark:text-slate-50"><st.icon size={18} className={st.iconCls} /> {st.title}</p>
+      <p className="flex items-center gap-2 font-semibold text-slate-900 dark:text-slate-50"><st.icon size={18} className={st.iconCls} /> {title}</p>
       {answer.result === "yes" && (
         <ul className="mt-2 space-y-1.5 text-sm">
           {answer.plans.map((p) => (

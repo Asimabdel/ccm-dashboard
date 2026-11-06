@@ -39,7 +39,6 @@ export const PLANS: Plan[] = [
   { name: "Original Medicare", keys: "medicare partb", group: "medicare" },
   { name: "Aetna Medicare Advantage", keys: "aetnamedicare", group: "medicare" },
   { name: "BCBSTX Medicare Advantage", keys: "bluecrossmedicare", group: "medicare" },
-  { name: "Humana / ChoiceCare Medicare Advantage", keys: "humana choicecare", group: "medicare", note: DFW_NOTE },
   { name: "HealthSpring Medicare Advantage", keys: "healthspring", group: "medicare" },
   { name: "Wellcare Medicare Advantage", keys: "wellcare texanplus allwell", group: "medicare" },
   { name: "WellPoint (Amerigroup) Medicare Advantage", keys: "wellpoint amerigroup", group: "medicare" },
@@ -79,27 +78,45 @@ export const PLANS: Plan[] = [
  */
 export const MEDICAID_KEYS = ["medicaid", "chip", "starplus", "starkids", "fostercare", "betterhealth", "cookchildren", "star", "tmhp", "communityplan"];
 
+/** Carriers the clinic doesn't take at all (every plan, Medicare Advantage included). Humana dropped 2026-11-06. */
+export const NOT_ACCEPTED: { name: string; keys: string }[] = [
+  { name: "Humana", keys: "humana choicecare" },
+];
+
 export const SELF_PAY = { firstVisit: 120, followUp: 99 };
 export const CLINIC_PHONE = "(346) 707-8978";
 
 export const insNorm = (s: string) => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
 
 export type InsuranceAnswer =
-  | { result: "no"; plans: [] }
+  /** `carrier` = a NOT_ACCEPTED carrier; absent = Medicaid / CHIP. */
+  | { result: "no"; plans: []; carrier?: string }
   | { result: "yes"; plans: Plan[] }
   | { result: "maybe"; plans: [] };
 
-/** Same rules as the website: Medicaid/CHIP words first, then any listed plan, else "call to confirm". */
+/**
+ * Same rules as the website: Medicaid/CHIP words first, then a carrier we don't take ("Humana Gold
+ * Plus"), then any listed plan, then a half-typed dropped carrier ("huma"), else "call to confirm".
+ */
 export function checkInsurance(query: string): InsuranceAnswer | null {
   const q = insNorm(query);
   if (q.length < 3) return null;
   if (MEDICAID_KEYS.some((k) => q.includes(k))) return { result: "no", plans: [] };
+  const named = NOT_ACCEPTED.find((c) => c.keys.split(" ").some((k) => q.includes(k)));
+  if (named) return { result: "no", plans: [], carrier: named.name };
   const plans = PLANS.filter((p) => insNorm(p.name + p.keys).includes(q));
-  return plans.length ? { result: "yes", plans } : { result: "maybe", plans: [] };
+  if (plans.length) return { result: "yes", plans };
+  const partial = NOT_ACCEPTED.find((c) => insNorm(c.name + c.keys).includes(q));
+  return partial ? { result: "no", plans: [], carrier: partial.name } : { result: "maybe", plans: [] };
 }
 
 /** What to tell the patient, in the website's words (English / Spanish). */
 export function patientLine(answer: InsuranceAnswer, lang: "en" | "es"): string {
+  if (answer.result === "no" && answer.carrier) {
+    return lang === "es"
+      ? `Por el momento no aceptamos los planes de ${answer.carrier}. Pregunte por el pago directo: $${SELF_PAY.firstVisit} la primera visita, $${SELF_PAY.followUp} los seguimientos.`
+      : `We do not currently accept ${answer.carrier} plans. Ask us about self-pay: $${SELF_PAY.firstVisit} first visit, $${SELF_PAY.followUp} follow-ups.`;
+  }
   if (answer.result === "no") {
     return lang === "es"
       ? `Por el momento no aceptamos Medicaid ni CHIP. Pregunte por el pago directo: $${SELF_PAY.firstVisit} la primera visita, $${SELF_PAY.followUp} los seguimientos.`

@@ -84,7 +84,7 @@ function PayerPicker({ value, onChange }: { value: { id: string; name: string | 
     <div className="relative">
       <div className="relative">
         <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-        <input className={cn(inputCls, "pl-8")} placeholder="Search payer (e.g. Humana, Medicare)…" value={open ? q : value.id ? `${value.name ?? value.id} (${value.id})` : ""}
+        <input className={cn(inputCls, "pl-8")} placeholder="Search payer (e.g. Aetna, Medicare)…" value={open ? q : value.id ? `${value.name ?? value.id} (${value.id})` : ""}
           onFocus={() => { setOpen(true); setQ(""); }} onBlur={() => setTimeout(() => setOpen(false), 150)} onChange={(e) => setQ(e.target.value)} />
       </div>
       {open && (

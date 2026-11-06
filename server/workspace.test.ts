@@ -506,8 +506,14 @@ describe("insurance checker", () => {
     expect(checkInsurance("Aetna Better Health")!.result).toBe("no");
     expect(checkInsurance("UnitedHealthcare Community Plan")!.result).toBe("no");
     expect(checkInsurance("Kaiser")!.result).toBe("maybe");
-    expect(checkInsurance("Humana")!.plans[0]!.note).toMatch(/Dallas/);
-    expect(PLANS).toHaveLength(44);
+    expect(checkInsurance("Humana")).toEqual({ result: "no", plans: [], carrier: "Humana" });
+    expect(checkInsurance("Humana Gold Plus HMO")!.result).toBe("no");
+    expect(checkInsurance("ChoiceCare")!.result).toBe("no");
+    expect(checkInsurance("huma")!.result).toBe("no");
+    expect(checkInsurance("care")!.result).toBe("yes"); // Wellcare etc., not "choicecare"
+    expect(patientLine(checkInsurance("humana")!, "en")).toBe("We do not currently accept Humana plans. Ask us about self-pay: $120 first visit, $99 follow-ups.");
+    expect(checkInsurance("Imagine Health")!.plans[0]!.note).toMatch(/Dallas/);
+    expect(PLANS).toHaveLength(43);
     expect(patientLine(checkInsurance("cigna")!, "es")).toBe("Sí — aceptamos Cigna Healthcare of Texas en nuestras 4 clínicas.");
     expect(patientLine(checkInsurance("medicaid")!, "en")).toContain("$120 first visit, $99 follow-ups");
   });

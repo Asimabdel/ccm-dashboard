@@ -105,7 +105,7 @@ export const MEDICAL_INTAKE: Questionnaire = {
           o("yes", "Yes, I have insurance", "Sí, tengo seguro", "نعم، لدي تأمين صحي"), o("no", "No, I'll pay myself", "No, pagaré por mi cuenta", "لا، سأدفع بنفسي"),
         ] },
         { id: "insuranceName", type: "text", showIf: { field: "hasInsurance", in: ["yes"] }, label: l("Insurance company or plan", "Compañía o plan de seguro", "شركة التأمين أو الخطة"),
-          hint: l("Example: Medicare, Humana, Blue Cross", "Ejemplo: Medicare, Humana, Blue Cross", "مثال: Medicare أو Humana أو Blue Cross") },
+          hint: l("Example: Medicare, Aetna, Blue Cross", "Ejemplo: Medicare, Aetna, Blue Cross", "مثال: Medicare أو Aetna أو Blue Cross") },
         { id: "memberId", type: "text", showIf: { field: "hasInsurance", in: ["yes"] }, label: l("Member ID (on your card)", "Número de miembro (en su tarjeta)", "رقم العضوية (مكتوب على بطاقتك)") },
         { id: "cardFront", type: "photo", photo: "insurance_front", showIf: { field: "hasInsurance", in: ["yes"] }, label: l("Photo of the FRONT of your insurance card", "Foto del FRENTE de su tarjeta de seguro", "صورة الوجه الأمامي لبطاقة التأمين") },
         { id: "cardBack", type: "photo", photo: "insurance_back", showIf: { field: "hasInsurance", in: ["yes"] }, label: l("Photo of the BACK of your insurance card", "Foto del REVERSO de su tarjeta de seguro", "صورة الوجه الخلفي لبطاقة التأمين") },
