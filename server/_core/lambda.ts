@@ -258,6 +258,19 @@ export const handler = async (event: any, context: any) => {
     if (!ok(event.from) || !ok(event.to)) return { problem: "from and to must be YYYY-MM-DD" };
     return providerDays({ from: event.from, to: event.to });
   }
+  // One person's bell by notification kind: total / unread / last 7 days, and what they've switched off (IAM-only; counts only).
+  if (event && event.__job === "notification-counts" && !event.requestContext && !event.version) {
+    const { getDb } = await import("../db");
+    const { users } = await import("../../drizzle/schema");
+    const { like } = await import("drizzle-orm");
+    const d = await getDb();
+    const name = String(event.name ?? "").trim();
+    if (!d || !name) return { problem: "name required" };
+    const hits = await d.select({ id: users.id, name: users.name }).from(users).where(like(users.name, `%${name}%`));
+    if (hits.length !== 1) return { problem: `${hits.length} people match "${name}"`, matches: hits.map((h) => h.name) };
+    const { notificationCounts } = await import("../notificationsDb");
+    return { person: hits[0]!.name, ...(await notificationCounts({ userId: hits[0]!.id })) };
+  }
   // Patients booked from the Opportunity Finder since a date, and whether they showed up (IAM-only; counts only).
   if (event && event.__job === "opportunity-bookings" && !event.requestContext && !event.version) {
     const { opportunityBookings } = await import("../outreachDb");

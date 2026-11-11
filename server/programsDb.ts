@@ -166,8 +166,11 @@ async function notifyApprovers(total: number, added: (typeof programSuggestions.
     const scope = a.role === "office_manager" ? await officeClinicIds(a.id) : null;
     const n = scope ? new Set(added.filter((s) => s.clinicId != null && scope.includes(s.clinicId)).map((s) => s.subjectKey)).size : total;
     if (!n) continue;
+    const title = `${n} patient${n === 1 ? "" : "s"} qualify for care programs`;
+    const { deliverableTo } = await import("./notificationsDb");
+    if (!(await deliverableTo([a.id], "task", title)).length) continue;
     await d.insert(notifications).values({
-      userId: a.id, type: "task", title: `${n} patient${n === 1 ? "" : "s"} qualify for care programs`,
+      userId: a.id, type: "task", title,
       content: "Their diagnoses qualify them for CCM, BHI, RPM or APCM. Review and approve them in Program approvals.",
     });
   }

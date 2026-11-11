@@ -291,6 +291,8 @@ export async function audit(actor: WorkspaceActor, action: AuditAction, opts: { 
 export async function notifyTask(userId: number, title: string, content: string, patientId: number | null) {
   try {
     const d = await db();
+    const { deliverableTo } = await import("./notificationsDb");
+    if (!(await deliverableTo([userId], "task", title)).length) return;
     await d.insert(notifications).values({ userId, type: "task", title, content, relatedPatientId: patientId });
   } catch (e) {
     console.warn("[Notify] task notification failed:", e);

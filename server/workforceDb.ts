@@ -34,8 +34,10 @@ async function requireDb() {
 
 export async function notify(userIds: number[], title: string, content?: string) {
   const db = await getDb();
-  const ids = Array.from(new Set(userIds)).filter(Boolean);
-  if (!db || !ids.length) return;
+  if (!db) return;
+  const { deliverableTo } = await import("./notificationsDb");
+  const ids = await deliverableTo(userIds, "workforce", title);
+  if (!ids.length) return;
   await db.insert(notifications).values(ids.map((userId) => ({ userId, type: "workforce" as const, title, content })));
 }
 

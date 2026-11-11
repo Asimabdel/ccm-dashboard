@@ -3,7 +3,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import {
-  LogOut, Menu, Bell, ChevronDown, Check, Clock, Search, Sun, Moon, PanelLeftClose, PanelLeftOpen, X, Building2, KeyRound, MessagesSquare,
+  LogOut, Menu, ChevronDown, Check, Clock, Search, Sun, Moon, PanelLeftClose, PanelLeftOpen, X, Building2, KeyRound, MessagesSquare,
 } from "lucide-react";
 import { APCM, MESSAGES, NAV_GROUPS, PROGRAM_APPROVALS, ROLES, ROLE_HOME, STAFF_ASSIGNMENT, type Role } from "@/lib/nav";
 import { useUnreadMessages } from "@/components/messages/useUnreadMessages";
@@ -16,12 +16,12 @@ import { useIsMobile } from "@/hooks/useMobile";
 import { useWorkspace } from "@/components/workspace/useWorkspace";
 import { MyProgress } from "@/components/workspace/MyProgress";
 import { BrandMark } from "@/components/BrandMark";
+import { NotificationBell } from "@/components/NotificationBell";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { fmtDate } from "@/lib/ccm";
 import { WORKSPACE_ROLE_LABELS, can } from "@shared/workspace";
 
 // Keyboard hint for the ⌘K command palette (Mac shows ⌘, others Ctrl).
@@ -105,7 +105,6 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
   const utils = trpc.useUtils();
   const { warning, secondsLeft, stayLoggedIn, logoutNow } = useIdleLogout({ enabled: !!user });
 
-  const { data: notifications } = trpc.notifications.list.useQuery(undefined, { refetchInterval: 30000 });
   // Program approvals: only the named approvers get the tab (with how many patients are waiting).
   const { programApprover, ccmAssigner: ccmOnly, bhiAssigner, apcmAccess } = useWorkspace();
   const ccmAssigner = ccmOnly || bhiAssigner;
@@ -113,9 +112,6 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
   // Internal messages: unread count (top bar + sidebar) and the browser pop-up.
   // The Messages badge: team messages plus unread patient texts (for people who handle texts).
   const unreadMessages = useUnreadMessages(!!user && can(user.role, "messages")) + useUnreadTexts(!!user && can(user.role, "texts"));
-  const markRead = trpc.notifications.markRead.useMutation({
-    onSuccess: () => utils.notifications.list.invalidate(),
-  });
   const setRole = trpc.auth.setRole.useMutation({
     onSuccess: async () => {
       await refresh();
@@ -169,7 +165,6 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
     ? withAssignment.map((g, i) => (i === (careIdx >= 0 ? careIdx : 0) ? { ...g, items: [...g.items, APCM] } : g))
     : withAssignment;
   const waitingApprovals = approvals.data?.patients ?? 0;
-  const unread = (notifications || []).filter((n) => !n.read);
   const rail = !isMobile && collapsed;
   const initials = (user.name || user.email || "?").replace(/\(.*?\)/g, "").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
 
@@ -375,53 +370,7 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
               </button>
             )}
 
-            {/* Notifications */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button className="relative p-2 rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700" aria-label="Notifications">
-                  <Bell size={18} />
-                  {unread.length > 0 && (
-                    <span className="absolute -top-0.5 -right-0.5 min-w-[17px] h-[17px] px-1 bg-brand text-white text-[10px] font-bold rounded-full flex items-center justify-center">
-                      {unread.length}
-                    </span>
-                  )}
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-80">
-                <DropdownMenuLabel className="flex items-center justify-between">
-                  Notifications
-                  <span className="text-xs font-normal text-slate-400">{unread.length} unread</span>
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <div className="max-h-80 overflow-y-auto">
-                  {(notifications || []).length === 0 && (
-                    <p className="px-3 py-6 text-center text-sm text-slate-400">No notifications</p>
-                  )}
-                  {(notifications || []).slice(0, 12).map((n) => (
-                    <button
-                      key={n.id}
-                      onClick={() => {
-                        if (!n.read) markRead.mutate(n.id);
-                        if (n.type === "task") setLocation("/my-work");
-                      }}
-                      className={cn(
-                        "w-full text-left px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-700 border-b border-slate-50 dark:border-slate-700/50",
-                        !n.read && "bg-slate-50 dark:bg-blue-900/20"
-                      )}
-                    >
-                      <div className="flex items-start gap-2">
-                        {!n.read && <span className="mt-1.5 w-2 h-2 rounded-full bg-brand shrink-0" />}
-                        <div className={cn(n.read && "pl-4")}>
-                          <p className="text-sm font-medium text-slate-800 dark:text-slate-100">{n.title}</p>
-                          {n.content && <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{n.content}</p>}
-                          <p className="text-[10px] text-slate-400 mt-1">{fmtDate(n.createdAt)}</p>
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <NotificationBell />
 
             {/* Account */}
             <DropdownMenu>

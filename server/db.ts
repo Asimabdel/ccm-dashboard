@@ -1341,6 +1341,8 @@ export async function createNotification(n: {
 }) {
   const db = await getDb();
   if (!db) return;
+  const { deliverableTo } = await import("./notificationsDb");
+  if (!(await deliverableTo([n.userId], n.type, n.title)).length) return;
   await db.insert(notifications).values({
     userId: n.userId,
     type: n.type,

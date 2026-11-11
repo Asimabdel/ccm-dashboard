@@ -40,8 +40,6 @@ import {
   ensureMonthlyWorklistGenerated,
   recomputeBilling,
   createNotification,
-  markNotificationRead,
-  getAllNotifications,
   getUnreadNotifications,
   getFirstUserByRole,
   setUserRole,
@@ -1502,12 +1500,19 @@ export const appRouter = router({
 
   // ---- Notifications ----
   notifications: router({
-    list: protectedProcedure.query(async ({ ctx }) => getAllNotifications(ctx.user.id)),
+    list: protectedProcedure.query(async ({ ctx }) => (await import("./notificationsDb")).listForUser(ctx.user.id)),
     unread: protectedProcedure.query(async ({ ctx }) => getUnreadNotifications(ctx.user.id)),
-    markRead: protectedProcedure.input(z.number()).mutation(async ({ input }) => {
-      await markNotificationRead(input);
+    markRead: protectedProcedure.input(z.number()).mutation(async ({ ctx, input }) => {
+      await (await import("./notificationsDb")).markRead(ctx.user.id, input);
       return { success: true };
     }),
+    markAllRead: protectedProcedure.mutation(async ({ ctx }) => {
+      await (await import("./notificationsDb")).markAllRead(ctx.user.id);
+      return { success: true };
+    }),
+    clearAll: protectedProcedure.mutation(async ({ ctx }) => (await import("./notificationsDb")).clearAll(ctx.user.id)),
+    setOff: protectedProcedure.input(z.object({ off: z.array(z.string().max(40)).max(20) })).mutation(async ({ ctx, input }) =>
+      (await import("./notificationsDb")).setOffKinds(ctx.user.id, input.off)),
   }),
 
   // ---- Reference data ----
