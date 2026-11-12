@@ -61,8 +61,11 @@ const importId = z.number().int().positive();
 const subjectKey = z.string().regex(/^(p:\d+|s:.{1,110}|f:.{1,120})$/);
 
 export const masterBillingRouter = router({
-  /** Already-saved files among these (by SHA-256). */
-  checkFiles: protectedProcedure.input(z.object({ hashes: z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(200) })).query(async ({ ctx, input }) => {
+  /**
+   * Already-saved files among these (by SHA-256). A POST, not a query: 200 hashes in a GET address are
+   * ~15 KB, which production's API Gateway refuses (HTTP 431, seen 2026-11-12).
+   */
+  checkFiles: protectedProcedure.input(z.object({ hashes: z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(200) })).mutation(async ({ ctx, input }) => {
     await owner(ctx);
     return mb.checkFiles(input.hashes);
   }),

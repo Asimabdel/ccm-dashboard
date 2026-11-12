@@ -36,6 +36,7 @@ export function UploadDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   const [showAll, setShowAll] = useState(false);
   const busy = !!bulk || Object.values(state).some((x) => x.s === "saving");
 
+  const checkFiles = trpc.masterBilling.checkFiles.useMutation();
   const start = trpc.masterBilling.startImport.useMutation();
   const uploadLocal = trpc.masterBilling.uploadLocal.useMutation();
   const addEvents = trpc.masterBilling.addEvents.useMutation();
@@ -58,10 +59,10 @@ export function UploadDialog({ open, onOpenChange }: { open: boolean; onOpenChan
       const have = new Set(files.flatMap((f) => (f.kind === "error" || f.kind === "note" ? [] : [f.sha256])));
       const fresh = prepared.filter((f) => f.kind === "error" || f.kind === "note" || !have.has(f.sha256));
       const hashes = fresh.flatMap((f) => (f.kind === "error" || f.kind === "note" ? [] : [f.sha256]));
-      const known: Awaited<ReturnType<typeof utils.masterBilling.checkFiles.fetch>> = [];
+      const known: Awaited<ReturnType<typeof checkFiles.mutateAsync>> = [];
       for (let i = 0; i < hashes.length; i += 200) {
         setOpening(`Checking which files are already uploaded…`);
-        known.push(...(await utils.masterBilling.checkFiles.fetch({ hashes: hashes.slice(i, i + 200) })));
+        known.push(...(await checkFiles.mutateAsync({ hashes: hashes.slice(i, i + 200) })));
       }
       const next: Record<string, FileState> = {};
       for (const f of fresh) {
