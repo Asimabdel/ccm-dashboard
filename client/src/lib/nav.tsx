@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, ClipboardList, UserCog, AlertTriangle, Receipt,
   BarChart3, PhoneCall, CalendarClock, ShieldCheck, Building2, Stethoscope, Target,
   UserMinus, Ban, Pill, PhoneOutgoing, Activity, Sunrise, CalendarDays, BriefcaseBusiness,
-  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature, FileSignature, Wallet, HeartPulse, ClipboardCheck, FlaskConical, Link2, NotebookPen, MessagesSquare, FileBarChart, HeartHandshake, TrendingUp,
+  Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature, FileSignature, Wallet, HeartPulse, ClipboardCheck, FlaskConical, Link2, NotebookPen, MessagesSquare, FileBarChart, HeartHandshake, TrendingUp, Landmark,
 } from "lucide-react";
 
 export interface NavItem {
@@ -48,6 +48,8 @@ const FORMS: NavItem = { label: "Patient forms", path: "/intake-forms", icon: Cl
 const DOCUMENTS: NavItem = { label: "Documents", path: "/documents", icon: FileSignature };
 const INSURANCE: NavItem = { label: "Insurance checker", path: "/insurance", icon: BadgeCheck };
 const PAYMENTS: NavItem = { label: "Payments", path: "/payments", icon: Wallet };
+/** Only for the admins named for it (server/masterBillingAccess.ts): added to Revenue by the layout. */
+export const MASTER_BILLING: NavItem = { label: "Master Billing", path: "/master-billing", icon: Landmark };
 
 // Every employee gets the self-service time clock + schedule pages and the team schedule.
 const ME: NavGroup = {

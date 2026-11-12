@@ -268,6 +268,10 @@ type AuditAction =
   | "manage_document"
   | "view_payments"
   | "manage_payment"
+  | "view_master_billing"
+  | "import_bills"
+  | "remove_bill_import"
+  | "link_bill_patient"
   | "export_data";
 
 export async function audit(actor: WorkspaceActor, action: AuditAction, opts: { entityType?: string; entityId?: number; description?: string } = {}) {

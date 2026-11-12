@@ -81,6 +81,7 @@ import { assignProgramOf, canAssign, canAssignAny, type AssignProgram } from "./
 import { staffProfiles } from "../drizzle/schema";
 import { workforceRouter } from "./routers/workforce";
 import { workspaceRouter } from "./routers/workspace";
+import { masterBillingRouter } from "./routers/masterBilling";
 import { patientFormsRouter } from "./routers/patientForms";
 import { learnRouter } from "./routers/learn";
 import { seedDatabase, isSeeded, currentMonth } from "./seed";
@@ -234,6 +235,8 @@ export const appRouter = router({
   ccmNotesAI: ccmNotesRouter,
   workforce: workforceRouter,
   workspace: workspaceRouter,
+  // Owner only (named admins): bills that come back from the clearinghouse.
+  masterBilling: masterBillingRouter,
   // Public: the patient's side of patient forms (link + date of birth, no login).
   patientForms: patientFormsRouter,
   learn: learnRouter,

@@ -41,6 +41,7 @@ import PatientEmailsPage from "./pages/PatientEmailsPage";
 import MessagesPage from "./pages/MessagesPage";
 import DailyReportsPage from "./pages/DailyReportsPage";
 import ProviderReportPage from "./pages/ProviderReportPage";
+import MasterBillingPage from "./pages/MasterBillingPage";
 import WellnessPage from "./pages/WellnessPage";
 import InsuranceCheckerPage from "./pages/InsuranceCheckerPage";
 import TeamProgressPage from "./pages/TeamProgressPage";
@@ -117,6 +118,7 @@ function Router() {
       <Route path="/messages" component={MessagesPage} />
       <Route path="/daily-reports" component={DailyReportsPage} />
       <Route path="/provider-report" component={ProviderReportPage} />
+      <Route path="/master-billing" component={MasterBillingPage} />
       <Route path="/wellness" component={WellnessPage} />
       <Route path="/insurance" component={InsuranceCheckerPage} />
       <Route path="/team-progress" component={TeamProgressPage} />

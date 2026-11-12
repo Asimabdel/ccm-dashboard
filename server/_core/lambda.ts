@@ -379,6 +379,16 @@ export const handler = async (event: any, context: any) => {
     const { apcmAccessJob } = await import("../apcmAccess");
     return apcmAccessJob({ names: Array.isArray(event.names) ? event.names.map(String) : [], apply: event.apply === true });
   }
+  // Who has Master Billing (admins only), by name, the whole list (IAM-only; dry run unless apply).
+  if (event && event.__job === "master-billing-access" && !event.requestContext && !event.version) {
+    const { masterBillingAccessJob } = await import("../masterBillingAccess");
+    return masterBillingAccessJob({ names: Array.isArray(event.names) ? event.names.map(String) : [], apply: event.apply === true });
+  }
+  // Master Billing: uploads, claims, matches and totals (IAM-only; counts and dollar totals, no patient details).
+  if (event && event.__job === "master-billing-counts" && !event.requestContext && !event.version) {
+    const { masterBillingCounts } = await import("../masterBillingDb");
+    return masterBillingCounts();
+  }
   // Who approves program suggestions, by name (IAM-only; dry run unless apply).
   if (event && event.__job === "program-approvers" && !event.requestContext && !event.version) {
     const { programApproversJob } = await import("../programsDb");

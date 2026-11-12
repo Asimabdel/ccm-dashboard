@@ -5,7 +5,7 @@ import { trpc } from "@/lib/trpc";
 import {
   LogOut, Menu, ChevronDown, Check, Clock, Search, Sun, Moon, PanelLeftClose, PanelLeftOpen, X, Building2, KeyRound, MessagesSquare,
 } from "lucide-react";
-import { APCM, MESSAGES, NAV_GROUPS, PROGRAM_APPROVALS, ROLES, ROLE_HOME, STAFF_ASSIGNMENT, type Role } from "@/lib/nav";
+import { APCM, MASTER_BILLING, MESSAGES, NAV_GROUPS, PROGRAM_APPROVALS, ROLES, ROLE_HOME, STAFF_ASSIGNMENT, type Role } from "@/lib/nav";
 import { useUnreadMessages } from "@/components/messages/useUnreadMessages";
 import { useUnreadTexts } from "@/components/texts/useUnreadTexts";
 import { ClockBanner } from "@/components/workforce/ClockBanner";
@@ -106,7 +106,7 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
   const { warning, secondsLeft, stayLoggedIn, logoutNow } = useIdleLogout({ enabled: !!user });
 
   // Program approvals: only the named approvers get the tab (with how many patients are waiting).
-  const { programApprover, ccmAssigner: ccmOnly, bhiAssigner, apcmAccess } = useWorkspace();
+  const { programApprover, ccmAssigner: ccmOnly, bhiAssigner, apcmAccess, masterBilling } = useWorkspace();
   const ccmAssigner = ccmOnly || bhiAssigner;
   const approvals = trpc.workspace.programs.count.useQuery(undefined, { enabled: !!user && programApprover, refetchInterval: 5 * 60_000 });
   // Internal messages: unread count (top bar + sidebar) and the browser pop-up.
@@ -146,7 +146,7 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
         saveNavScroll(el.scrollTop);
       }
     }
-  }, [location, !!user, collapsed, isMobile, mobileOpen, programApprover, ccmAssigner, apcmAccess]);
+  }, [location, !!user, collapsed, isMobile, mobileOpen, programApprover, ccmAssigner, apcmAccess, masterBilling]);
 
   if (!user) return null;
 
@@ -161,9 +161,13 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
     ? withApprovals.map((g, i) => (i === (careIdx >= 0 ? careIdx : 0) ? { ...g, items: careIdx >= 0 ? [...g.items.slice(0, 2), STAFF_ASSIGNMENT, ...g.items.slice(2)] : [...g.items, STAFF_ASSIGNMENT] } : g))
     : withApprovals;
   // Named APCM people get APCM in Care Management (or at the end of their first group).
-  const groups = apcmAccess && !withAssignment.some((g) => g.items.some((x) => x.path === APCM.path))
+  const withApcm = apcmAccess && !withAssignment.some((g) => g.items.some((x) => x.path === APCM.path))
     ? withAssignment.map((g, i) => (i === (careIdx >= 0 ? careIdx : 0) ? { ...g, items: [...g.items, APCM] } : g))
     : withAssignment;
+  // Master Billing: only the admins named for it, right after Billing in Revenue.
+  const groups = masterBilling
+    ? withApcm.map((g) => (g.label === "Revenue" ? { ...g, items: g.items.flatMap((x) => (x.path === "/billing" ? [x, MASTER_BILLING] : [x])) } : g))
+    : withApcm;
   const waitingApprovals = approvals.data?.patients ?? 0;
   const rail = !isMobile && collapsed;
   const initials = (user.name || user.email || "?").replace(/\(.*?\)/g, "").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();

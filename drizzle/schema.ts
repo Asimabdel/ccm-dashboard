@@ -78,6 +78,8 @@ export const providers = mysqlTable("providers", {
   // Alternate names this provider is known by (e.g. on imported sheets), so a
   // patient import can resolve "Dr. Sudad" -> "Al Hadad" or "Magdalene" -> "Maggie".
   aliases: json("aliases").$type<string[]>().default([]),
+  /** NPI (added 2026-11-11 for Master Billing): filled the first time a payment file's rendering provider is matched by name. */
+  npi: varchar("npi", { length: 10 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
@@ -470,6 +472,11 @@ export const auditLogs = mysqlTable("auditLogs", {
     // Square payments, added 2026-09-30
     "view_payments",
     "manage_payment",
+    // Master Billing (owner only), added 2026-11-11
+    "view_master_billing",
+    "import_bills",
+    "remove_bill_import",
+    "link_bill_patient",
   ]).notNull(),
   entityType: varchar("entityType", { length: 50 }),
   entityId: int("entityId"),
@@ -2237,4 +2244,147 @@ export const timeClockReviews = mysqlTable("timeClockReviews", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (t) => ({
   oneIdx: uniqueIndex("timeClockReviews_one_unique").on(t.userId, t.date, t.ref),
+}));
+
+// ---------------------------------------------------------------------------
+// Master Billing (owner only, 2026-11-11): bills that come back from the clearinghouse.
+// Uploads → claim events (raw facts, one per claim per file) → one claim each (recomputed from
+// its events) → its CPT lines (what every breakdown adds up). Money in cents. See shared/masterBilling.ts.
+// ---------------------------------------------------------------------------
+
+/** One uploaded file. */
+export const billImports = mysqlTable("billImports", {
+  id: int("id").autoincrement().primaryKey(),
+  /** era835 | pdf | sheet */
+  kind: varchar("kind", { length: 10 }).notNull(),
+  fileName: varchar("fileName", { length: 255 }).notNull(),
+  /** SHA-256 of the file: the same file isn't saved twice (unless the first upload was removed). */
+  sha256: varchar("sha256", { length: 64 }).notNull(),
+  /** The original file in private storage. */
+  s3Key: varchar("s3Key", { length: 255 }),
+  uploadedByUserId: int("uploadedByUserId").references(() => users.id).notNull(),
+  /** saving | saved | removed */
+  status: varchar("status", { length: 10 }).default("saving").notNull(),
+  /** The payments in the file (835 / PDF): payer, check #, date, amount, check adjustments, adds up? */
+  checks: json("checks"),
+  claimCount: int("claimCount").default(0).notNull(),
+  billedCents: int("billedCents").default(0).notNull(),
+  paidCents: int("paidCents").default(0).notNull(),
+  matchedCount: int("matchedCount").default(0).notNull(),
+  removedAt: datetime("removedAt"),
+  removedByUserId: int("removedByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  shaIdx: index("billImports_sha_idx").on(t.sha256),
+}));
+
+/** One claim as one file reported it (a claim in three files = three events). */
+export const billClaimEvents = mysqlTable("billClaimEvents", {
+  id: int("id").autoincrement().primaryKey(),
+  importId: int("importId").references(() => billImports.id).notNull(),
+  /** Which claim this is (shared/masterBilling claimRefOf). */
+  claimRef: varchar("claimRef", { length: 120 }).notNull(),
+  /** Patient + first date of service + billed (matches a report row to its payment). */
+  altKey: varchar("altKey", { length: 120 }).notNull(),
+  /** Same payment in two files (e.g. a re-downloaded zip) = same key, counted once. */
+  eventKey: varchar("eventKey", { length: 64 }).notNull(),
+  source: varchar("source", { length: 10 }).notNull(),
+  claimNo: varchar("claimNo", { length: 60 }),
+  payerClaimNo: varchar("payerClaimNo", { length: 60 }),
+  clpStatus: varchar("clpStatus", { length: 4 }),
+  sheetStatus: varchar("sheetStatus", { length: 20 }),
+  payerName: varchar("payerName", { length: 160 }),
+  payerId: varchar("payerId", { length: 40 }),
+  filingIndicator: varchar("filingIndicator", { length: 4 }),
+  patientName: varchar("patientName", { length: 255 }),
+  patientDob: varchar("patientDob", { length: 10 }),
+  memberId: varchar("memberId", { length: 60 }),
+  providerName: varchar("providerName", { length: 255 }),
+  providerNpi: varchar("providerNpi", { length: 10 }),
+  serviceFrom: varchar("serviceFrom", { length: 10 }),
+  serviceTo: varchar("serviceTo", { length: 10 }),
+  paidDate: varchar("paidDate", { length: 10 }),
+  checkNumber: varchar("checkNumber", { length: 60 }),
+  billedCents: int("billedCents").default(0).notNull(),
+  paidCents: int("paidCents").default(0).notNull(),
+  patientRespCents: int("patientRespCents").default(0).notNull(),
+  claimAdjustments: json("claimAdjustments"),
+  lines: json("lines"),
+  note: varchar("note", { length: 500 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  refIdx: index("billClaimEvents_ref_idx").on(t.claimRef),
+  importIdx: index("billClaimEvents_import_idx").on(t.importId),
+  altIdx: index("billClaimEvents_alt_idx").on(t.altKey),
+  oneIdx: uniqueIndex("billClaimEvents_one_unique").on(t.importId, t.eventKey),
+}));
+
+/** One claim: all its events joined (recomputed after every upload / removal). */
+export const billClaims = mysqlTable("billClaims", {
+  id: int("id").autoincrement().primaryKey(),
+  claimRef: varchar("claimRef", { length: 120 }).notNull().unique(),
+  altKey: varchar("altKey", { length: 120 }).notNull(),
+  /** A report row whose payment came in under another claim number: hidden, counted there. */
+  supersededBy: varchar("supersededBy", { length: 120 }),
+  status: varchar("status", { length: 20 }).notNull(),
+  sourceUsed: varchar("sourceUsed", { length: 10 }).notNull(),
+  billedCents: int("billedCents").default(0).notNull(),
+  allowedCents: int("allowedCents").default(0).notNull(),
+  paidCents: int("paidCents").default(0).notNull(),
+  laterPayersPaidCents: int("laterPayersPaidCents").default(0).notNull(),
+  patientOwesCents: int("patientOwesCents").default(0).notNull(),
+  writtenOffCents: int("writtenOffCents").default(0).notNull(),
+  deniedCents: int("deniedCents").default(0).notNull(),
+  payerName: varchar("payerName", { length: 160 }),
+  payerType: varchar("payerType", { length: 40 }),
+  filingIndicator: varchar("filingIndicator", { length: 4 }),
+  otherPayers: json("otherPayers"),
+  claimNo: varchar("claimNo", { length: 60 }),
+  payerClaimNo: varchar("payerClaimNo", { length: 60 }),
+  patientName: varchar("patientName", { length: 255 }),
+  patientDob: varchar("patientDob", { length: 10 }),
+  memberId: varchar("memberId", { length: 60 }),
+  /** The patient in MyPCP ("p:<id>" / "s:<name>|<dob>"), when matched. */
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  patientId: int("patientId").references(() => patients.id),
+  /** member | visit | name | manual */
+  matchSource: varchar("matchSource", { length: 10 }),
+  providerName: varchar("providerName", { length: 255 }),
+  providerNpi: varchar("providerNpi", { length: 10 }),
+  providerId: int("providerId").references(() => providers.id),
+  clinicId: int("clinicId").references(() => clinics.id),
+  firstServiceDate: varchar("firstServiceDate", { length: 10 }),
+  lastPaidDate: varchar("lastPaidDate", { length: 10 }),
+  denialCodes: json("denialCodes"),
+  eventCount: int("eventCount").default(0).notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  serviceIdx: index("billClaims_service_idx").on(t.firstServiceDate),
+  paidIdx: index("billClaims_paid_idx").on(t.lastPaidDate),
+  altIdx: index("billClaims_alt_idx").on(t.altKey),
+  subjectIdx: index("billClaims_subject_idx").on(t.subjectKey),
+}));
+
+/** One CPT line of a claim (what the breakdowns add up). */
+export const billLines = mysqlTable("billLines", {
+  id: int("id").autoincrement().primaryKey(),
+  claimId: int("claimId").references(() => billClaims.id).notNull(),
+  lineNo: int("lineNo").notNull(),
+  code: varchar("code", { length: 16 }).notNull(),
+  modifiers: varchar("modifiers", { length: 20 }),
+  units: int("units").default(1).notNull(),
+  serviceDate: varchar("serviceDate", { length: 10 }),
+  billedCents: int("billedCents").default(0).notNull(),
+  allowedCents: int("allowedCents").default(0).notNull(),
+  paidCents: int("paidCents").default(0).notNull(),
+  patientOwesCents: int("patientOwesCents").default(0).notNull(),
+  writtenOffCents: int("writtenOffCents").default(0).notNull(),
+  deniedCents: int("deniedCents").default(0).notNull(),
+  /** The biggest denial reason on the line ("CO-97"). */
+  denialCode: varchar("denialCode", { length: 20 }),
+  adjustments: json("adjustments"),
+  remarks: json("remarks"),
+}, (t) => ({
+  claimIdx: index("billLines_claim_idx").on(t.claimId),
+  serviceIdx: index("billLines_service_idx").on(t.serviceDate),
 }));

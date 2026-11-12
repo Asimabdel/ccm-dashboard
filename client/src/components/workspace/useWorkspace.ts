@@ -60,6 +60,8 @@ export function useWorkspace() {
     bhiAssigner: q.data?.bhiAssigner ?? false,
     /** A named APCM person (not an admin or coordinator) who gets the APCM tab. */
     apcmAccess: q.data?.apcmAccess ?? false,
+    /** One of the admins named for Master Billing (the owner). */
+    masterBilling: q.data?.masterBilling ?? false,
     clinicId: effectiveClinic,
     setClinicId,
   };
