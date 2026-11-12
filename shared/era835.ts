@@ -259,7 +259,8 @@ export function parseEra835(text: string): EraFile {
           qualifier: comp[0] ?? "", code: comp[1] ?? "", modifiers: comp.slice(2, 6).filter(Boolean),
           submittedCode: orig?.[1] || null, submittedModifiers: orig ? orig.slice(2, 6).filter(Boolean) : null,
           billedCents: x12Cents(el[2]), paidCents: x12Cents(el[3]),
-          units: Number(el[7] || el[5] || 1) || 1,
+          // A take-back lists its units as negative ("-1"); the money carries the sign, units stay a count.
+          units: Math.abs(Number(el[7] || el[5] || 1)) || 1,
           serviceDate: null, allowedCents: null, adjustments: [], remarks: [], controlNo: null,
         };
         claim.lines.push(line);

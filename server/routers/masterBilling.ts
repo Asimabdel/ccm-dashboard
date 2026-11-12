@@ -33,7 +33,8 @@ const cents = z.number().int().min(-100_000_000).max(100_000_000);
 const text = (n: number) => z.string().max(n).nullable();
 const adjustment = z.object({ group: z.string().max(4), code: z.string().max(8), cents, kind: z.enum(["patient", "writeoff", "denied"]).optional() });
 const line = z.object({
-  code: z.string().min(1).max(16), modifiers: z.array(z.string().max(4)).max(6), units: z.number().min(0).max(10_000), serviceDate: ymd,
+  // Units may be negative on a take-back line (older uploads' pages send them as the file says).
+  code: z.string().min(1).max(16), modifiers: z.array(z.string().max(4)).max(6), units: z.number().min(-10_000).max(10_000), serviceDate: ymd,
   billedCents: cents, allowedCents: cents.nullable(), paidCents: cents, adjustments: z.array(adjustment).max(30), remarks: z.array(z.string().max(10)).max(20),
   paidAsCode: z.string().max(16).nullish(),
 });

@@ -193,6 +193,11 @@ describe("one claim from its files", () => {
     expect(m.lines).toHaveLength(1);
   });
 
+  it("a take-back line's negative units are read as a count", () => {
+    const rev = parseEra835(wrap(one("22", -100, -60, ["CAS*CO*45*-40"], "ICN1", "C2", "20261020").map((s) => (s.startsWith("SVC") ? s.replace(/\*\*1$/, "**-1") : s))));
+    expect(rev.checks[0]!.claims[0]!.lines[0]!.units).toBe(1);
+  });
+
   it("take-back with no new payment", () => {
     const a = eraToEvents(parseEra835(wrap(one("1", 100, 60, ["CAS*CO*45*40"], "ICN1", "C1", "20261010"))));
     const b = eraToEvents(parseEra835(wrap(one("22", -100, -60, ["CAS*CO*45*-40"], "ICN1", "C2", "20261020"))));
