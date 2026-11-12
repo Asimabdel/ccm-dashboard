@@ -272,6 +272,8 @@ type AuditAction =
   | "import_bills"
   | "remove_bill_import"
   | "link_bill_patient"
+  | "view_payroll"
+  | "set_pay_rate"
   | "export_data";
 
 export async function audit(actor: WorkspaceActor, action: AuditAction, opts: { entityType?: string; entityId?: number; description?: string } = {}) {

@@ -129,6 +129,39 @@ export const masterBillingRouter = router({
     await owner(ctx);
     return mb.filterOptions();
   }),
+  /** Payroll: estimated pay from time-clock hours and pay rates, for a month or a pay period. */
+  payroll: protectedProcedure.input(z.discriminatedUnion("view", [
+    z.object({ view: z.literal("month"), month: z.string().regex(/^\d{4}-\d{2}$/) }),
+    z.object({ view: z.literal("period"), start: dateStr }),
+  ])).query(async ({ ctx, input }) => {
+    const actor = await owner(ctx);
+    const { payroll } = await import("../payrollDb");
+    return run(() => payroll(actor, input));
+  }),
+  payRates: protectedProcedure.input(z.object({ userId: z.number().int().positive() })).query(async ({ ctx, input }) => {
+    await owner(ctx);
+    const { payRateHistory } = await import("../payrollDb");
+    return payRateHistory(input.userId);
+  }),
+  payrollPeople: protectedProcedure.query(async ({ ctx }) => {
+    await owner(ctx);
+    const { payrollPeople } = await import("../payrollDb");
+    return payrollPeople();
+  }),
+  setPayRate: protectedProcedure.input(z.object({
+    userId: z.number().int().positive(), payType: z.enum(["hourly", "salary"]), amountCents: z.number().int().min(1).max(100_000_000),
+    overtime: z.boolean(), startDate: dateStr, note: z.string().max(255).nullish(),
+  })).mutation(async ({ ctx, input }) => {
+    const actor = await owner(ctx);
+    const { setPayRate } = await import("../payrollDb");
+    return run(() => setPayRate(actor, input));
+  }),
+  removePayRate: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    const actor = await owner(ctx);
+    const { removePayRate } = await import("../payrollDb");
+    return run(() => removePayRate(actor, input.id));
+  }),
+
   /** Pick the patient (null = match again; `none` = the patient isn't in MyPCP, leave it unmatched). */
   linkPatient: protectedProcedure.input(z.object({ claimId: z.number().int().positive(), subjectKey: subjectKey.nullable(), none: z.boolean().optional() }))
     .mutation(async ({ ctx, input }) => run(async () => mb.linkPatient(await owner(ctx), input.claimId, input.subjectKey, input.none === true))),

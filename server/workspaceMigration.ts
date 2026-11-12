@@ -29,6 +29,8 @@ const ENUM_ADDITIONS: { table: string; column: string; values: string[] }[] = [
   { table: "patientTests", column: "status", values: ["scheduled"] },
   // Added 2026-11-11: Master Billing (owner only).
   { table: "auditLogs", column: "action", values: ["view_master_billing", "import_bills", "remove_bill_import", "link_bill_patient"] },
+  // Added 2026-11-12: Payroll in Master Billing (owner only).
+  { table: "auditLogs", column: "action", values: ["view_payroll", "set_pay_rate"] },
 ];
 
 export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
@@ -1295,6 +1297,20 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     INDEX \`billLines_claim_idx\` (\`claimId\`),
     INDEX \`billLines_service_idx\` (\`serviceDate\`),
     CONSTRAINT \`billLines_claimId_fk\` FOREIGN KEY (\`claimId\`) REFERENCES \`billClaims\`(\`id\`))` },
+  // Payroll in Master Billing (owner only, added 2026-11-12): pay rates with start dates.
+  { label: "payRates", sql: `CREATE TABLE IF NOT EXISTS \`payRates\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`userId\` int NOT NULL,
+    \`payType\` varchar(10) NOT NULL,
+    \`amountCents\` int NOT NULL,
+    \`overtime\` boolean NOT NULL DEFAULT true,
+    \`startDate\` varchar(10) NOT NULL,
+    \`note\` varchar(255),
+    \`createdByUserId\` int,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    INDEX \`payRates_user_idx\` (\`userId\`, \`startDate\`),
+    CONSTRAINT \`payRates_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`),
+    CONSTRAINT \`payRates_createdByUserId_fk\` FOREIGN KEY (\`createdByUserId\`) REFERENCES \`users\`(\`id\`))` },
 ];
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;

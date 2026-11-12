@@ -10,6 +10,7 @@ import { Btn, EmptyState, ErrorNote, Loading, MetricCard, PageHeader, Panel, Sel
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { UploadDialog } from "@/components/masterBilling/UploadDialog";
 import { ClaimDrawer } from "@/components/masterBilling/ClaimDrawer";
+import { PayrollTab } from "@/components/masterBilling/PayrollTab";
 import { STATUS_CLASS, StatusBadge } from "@/components/masterBilling/StatusBadge";
 import { downloadCsv, niceName } from "@/lib/masterBillingFiles";
 import { trpc, type RouterOutputs } from "@/lib/trpc";
@@ -35,10 +36,10 @@ interface Filters {
   closeMatch?: boolean | null;
   subjectKey?: string | null;
 }
-type Tab = "summary" | "breakdown" | "claims" | "denials" | "deductible" | "uploads";
+type Tab = "summary" | "breakdown" | "claims" | "denials" | "deductible" | "payroll" | "uploads";
 const TABS: { key: Tab; label: string }[] = [
   { key: "summary", label: "Summary" }, { key: "breakdown", label: "Breakdown" }, { key: "claims", label: "Claims" }, { key: "denials", label: "Denials" },
-  { key: "deductible", label: "High deductible" }, { key: "uploads", label: "Uploads" },
+  { key: "deductible", label: "High deductible" }, { key: "payroll", label: "Payroll" }, { key: "uploads", label: "Uploads" },
 ];
 
 type Preset = "month" | "lastMonth" | "3m" | "ytd" | "12m" | "all";
@@ -109,7 +110,7 @@ export default function MasterBillingPage() {
         ))}
       </div>
 
-      {tab !== "uploads" && (
+      {tab !== "uploads" && tab !== "payroll" && (
         <div className="mb-4 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             {PRESETS.map((p) => <Btn key={p.key} size="sm" variant={preset === p.key ? "primary" : "secondary"} onClick={() => { setPreset(p.key); patch(presetRange(p.key, today)); }}>{p.label}</Btn>)}
@@ -161,6 +162,7 @@ export default function MasterBillingPage() {
       {tab === "claims" && <Claims f={f} patch={patch} onOpen={setClaimId} />}
       {tab === "denials" && <Denials f={f} onDrill={drill} onOpen={setClaimId} />}
       {tab === "deductible" && <HighDeductible f={f} onDrill={drill} />}
+      {tab === "payroll" && <PayrollTab />}
       {tab === "uploads" && <Uploads onUpload={() => setUpload(true)} />}
 
       <UploadDialog open={upload} onOpenChange={setUpload} />

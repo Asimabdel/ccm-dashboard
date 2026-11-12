@@ -477,6 +477,9 @@ export const auditLogs = mysqlTable("auditLogs", {
     "import_bills",
     "remove_bill_import",
     "link_bill_patient",
+    // Payroll in Master Billing (owner only), added 2026-11-12
+    "view_payroll",
+    "set_pay_rate",
   ]).notNull(),
   entityType: varchar("entityType", { length: 50 }),
   entityId: int("entityId"),
@@ -2387,4 +2390,25 @@ export const billLines = mysqlTable("billLines", {
 }, (t) => ({
   claimIdx: index("billLines_claim_idx").on(t.claimId),
   serviceIdx: index("billLines_service_idx").on(t.serviceDate),
+}));
+
+/**
+ * Payroll (owner only, in Master Billing, 2026-11-12): each person's pay rate from a start date on.
+ * A raise is a new row; the old one stays for earlier months. Pay is estimated from time-clock hours.
+ */
+export const payRates = mysqlTable("payRates", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").references(() => users.id).notNull(),
+  /** hourly | salary */
+  payType: varchar("payType", { length: 10 }).notNull(),
+  /** Hourly: per hour. Salary: per year. Cents. */
+  amountCents: int("amountCents").notNull(),
+  /** Hourly: hours over 40 in a Monday–Sunday week paid at 1.5×. Off for staff not paid overtime. */
+  overtime: boolean("overtime").default(true).notNull(),
+  startDate: varchar("startDate", { length: 10 }).notNull(),
+  note: varchar("note", { length: 255 }),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  userIdx: index("payRates_user_idx").on(t.userId, t.startDate),
 }));
