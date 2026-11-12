@@ -24,9 +24,13 @@ export type PreparedFile =
   | (Base & { kind: "era835"; checks: CheckSummary[]; events: BillEventInput[]; warnings: string[] })
   | (Base & { kind: "sheet"; rows: string[][]; signature: string })
   | (Base & { kind: "pdf" })
-  | { kind: "error"; id: string; name: string; message: string };
+  | { kind: "error"; id: string; name: string; message: string }
+  /** Something left out on purpose (a readable copy, the same file twice): shown as a plain note. */
+  | { kind: "note"; id: string; name: string; message: string };
 
 export const ACCEPT = ".zip,.835,.era,.edi,.x12,.txt,.rmt,.csv,.xlsx,.pdf";
+const COPIES = "__readable_copies__";
+const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 const MAX_BYTES = 25 * 1024 * 1024;
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -68,12 +72,13 @@ async function prepareOne(name: string, bytes: Uint8Array): Promise<PreparedFile
     }
     const files = Object.entries(entries).filter(([n, b]) => b.length && !n.endsWith("/") && !/(^|\/)(__MACOSX|\.DS_Store)/.test(n));
     const inner = (await Promise.all(files.map(([n, b]) => prepareOne(n.split("/").pop() || n, b)))).flat();
-    // Office Ally zips can carry printable PDF copies of the same payments: the 835 files already have them.
+    // An Office Ally ERA download zip holds the .835 plus a readable .txt (and sometimes a PDF) copy of the same payments.
     const has835 = inner.some((f) => f.kind === "era835");
-    const kept = has835 ? inner.filter((f) => f.kind !== "pdf") : inner;
-    const skipped = inner.length - kept.length;
-    if (skipped) kept.push({ kind: "error", id: `f${++seq}`, name: `${skipped} PDF cop${skipped === 1 ? "y" : "ies"} in ${name}`, message: "Left out: the 835 files in the zip have the same payments." });
-    return kept.length ? kept : [{ kind: "error", id, name, message: "The zip is empty." }];
+    const kept = has835 ? inner.filter((f) => !isReadableCopy(f)) : inner;
+    if (!kept.length) return [{ kind: "error", id, name, message: "The zip is empty." }];
+    const dropped = inner.length - kept.length;
+    // Counted together with the other readable copies in prepareFiles (one note, not one per zip).
+    return dropped ? [...kept, { kind: "note", id, name: COPIES, message: String(dropped) }] : kept;
   }
   const sha256 = await sha256Hex(bytes);
   if (isPdf(bytes)) return [{ kind: "pdf", id, name, sha256, size: bytes.length, bytes, contentType: "application/pdf" }];
@@ -100,11 +105,45 @@ async function prepareOne(name: string, bytes: Uint8Array): Promise<PreparedFile
   return [{ kind: "error", id, name, message: "MyPCP can't read this kind of file. Upload Office Ally's 835 / ERA zip, a CSV or Excel report, or a PDF EOB." }];
 }
 
-/** Open everything the owner picked (zips unpacked). */
-export async function prepareFiles(files: File[]): Promise<PreparedFile[]> {
-  const out: PreparedFile[] = [];
-  for (const f of files) out.push(...(await prepareOne(f.name, new Uint8Array(await f.arrayBuffer()))));
-  return out;
+/** A readable copy of a payment file (Office Ally's .txt remit, a PDF print): the .835 has the same payments. */
+function isReadableCopy(f: PreparedFile): boolean {
+  if (f.kind === "pdf") return true;
+  return (f.kind === "sheet" || f.kind === "error") && /\.txt$/i.test(f.name);
+}
+
+/**
+ * Open everything the owner picked (zips unpacked; hundreds of files at once is fine). With payment files in
+ * the pick, Office Ally's readable .txt copies are left out, and so are PDFs named like one of the .835 files;
+ * the same file picked twice counts once. What was left out comes back as one note each.
+ */
+export async function prepareFiles(files: File[], onProgress?: (done: number, total: number) => void): Promise<PreparedFile[]> {
+  let out: PreparedFile[] = [];
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i]!;
+    out.push(...(await prepareOne(f.name, new Uint8Array(await f.arrayBuffer()))));
+    onProgress?.(i + 1, files.length);
+  }
+  const notes: PreparedFile[] = [];
+  let left = sum(out.map((f) => (f.kind === "note" && f.name === COPIES ? Number(f.message) || 0 : 0)));
+  out = out.filter((f) => !(f.kind === "note" && f.name === COPIES));
+  const stem = (n: string) => n.replace(/\.[^.]+$/, "").toLowerCase();
+  const eraStems = new Set(out.filter((f) => f.kind === "era835").map((f) => stem(f.name)));
+  if (eraStems.size) {
+    const copy = (f: PreparedFile) => (f.kind === "pdf" ? eraStems.has(stem(f.name)) : isReadableCopy(f));
+    left += out.filter(copy).length;
+    out = out.filter((f) => !copy(f));
+  }
+  if (left) notes.push({ kind: "note", id: `f${++seq}`, name: `${left} readable cop${left === 1 ? "y" : "ies"} left out`, message: "Office Ally's .txt (or PDF) versions of payment files: the .835 files have the same payments." });
+  const seen = new Set<string>();
+  let twice = 0;
+  out = out.filter((f) => {
+    if (f.kind === "error" || f.kind === "note") return true;
+    if (seen.has(f.sha256)) { twice++; return false; }
+    seen.add(f.sha256);
+    return true;
+  });
+  if (twice) notes.push({ kind: "note", id: `f${++seq}`, name: `${twice} file${twice === 1 ? "" : "s"} picked twice`, message: "The same file was in the pick more than once (for example \"name (1).835\"); it's counted once." });
+  return [...notes, ...out];
 }
 
 export function toBase64(bytes: Uint8Array): string {

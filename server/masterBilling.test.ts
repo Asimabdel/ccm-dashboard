@@ -26,6 +26,27 @@ describe("who can open Master Billing", () => {
   });
 });
 
+describe("picking hundreds of Office Ally files at once", () => {
+  it("leaves out the readable .txt copies and a file picked twice", async () => {
+    const { zipSync, strToU8 } = await import("fflate");
+    const { prepareFiles } = await import("../client/src/lib/masterBillingFiles");
+    const era = wrap(PAYMENT_1);
+    const zip = (n: string, body: string) => new File([zipSync({ [`${n}.835`]: strToU8(body), [`${n}.TXT`]: strToU8("REMITTANCE ADVICE\nPAYER, CHECK\nA, B\n") })], `${n}.zip`);
+    const other = era.replace("EFT12345", "EFT99999");
+    const picked = await prepareFiles([zip("ERA_1", era), zip("ERA_1 (1)", era), zip("ERA_2", other), new File([strToU8("CLAIM, PAID\nX, 1\n")], "ERA_2.txt")]);
+    expect(picked.filter((f) => f.kind === "era835")).toHaveLength(2);
+    const notes = picked.filter((f) => f.kind === "note").map((f) => f.name);
+    expect(notes).toEqual(["4 readable copies left out", "1 file picked twice"]);
+    expect(picked.some((f) => f.kind === "sheet" || f.kind === "error")).toBe(false);
+  });
+
+  it("keeps a real claim report picked together with payment files", async () => {
+    const { prepareFiles } = await import("../client/src/lib/masterBillingFiles");
+    const picked = await prepareFiles([new File([wrap(PAYMENT_1)], "a.835"), new File(["Claim #,Patient,DOS,Billed\nA1,Ann Lee,10/05/2026,75\n"], "report.csv")]);
+    expect(picked.map((f) => f.kind).sort()).toEqual(["era835", "sheet"]);
+  });
+});
+
 describe("PDF EOBs read by the AI", () => {
   it("turns the reading into claims and flags numbers that don't add up", () => {
     const text = "Here you go: " + JSON.stringify({ payments: [{ payer: "MADE UP PLAN", checkNumber: "C55", checkDate: "2026-11-01", checkAmount: 80, claims: [

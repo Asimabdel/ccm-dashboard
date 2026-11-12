@@ -19,6 +19,8 @@ type FileState =
   | { s: "saved"; claims: number; matched: number }
   | { s: "failed"; message: string };
 
+/** A file that is uploaded (not a note or an error). */
+type RealFile = Exclude<PreparedFile, { kind: "error" } | { kind: "note" }>;
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 const day = (d: string | null | undefined) => (d ? new Date(`${d}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—");
 
@@ -28,9 +30,11 @@ export function UploadDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   const inputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<PreparedFile[]>([]);
   const [state, setState] = useState<Record<string, FileState>>({});
-  const [opening, setOpening] = useState(false);
+  const [opening, setOpening] = useState<string | null>(null);
   const [drag, setDrag] = useState(false);
-  const busy = Object.values(state).some((x) => x.s === "saving");
+  const [bulk, setBulk] = useState<{ done: number; total: number; failed: number } | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const busy = !!bulk || Object.values(state).some((x) => x.s === "saving");
 
   const start = trpc.masterBilling.startImport.useMutation();
   const uploadLocal = trpc.masterBilling.uploadLocal.useMutation();
@@ -40,35 +44,42 @@ export function UploadDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   const saveMap = trpc.masterBilling.saveSheetMapping.useMutation();
 
   useEffect(() => {
-    if (!open) { setFiles([]); setState({}); }
+    if (!open) { setFiles([]); setState({}); setBulk(null); setShowAll(false); }
   }, [open]);
 
   const set = (id: string, s: FileState) => setState((m) => ({ ...m, [id]: s }));
 
   async function pick(list: File[]) {
     if (!list.length) return;
-    setOpening(true);
+    setOpening(`Opening ${list.length.toLocaleString()} file${list.length === 1 ? "" : "s"}…`);
     try {
-      const prepared = await prepareFiles(list);
-      const hashes = prepared.flatMap((f) => (f.kind === "error" ? [] : [f.sha256]));
-      const known = hashes.length ? await utils.masterBilling.checkFiles.fetch({ hashes }) : [];
+      const prepared = await prepareFiles(list, (done, total) => { if (total > 20 && done % 10 === 0) setOpening(`Opening files ${done.toLocaleString()} of ${total.toLocaleString()}…`); });
+      // Files already in this window aren't added again.
+      const have = new Set(files.flatMap((f) => (f.kind === "error" || f.kind === "note" ? [] : [f.sha256])));
+      const fresh = prepared.filter((f) => f.kind === "error" || f.kind === "note" || !have.has(f.sha256));
+      const hashes = fresh.flatMap((f) => (f.kind === "error" || f.kind === "note" ? [] : [f.sha256]));
+      const known: Awaited<ReturnType<typeof utils.masterBilling.checkFiles.fetch>> = [];
+      for (let i = 0; i < hashes.length; i += 200) {
+        setOpening(`Checking which files are already uploaded…`);
+        known.push(...(await utils.masterBilling.checkFiles.fetch({ hashes: hashes.slice(i, i + 200) })));
+      }
       const next: Record<string, FileState> = {};
-      for (const f of prepared) {
-        if (f.kind === "error") continue;
+      for (const f of fresh) {
+        if (f.kind === "error" || f.kind === "note") continue;
         const k = known.find((x) => x.sha256 === f.sha256);
         next[f.id] = k ? { s: "duplicate", when: `${k.fileName}, ${new Date(k.createdAt).toLocaleDateString("en-US")}` } : { s: "ready" };
       }
-      setFiles((old) => [...old, ...prepared]);
+      setFiles((old) => [...old, ...fresh]);
       setState((m) => ({ ...m, ...next }));
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
-      setOpening(false);
+      setOpening(null);
     }
   }
 
   /** Start the upload and send the original file to private storage. */
-  async function begin(f: Exclude<PreparedFile, { kind: "error" }>, checks: Parameters<typeof start.mutateAsync>[0]["checks"]) {
+  async function begin(f: RealFile, checks: Parameters<typeof start.mutateAsync>[0]["checks"]) {
     const r = await start.mutateAsync({ kind: f.kind, fileName: f.name, sha256: f.sha256, size: f.size, contentType: f.contentType, checks });
     if (r.upload.url) {
       const ok = await fetch(r.upload.url, { method: "PUT", body: f.bytes as BodyInit, headers: { "Content-Type": f.contentType } }).then((x) => x.ok, () => false);
@@ -98,25 +109,49 @@ export function UploadDialog({ open, onOpenChange }: { open: boolean; onOpenChan
     }
   }
 
-  async function saveFile(f: PreparedFile, events: BillEventInput[], extra?: () => Promise<void>) {
-    if (f.kind === "error") return;
-    if (!events.length) { set(f.id, { s: "failed", message: "No claims to save." }); return; }
+  /** Save one file; true when it worked. `quiet` = part of Save all (the page refreshes once at the end). */
+  async function saveFile(f: PreparedFile, events: BillEventInput[], extra?: () => Promise<void>, quiet = false): Promise<boolean> {
+    if (f.kind === "error" || f.kind === "note") return false;
+    if (!events.length) { set(f.id, { s: "failed", message: "No claims to save." }); return false; }
     set(f.id, { s: "saving", step: "Uploading the file…" });
     try {
       const importId = await begin(f, f.kind === "era835" ? f.checks : null);
       const r = await store(f.id, importId, events);
       await extra?.();
       set(f.id, { s: "saved", claims: r.claims, matched: r.matched });
-      void utils.masterBilling.invalidate();
+      if (!quiet) void utils.masterBilling.invalidate();
+      return true;
     } catch (e) {
-      set(f.id, { s: "failed", message: (e as Error).message });
+      const message = (e as Error).message;
+      // Saved by an earlier, interrupted Save all: nothing to do.
+      if (/already uploaded/i.test(message)) { set(f.id, { s: "duplicate", when: "earlier" }); return true; }
+      set(f.id, { s: "failed", message });
+      return false;
     }
   }
 
-  const ready835 = files.filter((f) => f.kind === "era835" && state[f.id]?.s === "ready");
+  const era = files.filter((f): f is Extract<PreparedFile, { kind: "era835" }> => f.kind === "era835");
+  const ready835 = era.filter((f) => state[f.id]?.s === "ready" || state[f.id]?.s === "failed");
+  /** Save every ready payment file, one after another (the same claim in two files is never worked on at once). */
   async function saveAll835() {
-    for (const f of ready835) if (f.kind === "era835") await saveFile(f, f.events);
+    const list = ready835.slice();
+    let failed = 0;
+    setBulk({ done: 0, total: list.length, failed: 0 });
+    for (let i = 0; i < list.length; i++) {
+      if (!(await saveFile(list[i]!, list[i]!.events, undefined, true))) failed++;
+      setBulk({ done: i + 1, total: list.length, failed });
+    }
+    setBulk(null);
+    void utils.masterBilling.invalidate();
+    if (failed) toast.error(`${failed} file${failed === 1 ? "" : "s"} didn't save. Press Save all again to retry them.`);
+    else toast.success(`Saved ${list.length.toLocaleString()} payment file${list.length === 1 ? "" : "s"}.`);
   }
+  // Many payment files: one summary instead of a box per file (problems are still listed).
+  const many = era.length > 6;
+  const needsLook = (f: PreparedFile) => f.kind !== "era835" || f.warnings.length > 0 || f.checks.some((c) => !c.balanced) || state[f.id]?.s === "failed";
+  const shown = many && !showAll ? files.filter(needsLook) : files;
+  const st = (s: FileState["s"]) => era.filter((f) => state[f.id]?.s === s).length;
+  const readyEvents = ready835.flatMap((f) => f.events);
 
   const remove = (id: string) => { setFiles((x) => x.filter((f) => f.id !== id)); setState((m) => { const n = { ...m }; delete n[id]; return n; }); };
 
@@ -138,22 +173,44 @@ export function UploadDialog({ open, onOpenChange }: { open: boolean; onOpenChan
         >
           <FileUp className="text-slate-400" size={26} />
           <p className="text-sm text-slate-600 dark:text-slate-300">Drop files here, or</p>
-          <Btn variant="secondary" size="sm" onClick={() => inputRef.current?.click()} disabled={opening}>
+          <Btn variant="secondary" size="sm" onClick={() => inputRef.current?.click()} disabled={!!opening || busy}>
             {opening ? <Loader2 size={14} className="animate-spin" /> : null} Choose files
           </Btn>
           <input ref={inputRef} type="file" multiple accept={ACCEPT} className="hidden" onChange={(e) => { void pick(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
-          <p className="text-xs text-slate-400">.zip, .835 / .txt (ERA), .csv, .xlsx, .pdf · up to 25 MB each</p>
+          <p className="text-xs text-slate-400">{opening ?? "Pick as many files as you like at once (Ctrl+A in the folder): .zip, .835 / ERA, .csv, .xlsx, .pdf · up to 25 MB each"}</p>
         </div>
 
-        {ready835.length > 1 && (
-          <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-sm dark:bg-slate-800/60">
-            <span>{ready835.length} payment files ready</span>
-            <Btn size="sm" onClick={() => void saveAll835()} disabled={busy}>Save all {ready835.length}</Btn>
+        {(ready835.length > 1 || bulk || many) && (
+          <div className="rounded-lg bg-slate-50 px-3 py-3 text-sm dark:bg-slate-800/60">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="font-medium text-slate-800 dark:text-slate-100">{era.length.toLocaleString()} payment file{era.length === 1 ? "" : "s"}</p>
+                <p className="text-xs text-slate-500">
+                  {[ready835.length ? `${ready835.length.toLocaleString()} to save (${readyEvents.length.toLocaleString()} claims, insurance paid ${money(sum(readyEvents.map((e) => e.paidCents)))})` : null,
+                    st("saved") ? `${st("saved").toLocaleString()} saved` : null,
+                    st("duplicate") ? `${st("duplicate").toLocaleString()} already uploaded` : null,
+                    era.filter((f) => f.checks.some((c) => !c.balanced)).length ? `${era.filter((f) => f.checks.some((c) => !c.balanced)).length} don't add up to their check (listed below)` : null,
+                  ].filter(Boolean).join(" · ")}
+                </p>
+              </div>
+              {ready835.length > 0 && !bulk && <Btn size="sm" onClick={() => void saveAll835()} disabled={busy}>Save all {ready835.length.toLocaleString()}</Btn>}
+            </div>
+            {bulk && (
+              <div className="mt-2">
+                <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700" role="progressbar" aria-valuemin={0} aria-valuemax={bulk.total} aria-valuenow={bulk.done}>
+                  <div className="h-full bg-blue-600 transition-all dark:bg-blue-400" style={{ width: `${(bulk.done / Math.max(1, bulk.total)) * 100}%` }} />
+                </div>
+                <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                  Saving file {Math.min(bulk.done + 1, bulk.total).toLocaleString()} of {bulk.total.toLocaleString()}{bulk.failed ? ` · ${bulk.failed} didn't save` : ""}. Keep this window open. If it stops, pick the same files again: the ones already saved are skipped.
+                </p>
+              </div>
+            )}
+            {many && <button type="button" className="mt-2 text-xs font-medium text-blue-700 hover:underline dark:text-blue-300" onClick={() => setShowAll((x) => !x)}>{showAll ? "Show only files that need a look" : `Show every file (${files.length.toLocaleString()})`}</button>}
           </div>
         )}
 
         <div className="space-y-3">
-          {files.map((f) => (
+          {shown.map((f) => (
             <FileCard key={f.id} f={f} st={state[f.id]} busy={busy} onRemove={() => remove(f.id)}
               onSave={(events, after) => saveFile(f, events, after)}
               begin={begin} cancel={(importId) => cancel.mutateAsync({ importId })}
@@ -170,8 +227,8 @@ interface CardProps {
   st: FileState | undefined;
   busy: boolean;
   onRemove: () => void;
-  onSave: (events: BillEventInput[], after?: () => Promise<void>) => Promise<void>;
-  begin: (f: Exclude<PreparedFile, { kind: "error" }>, checks: null) => Promise<number>;
+  onSave: (events: BillEventInput[], after?: () => Promise<void>) => Promise<unknown>;
+  begin: (f: RealFile, checks: null) => Promise<number>;
   cancel: (importId: number) => Promise<unknown>;
   store: (id: string, importId: number, events: BillEventInput[]) => Promise<{ claims: number; matched: number }>;
   setState: (s: FileState) => void;
@@ -201,6 +258,9 @@ function FileCard(p: CardProps) {
   );
   const box = "rounded-xl border border-slate-200 p-3 dark:border-slate-700";
 
+  if (f.kind === "note") {
+    return <div className={box}><p className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200"><CheckCircle2 size={15} className="text-slate-400" /> {f.name}</p><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{f.message}</p></div>;
+  }
   if (f.kind === "error") {
     return <div className={cn(box, "bg-amber-50/60 dark:bg-amber-950/20")}><p className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200"><AlertTriangle size={15} className="text-amber-600" /> {f.name}</p><p className="mt-1 text-xs text-slate-600 dark:text-slate-300">{f.message}</p></div>;
   }
