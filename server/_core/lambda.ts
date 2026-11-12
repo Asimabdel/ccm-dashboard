@@ -389,6 +389,11 @@ export const handler = async (event: any, context: any) => {
     const { masterBillingCounts } = await import("../masterBillingDb");
     return masterBillingCounts();
   }
+  // Master Billing: match saved claims to patients again after matching improves (IAM-only; counts only; dry run unless apply).
+  if (event && event.__job === "master-billing-rematch" && !event.requestContext && !event.version) {
+    const { rematchClaims } = await import("../masterBillingDb");
+    return rematchClaims({ apply: event.apply === true, deadline: Date.now() + 24_000 });
+  }
   // Who approves program suggestions, by name (IAM-only; dry run unless apply).
   if (event && event.__job === "program-approvers" && !event.requestContext && !event.version) {
     const { programApproversJob } = await import("../programsDb");

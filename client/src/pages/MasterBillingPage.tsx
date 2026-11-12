@@ -32,6 +32,7 @@ interface Filters {
   reason?: string | null;
   q?: string | null;
   needsPatient?: boolean | null;
+  closeMatch?: boolean | null;
 }
 type Tab = "summary" | "breakdown" | "claims" | "denials" | "uploads";
 const TABS: { key: Tab; label: string }[] = [
@@ -90,7 +91,7 @@ export default function MasterBillingPage() {
   const active = [f.status?.length ? `Status: ${f.status.map((s) => BILL_STATUS_LABELS[s]).join(", ")}` : null, f.payer ? `Insurance: ${f.payer}` : null, f.payerType ? `Type: ${f.payerType}` : null,
     f.providerId ? `Provider: ${options.data?.providers.find((p) => p.id === f.providerId)?.name ?? "#" + f.providerId}` : null,
     f.clinicId ? `Clinic: ${options.data?.clinics.find((c) => c.id === f.clinicId)?.name ?? "#" + f.clinicId}` : null,
-    f.cpt ? `CPT ${f.cpt}` : null, f.reason ? `Reason ${f.reason}` : null, f.q ? `"${f.q}"` : null, f.needsPatient ? "Needs a patient" : null].filter(Boolean) as string[];
+    f.cpt ? `CPT ${f.cpt}` : null, f.reason ? `Reason ${f.reason}` : null, f.q ? `"${f.q}"` : null, f.needsPatient ? "Needs a patient" : null, f.closeMatch ? "Similar-name matches" : null].filter(Boolean) as string[];
 
   return (
     <CCMDashboardLayout title="Master Billing" pageTitle={false}>
@@ -147,7 +148,7 @@ export default function MasterBillingPage() {
           {active.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 text-xs">
               {active.map((a) => <span key={a} className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700 dark:bg-slate-800 dark:text-slate-200">{a}</span>)}
-              <button type="button" className="inline-flex items-center gap-1 text-slate-500 hover:underline" onClick={() => patch({ status: null, payer: null, payerType: null, providerId: null, clinicId: null, cpt: null, reason: null, q: null, needsPatient: null })}><X size={12} /> Clear filters</button>
+              <button type="button" className="inline-flex items-center gap-1 text-slate-500 hover:underline" onClick={() => patch({ status: null, payer: null, payerType: null, providerId: null, clinicId: null, cpt: null, reason: null, q: null, needsPatient: null, closeMatch: null })}><X size={12} /> Clear filters</button>
             </div>
           )}
         </div>
@@ -393,7 +394,8 @@ function Claims({ f, patch, onOpen, title = "Claims", lockStatus }: { f: Filters
               <input className={cn(inputCls, "h-8 w-56 pl-8 text-sm")} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Patient, claim # or member ID" aria-label="Search claims" />
             </form>
           )}
-          {patch && <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300"><input type="checkbox" checked={!!f.needsPatient} onChange={(e) => patch({ needsPatient: e.target.checked || null })} /> Needs a patient</label>}
+          {patch && <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300"><input type="checkbox" checked={!!f.needsPatient} onChange={(e) => patch({ needsPatient: e.target.checked || null, closeMatch: null })} /> Needs a patient</label>}
+          {patch && <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300" title="Matched by a name the insurance spelled differently: worth a quick check"><input type="checkbox" checked={!!f.closeMatch} onChange={(e) => patch({ closeMatch: e.target.checked || null, needsPatient: null })} /> Similar-name matches</label>}
           <SelectBox value={sort} onChange={(v) => setSort(v as typeof sort)} ariaLabel="Sort">
             <option value="date">Newest first</option><option value="billed">Most billed</option><option value="paid">Most paid</option><option value="denied">Most denied</option>
           </SelectBox>
@@ -416,7 +418,7 @@ function Claims({ f, patch, onOpen, title = "Claims", lockStatus }: { f: Filters
                 {q.data.rows.map((r) => (
                   <tr key={r.id} onClick={() => onOpen(r.id)} className="cursor-pointer border-t border-slate-100 hover:bg-slate-50 dark:border-slate-700/60 dark:hover:bg-slate-800/40">
                     <td className="whitespace-nowrap px-3 py-2">{day(f.basis === "paid" ? r.lastPaidDate : r.firstServiceDate)}</td>
-                    <td className="px-3 py-2"><span className="font-medium text-slate-800 dark:text-slate-100">{niceName(r.patientName) || "—"}</span>{!r.subjectKey && <span className="ml-1.5 rounded bg-amber-100 px-1 text-[11px] text-amber-800 dark:bg-amber-950/50 dark:text-amber-200">no match</span>}</td>
+                    <td className="px-3 py-2"><span className="font-medium text-slate-800 dark:text-slate-100">{niceName(r.patientName) || "—"}</span>{!r.subjectKey && <span className="ml-1.5 rounded bg-amber-100 px-1 text-[11px] text-amber-800 dark:bg-amber-950/50 dark:text-amber-200">no match</span>}{r.matchSource === "close" && <span className="ml-1.5 rounded bg-sky-100 px-1 text-[11px] text-sky-800 dark:bg-sky-950/50 dark:text-sky-200" title="Matched by a name the insurance spelled differently">similar name</span>}</td>
                     <td className="max-w-[200px] truncate px-3 py-2" title={r.payerName ?? ""}>{r.payerName ?? "—"}</td>
                     <td className="max-w-[160px] truncate px-3 py-2">{r.providerLabel ?? "—"}</td>
                     <td className="px-3 py-2">{r.codes.join(", ") || "—"}</td>

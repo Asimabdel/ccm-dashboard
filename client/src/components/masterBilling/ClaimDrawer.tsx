@@ -13,7 +13,8 @@ import { money } from "@shared/payments";
 import { StatusBadge } from "./StatusBadge";
 
 const day = (d: string | null | undefined) => (d ? new Date(`${d}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—");
-const MATCH: Record<string, string> = { member: "matched by member ID", visit: "matched to that day's visit", name: "matched by name", manual: "linked by you" };
+const MATCH: Record<string, string> = { member: "matched by member ID", visit: "matched to that day's visit", name: "matched by name", close: "matched by a similar name", manual: "linked by you" };
+const dob = (d: string | null | undefined) => (d ? `born ${new Date(`${d}T12:00:00`).toLocaleDateString("en-US")}` : "no birthday on file");
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -61,15 +62,44 @@ export function ClaimDrawer({ id, onClose }: { id: number | null; onClose: () =>
               <dl>
                 <Row label="Patient">
                   {c.subjectKey ? (
-                    <span className="flex flex-wrap items-center gap-2">
-                      <Link href={`/patients/${encodeURIComponent(c.subjectKey)}`} className="inline-flex items-center gap-1 text-blue-700 hover:underline dark:text-blue-300">{niceName(c.patientName) || "Open patient"} <ExternalLink size={12} /></Link>
-                      <span className="text-xs text-slate-400">{MATCH[c.matchSource ?? ""] ?? ""}</span>
-                      <button type="button" className="text-xs text-slate-500 hover:underline" onClick={() => setPicking(true)}>Change</button>
-                      {c.matchSource === "manual" && <button type="button" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:underline" onClick={() => link.mutate({ claimId: c.id, subjectKey: null })}><Unlink size={11} /> Undo my link</button>}
-                    </span>
+                    <>
+                      <span className="flex flex-wrap items-center gap-2">
+                        <Link href={`/patients/${encodeURIComponent(c.subjectKey)}`} className="inline-flex items-center gap-1 text-blue-700 hover:underline dark:text-blue-300">{niceName(q.data.patient.name ?? c.patientName) || "Open patient"} <ExternalLink size={12} /></Link>
+                        <span className="text-xs text-slate-400">{MATCH[c.matchSource ?? ""] ?? ""}</span>
+                        <button type="button" className="text-xs text-slate-500 hover:underline" onClick={() => setPicking(true)}>Change</button>
+                        {c.matchSource === "close" && <button type="button" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:underline" disabled={link.isPending} onClick={() => link.mutate({ claimId: c.id, subjectKey: null, none: true })}><Unlink size={11} /> Not this patient</button>}
+                        {c.matchSource === "manual" && <button type="button" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:underline" disabled={link.isPending} onClick={() => link.mutate({ claimId: c.id, subjectKey: null })}><Unlink size={11} /> Undo my link</button>}
+                      </span>
+                      {q.data.patient.name && niceName(q.data.patient.name).toLowerCase() !== niceName(c.patientName).toLowerCase() && (
+                        <span className="mt-0.5 block text-xs text-slate-500">The bill says {niceName(c.patientName) || "no name"}{q.data.patient.why ? ` (${q.data.patient.why})` : ""}.</span>
+                      )}
+                    </>
                   ) : (
-                    <span className="flex flex-wrap items-center gap-2">{niceName(c.patientName) || "—"} <span className="text-xs text-amber-700 dark:text-amber-300">not matched to a patient</span>
-                      <Btn size="sm" variant="secondary" onClick={() => setPicking(true)}><UserCheck size={13} /> Pick the patient</Btn></span>
+                    <>
+                      <span className="flex flex-wrap items-center gap-2">{niceName(c.patientName) || "—"}
+                        {c.matchSource === "manual"
+                          ? <><span className="text-xs text-slate-500">you marked this patient as not in MyPCP</span>
+                            <button type="button" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:underline" disabled={link.isPending} onClick={() => link.mutate({ claimId: c.id, subjectKey: null })}><Unlink size={11} /> Undo</button></>
+                          : <span className="text-xs text-amber-700 dark:text-amber-300">not matched to a patient</span>}
+                        <Btn size="sm" variant="secondary" onClick={() => setPicking(true)}><UserCheck size={13} /> Pick the patient</Btn></span>
+                      {q.data.patient.suggestions.length > 0 && (
+                        <div className="mt-2 rounded-lg border border-slate-200 dark:border-slate-700">
+                          <p className="border-b border-slate-100 px-3 py-1.5 text-xs font-medium text-slate-500 dark:border-slate-800">Possible matches: check the name and birthday, then pick one</p>
+                          <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+                            {q.data.patient.suggestions.map((s) => (
+                              <li key={s.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
+                                <div className="min-w-0 flex-1">
+                                  <Link href={`/patients/${encodeURIComponent(s.key)}`} className="text-sm text-blue-700 hover:underline dark:text-blue-300">{niceName(s.name)}</Link>
+                                  <span className="ml-2 text-xs text-slate-500">{dob(s.dob)}</span>
+                                  <span className="block text-xs text-slate-500">{[s.why, s.support].filter(Boolean).join(" · ")}</span>
+                                </div>
+                                <Btn size="sm" variant="secondary" disabled={link.isPending} onClick={() => link.mutate({ claimId: c.id, subjectKey: s.key })}>This one</Btn>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </>
                   )}
                   {picking && <div className="mt-2 max-w-sm"><PatientSearchBox autoFocus onPick={(p) => link.mutate({ claimId: c.id, subjectKey: p.key })} /></div>}
                 </Row>

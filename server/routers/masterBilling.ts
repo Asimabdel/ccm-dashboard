@@ -57,6 +57,7 @@ const filters = z.object({
   payer: z.string().max(160).nullish(), payerType: z.string().max(40).nullish(),
   providerId: z.number().int().positive().nullish(), clinicId: z.number().int().positive().nullish(),
   cpt: z.string().max(16).nullish(), reason: z.string().max(20).nullish(), q: z.string().max(80).nullish(), needsPatient: z.boolean().nullish(),
+  closeMatch: z.boolean().nullish(),
 });
 const importId = z.number().int().positive();
 const subjectKey = z.string().regex(/^(p:\d+|s:.{1,110}|f:.{1,120})$/);
@@ -125,6 +126,7 @@ export const masterBillingRouter = router({
     await owner(ctx);
     return mb.filterOptions();
   }),
-  linkPatient: protectedProcedure.input(z.object({ claimId: z.number().int().positive(), subjectKey: subjectKey.nullable() }))
-    .mutation(async ({ ctx, input }) => run(async () => mb.linkPatient(await owner(ctx), input.claimId, input.subjectKey))),
+  /** Pick the patient (null = match again; `none` = the patient isn't in MyPCP, leave it unmatched). */
+  linkPatient: protectedProcedure.input(z.object({ claimId: z.number().int().positive(), subjectKey: subjectKey.nullable(), none: z.boolean().optional() }))
+    .mutation(async ({ ctx, input }) => run(async () => mb.linkPatient(await owner(ctx), input.claimId, input.subjectKey, input.none === true))),
 });

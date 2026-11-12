@@ -7,7 +7,7 @@
 import { createHash } from "node:crypto";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql, type SQL } from "drizzle-orm";
 import { getDb } from "./db";
-import { appSettings, appointments, billClaimEvents, billClaims, billImports, billLines, clinics, coverageOnFile, providers, users } from "../drizzle/schema";
+import { appSettings, appointments, billClaimEvents, billClaims, billImports, billLines, clinics, coverageOnFile, fhirPatients, fhirResources, patients, providers, users } from "../drizzle/schema";
 import {
   altKeyOf, claimRefOf, mergeClaim, type BillAdjustment, type BillEventInput, type BillLineInput, type BillSource, type BreakdownDim, type DateBasis,
 } from "../shared/masterBilling";
@@ -15,7 +15,9 @@ import { BILL_STATUS_LABELS, describeAdjustment, insuranceType, type BillStatus 
 import { nameKey } from "../shared/workspace";
 import { matchProviderId } from "../shared/csvImport";
 import { addDays } from "../shared/payments";
-import { audit, buildNameDobIndex, buildNameIndex, subjectKeyFor, WorkspaceError, type WorkspaceActor } from "./workspaceDb";
+import { localDateStr } from "../shared/workforce";
+import { audit, buildNameDobIndex, buildNameIndex, loadScheduleSubjects, subjectKeyFor, WorkspaceError, type WorkspaceActor } from "./workspaceDb";
+import { addMember, buildPeopleIndex, compareNames, findPeople, personByMember, pickPerson, type PeopleIndex, type PersonInput } from "./billPatientMatch";
 import { getBytes, onS3, putBytes, readTarget, uploadTarget } from "./docStore";
 
 async function db() {
@@ -235,13 +237,21 @@ function toInput(r: EventRow): BillEventInput & { id: number } {
   };
 }
 
+type VisitHit = { key: string; patientId: number | null; clinicId: number | null; providerId: number | null };
+
 /** Everything matching needs, loaded once per batch. */
 interface MatchContext {
+  /** The owner's own picks, by member ID (key "" = "no patient in MyPCP"). */
   memberLinks: Record<string, { key: string }>;
-  coverage: Map<string, string>;
+  /** Member ID (every way it's written) → the people it's on: Practice Fusion's insurance list and insurance checks. */
+  members: Map<string, Set<string>>;
   nameDob: Map<string, { key: string; patientId: number | null }>;
   names: Map<string, { key: string; patientId: number | null }[]>;
-  visits: Map<string, { key: string; patientId: number | null; clinicId: number | null; providerId: number | null }[]>;
+  /** Everyone, for names that aren't spelled exactly alike. */
+  index: PeopleIndex;
+  visits: Map<string, VisitHit[]>;
+  /** "key|date" → that person's visit that day. */
+  visitByKeyDate: Map<string, VisitHit>;
   providers: { id: number; name: string; aliases: string[] | null; npi: string | null; clinicId: number | null }[];
 }
 
@@ -252,10 +262,14 @@ const looseName = (n: string) => {
 };
 
 // The patient indexes take a moment to build; an upload's batches reuse them for a minute.
-let peopleCache: { at: number; nameDob: MatchContext["nameDob"]; names: MatchContext["names"] } | null = null;
+let peopleCache: { at: number; nameDob: MatchContext["nameDob"]; names: MatchContext["names"]; index: PeopleIndex; members: MatchContext["members"] } | null = null;
+
+const ymdOf = (dt: Date | null | undefined) => (dt ? dt.toISOString().slice(0, 10) : null);
+const MISSED = /cancel|no.?show/i;
 
 async function people() {
   if (peopleCache && Date.now() - peopleCache.at < 60_000) return peopleCache;
+  const d = await db();
   const nameDob = new Map<string, { key: string; patientId: number | null }>();
   for (const [k, v] of Array.from((await buildNameDobIndex()).entries())) nameDob.set(k, { key: v.key, patientId: v.patientId });
   const names = new Map<string, { key: string; patientId: number | null }[]>();
@@ -264,19 +278,40 @@ async function people() {
     const loose = looseName(k);
     if (loose !== k) names.set(`~${loose}`, [...(names.get(`~${loose}`) ?? []), ...list]);
   }
-  peopleCache = { at: Date.now(), nameDob, names };
+
+  // Everyone (roster, schedule, Practice Fusion), with their providers and visit days, for close names.
+  const list: PersonInput[] = [];
+  for (const p of await d.select({ id: patients.id, name: patients.name, dob: patients.dateOfBirth, providerId: patients.providerId }).from(patients)) {
+    if (/\(merged into #\d+\)/.test(p.name)) continue; // retired duplicate copies
+    list.push({ key: `p:${p.id}`, patientId: p.id, name: p.name, dob: ymdOf(p.dob), providerIds: p.providerId ? [p.providerId] : [], visitDays: [] });
+  }
+  for (const s of Array.from((await loadScheduleSubjects()).values())) {
+    const seen = s.visits.filter((v) => !MISSED.test(v.status ?? ""));
+    const provIds = seen.map((v) => /^id:(\d+)$/.exec(v.providerKey ?? "")?.[1]).filter((x): x is string => !!x).map(Number);
+    list.push({ key: s.key, patientId: s.patientId, name: s.name, dob: ymdOf(s.dob), providerIds: Array.from(new Set([...(s.providerId ? [s.providerId] : []), ...provIds])), visitDays: seen.map((v) => localDateStr(v.startsAt)) });
+  }
+  for (const f of await d.select({ key: fhirPatients.subjectKey, patientId: fhirPatients.patientId, name: fhirPatients.name, dob: fhirPatients.dob }).from(fhirPatients)) {
+    if (f.name) list.push({ key: f.key, patientId: f.patientId, name: f.name, dob: f.dob, providerIds: [], visitDays: [] });
+  }
+  const index = buildPeopleIndex(list);
+
+  // Member IDs: Practice Fusion's insurance list ("Member ID …") and insurance checks on file.
+  const members = new Map<string, Set<string>>();
+  for (const c of await d.select({ key: fhirResources.subjectKey, value: fhirResources.value }).from(fhirResources).where(eq(fhirResources.resourceType, "Coverage"))) {
+    const m = /Member ID ([^\s·]+)/.exec(c.value ?? "");
+    if (m) addMember(members, m[1], c.key);
+  }
+  for (const c of await d.select({ memberId: coverageOnFile.memberId, key: coverageOnFile.subjectKey }).from(coverageOnFile)) addMember(members, c.memberId, c.key);
+
+  peopleCache = { at: Date.now(), nameDob, names, index, members };
   return peopleCache;
 }
 
 async function matchContext(d: Db, dates: string[]): Promise<MatchContext> {
   const [links] = await d.select({ value: appSettings.value }).from(appSettings).where(eq(appSettings.key, MEMBER_LINKS_KEY)).limit(1);
-  const coverage = new Map<string, string>();
-  for (const c of await d.select({ memberId: coverageOnFile.memberId, key: coverageOnFile.subjectKey }).from(coverageOnFile)) {
-    const m = upperAlnum(c.memberId);
-    if (m) coverage.set(m, coverage.has(m) && coverage.get(m) !== c.key ? "" : c.key); // "" = two people share it: don't use
-  }
-  const { nameDob, names } = await people();
-  const visits = new Map<string, { key: string; patientId: number | null; clinicId: number | null; providerId: number | null }[]>();
+  const { nameDob, names, index, members } = await people();
+  const visits = new Map<string, VisitHit[]>();
+  const visitByKeyDate = new Map<string, VisitHit>();
   const sorted = dates.filter(Boolean).sort();
   if (sorted.length) {
     const rows = await d.select({ date: appointments.date, patientId: appointments.patientId, patientName: appointments.patientName, dob: appointments.dateOfBirth, clinicId: appointments.clinicId, providerId: appointments.providerId, status: appointments.status })
@@ -284,21 +319,45 @@ async function matchContext(d: Db, dates: string[]): Promise<MatchContext> {
     for (const r of rows) {
       const v = { key: subjectKeyFor(r.patientId, r.patientName, r.dob), patientId: r.patientId, clinicId: r.clinicId, providerId: r.providerId };
       for (const k of [`${r.date}|${nameKey(r.patientName)}`, `${r.date}|~${looseName(r.patientName)}`]) visits.set(k, [...(visits.get(k) ?? []), v]);
+      visitByKeyDate.set(`${v.key}|${r.date}`, v);
     }
   }
   const provs = (await d.select({ id: providers.id, name: providers.name, aliases: providers.aliases, npi: providers.npi, clinicId: providers.clinicId }).from(providers))
     .map((p) => ({ ...p, aliases: (p.aliases as string[] | null) ?? null }));
-  return { memberLinks: (links?.value as Record<string, { key: string }> | undefined) ?? {}, coverage, nameDob, names, visits, providers: provs };
+  return { memberLinks: (links?.value as Record<string, { key: string }> | undefined) ?? {}, members, nameDob, names, index, visits, visitByKeyDate, providers: provs };
 }
 
 interface Match { subjectKey: string | null; patientId: number | null; matchSource: string | null; providerId: number | null; clinicId: number | null; learnNpi: { providerId: number; npi: string } | null }
 
-const patientIdOf = (key: string | null) => (key && /^p:\d+$/.test(key) ? Number(key.slice(2)) : null);
+/** What matching reads from a claim (a merged claim, or a saved one when matching again). */
+interface MatchInput {
+  memberId: string | null; patientName: string | null; patientDob: string | null; firstServiceDate: string | null;
+  lines: { serviceDate: string | null }[]; providerNpi: string | null; providerName: string | null;
+}
 
-function matchClaim(ctx: MatchContext, m: ReturnType<typeof mergeClaim>): Match {
+const patientIdOf = (key: string | null) => (key && /^p:\d+$/.test(key) ? Number(key.slice(2)) : null);
+const claimDates = (m: MatchInput) => Array.from(new Set([m.firstServiceDate, ...m.lines.map((l) => l.serviceDate)].filter((x): x is string => !!x)));
+
+/**
+ * The patient, provider and clinic of a claim. Patient, in order: the owner's own pick for that member
+ * ID; the member ID on Practice Fusion's insurance list (first name must fit); name + birthday; that
+ * day's visit; a name only one person has; then a name spelled differently (billPatientMatch.ts).
+ */
+function matchClaim(ctx: MatchContext, m: MatchInput): Match {
   const member = upperAlnum(m.memberId);
   const name = m.patientName ?? "";
-  const dates = Array.from(new Set([m.firstServiceDate, ...m.lines.map((l) => l.serviceDate)].filter((x): x is string => !!x)));
+  const dates = claimDates(m);
+
+  // Provider first (NPI, else the name on the file): it also helps confirm a name spelled differently.
+  const npi = (m.providerNpi ?? "").trim();
+  let provider = npi ? ctx.providers.find((p) => p.npi === npi) ?? null : null;
+  let learnNpi: Match["learnNpi"] = null;
+  if (!provider && m.providerName) {
+    const id = matchProviderId(m.providerName, ctx.providers);
+    provider = id ? ctx.providers.find((p) => p.id === id) ?? null : null;
+    if (provider && npi && !provider.npi && /^\d{10}$/.test(npi)) learnNpi = { providerId: provider.id, npi };
+  }
+
   const visitHits = (k: (date: string) => string) => {
     const hits = dates.flatMap((dt) => ctx.visits.get(k(dt)) ?? []);
     const keys = Array.from(new Set(hits.map((h) => h.key)));
@@ -309,26 +368,29 @@ function matchClaim(ctx: MatchContext, m: ReturnType<typeof mergeClaim>): Match 
   let subjectKey: string | null = null;
   let matchSource: string | null = null;
   const unique = (list?: { key: string }[]) => (list && Array.from(new Set(list.map((x) => x.key))).length === 1 ? list[0]!.key : null);
-  if (member && ctx.memberLinks[member]?.key) { subjectKey = ctx.memberLinks[member]!.key; matchSource = "manual"; }
-  else if (member && ctx.coverage.get(member)) { subjectKey = ctx.coverage.get(member)!; matchSource = "member"; }
+  const link = member ? ctx.memberLinks[member] : undefined;
+  const byMember = !link && member ? personByMember(ctx.index, ctx.members, m.memberId, name) : [];
+  if (link) { subjectKey = link.key || null; matchSource = "manual"; }
+  else if (byMember.length === 1) { subjectKey = byMember[0]!.key; matchSource = "member"; }
   else if (name && m.patientDob && ctx.nameDob.get(`${nameKey(name)}|${m.patientDob}`)) { subjectKey = ctx.nameDob.get(`${nameKey(name)}|${m.patientDob}`)!.key; matchSource = "name"; }
   else if (visit) { subjectKey = visit.key; matchSource = "visit"; }
   else if (name) {
     const k = unique(ctx.names.get(nameKey(name))) ?? unique(ctx.names.get(`~${looseName(name)}`));
     if (k) { subjectKey = k; matchSource = "name"; }
+    else {
+      const pick = pickPerson(findPeople(ctx.index, { name, dates, providerId: provider?.id ?? null }));
+      if (pick) { subjectKey = pick.person.key; matchSource = "close"; }
+    }
   }
 
-  // Provider: NPI, else the name on the file, else the visit's provider.
-  const npi = (m.providerNpi ?? "").trim();
-  let provider = npi ? ctx.providers.find((p) => p.npi === npi) ?? null : null;
-  let learnNpi: Match["learnNpi"] = null;
-  if (!provider && m.providerName) {
-    const id = matchProviderId(m.providerName, ctx.providers);
-    provider = id ? ctx.providers.find((p) => p.id === id) ?? null : null;
-    if (provider && npi && !provider.npi && /^\d{10}$/.test(npi)) learnNpi = { providerId: provider.id, npi };
+  // That day's visit (the exact name, or the matched person's) gives the clinic, and the provider if the file had none.
+  let dayVisit: VisitHit | null = visit;
+  if (!dayVisit && subjectKey) {
+    const keys = ctx.index.byKey.get(subjectKey)?.keys ?? [subjectKey];
+    for (const k of keys) for (const dt of dates) dayVisit ??= ctx.visitByKeyDate.get(`${k}|${dt}`) ?? null;
   }
-  if (!provider && visit?.providerId) provider = ctx.providers.find((p) => p.id === visit.providerId) ?? null;
-  const clinicId = visit?.clinicId ?? provider?.clinicId ?? null;
+  if (!provider && dayVisit?.providerId) provider = ctx.providers.find((p) => p.id === dayVisit!.providerId) ?? null;
+  const clinicId = dayVisit?.clinicId ?? provider?.clinicId ?? null;
   return { subjectKey, patientId: patientIdOf(subjectKey), matchSource, providerId: provider?.id ?? null, clinicId, learnNpi };
 }
 
@@ -435,6 +497,8 @@ export interface BillFilters {
   reason?: string | null;
   q?: string | null;
   needsPatient?: boolean | null;
+  /** Only claims matched by a name spelled differently (to check them). */
+  closeMatch?: boolean | null;
 }
 
 function claimWhere(f: BillFilters): SQL {
@@ -446,6 +510,7 @@ function claimWhere(f: BillFilters): SQL {
   if (f.providerId) parts.push(eq(billClaims.providerId, f.providerId));
   if (f.clinicId) parts.push(eq(billClaims.clinicId, f.clinicId));
   if (f.needsPatient) parts.push(isNull(billClaims.subjectKey));
+  if (f.closeMatch) parts.push(eq(billClaims.matchSource, "close"));
   if (f.q?.trim()) {
     const like = `%${f.q.trim().replace(/[%_]/g, "")}%`;
     parts.push(or(sql`${billClaims.patientName} LIKE ${like}`, sql`${billClaims.claimNo} LIKE ${like}`, sql`${billClaims.payerClaimNo} LIKE ${like}`, sql`${billClaims.memberId} LIKE ${like}`));
@@ -634,10 +699,12 @@ export async function claimDetail(a: WorkspaceActor, id: number) {
   ]);
   // Report rows this claim's payment replaced.
   const replaced = await d.select({ claimRef: billClaims.claimRef }).from(billClaims).where(eq(billClaims.supersededBy, c.claimRef));
+  const patient = await patientHelp(c, lines.map((l) => l.serviceDate));
   await audit(a, "view_master_billing", { entityType: "billClaim", entityId: id, description: "Opened a claim" });
   return {
     claim: { ...c, otherPayers: (c.otherPayers as string[] | null) ?? [], denialCodes: (c.denialCodes as string[] | null) ?? [],
       providerLabel: c.providerId ? names.provider.get(c.providerId) ?? c.providerName : c.providerName, clinicName: c.clinicId ? names.clinic.get(c.clinicId) ?? null : null },
+    patient,
     lines: lines.map((l) => ({ ...l, adjustments: ((l.adjustments as BillAdjustment[] | null) ?? []).map((x) => ({ ...x, text: describeAdjustment(x.group, x.code) })), remarks: (l.remarks as string[] | null) ?? [] })),
     events: events.map(({ e, fileName, uploadedAt }) => ({
       id: e.id, importId: e.importId, fileName, uploadedAt, source: e.source, clpStatus: e.clpStatus, sheetStatus: e.sheetStatus, payerName: e.payerName,
@@ -647,6 +714,26 @@ export async function claimDetail(a: WorkspaceActor, id: number) {
     })),
     replacedReports: replaced.length,
   };
+}
+
+/**
+ * For the claim's Patient row: the matched person's name as MyPCP has it and, for a name spelled
+ * differently, why it was matched; with no patient yet, the likely people to pick from (best first).
+ */
+async function patientHelp(c: typeof billClaims.$inferSelect, lineDates: (string | null)[]) {
+  const { index, members } = await people();
+  const matched = c.subjectKey ? index.byKey.get(c.subjectKey) ?? null : null;
+  const why = matched && c.matchSource === "close" ? compareNames(c.patientName, matched.name)?.why ?? null : null;
+  const suggestions: { key: string; name: string; dob: string | null; why: string; support: string | null }[] = [];
+  if (!c.subjectKey && c.patientName) {
+    const dates = Array.from(new Set([c.firstServiceDate, ...lineDates].filter((x): x is string => !!x)));
+    // The member ID's people whose first name didn't fit (a spouse or child sharing the ID, or a new name).
+    for (const p of personByMember(index, members, c.memberId, c.patientName, false)) suggestions.push({ key: p.key, name: p.name, dob: p.dob, why: "same member ID on their insurance", support: null });
+    for (const x of findPeople(index, { name: c.patientName, dates, providerId: c.providerId }, true)) {
+      if (!suggestions.some((s) => s.key === x.person.key)) suggestions.push({ key: x.person.key, name: x.person.name, dob: x.person.dob, why: x.why, support: x.supportWhy });
+    }
+  }
+  return { name: matched?.name ?? null, dob: matched?.dob ?? null, why, suggestions: suggestions.slice(0, 6) };
 }
 
 export async function listImports(limit = 100) {
@@ -681,8 +768,11 @@ export async function filterOptions() {
   };
 }
 
-/** Link a claim to the right patient (null = let matching decide again). Remembered for that member ID. */
-export async function linkPatient(a: WorkspaceActor, claimId: number, subjectKey: string | null) {
+/**
+ * Link a claim to the right patient (null = let matching decide again; `none` = "not this patient", the
+ * patient isn't in MyPCP, so matching leaves it alone). Remembered for that member ID.
+ */
+export async function linkPatient(a: WorkspaceActor, claimId: number, subjectKey: string | null, none = false) {
   const d = await db();
   const [c] = await d.select({ id: billClaims.id, claimRef: billClaims.claimRef, memberId: billClaims.memberId }).from(billClaims).where(eq(billClaims.id, claimId)).limit(1);
   if (!c) throw new WorkspaceError("Claim not found.", "NOT_FOUND");
@@ -691,8 +781,15 @@ export async function linkPatient(a: WorkspaceActor, claimId: number, subjectKey
   const links = { ...((row?.value as Record<string, { key: string }> | undefined) ?? {}) };
   if (member) {
     if (subjectKey) links[member] = { key: subjectKey };
+    else if (none) links[member] = { key: "" };
     else delete links[member];
     await d.insert(appSettings).values({ key: MEMBER_LINKS_KEY, value: links }).onDuplicateKeyUpdate({ set: { value: links } });
+  }
+  if (!subjectKey && none) {
+    const target = member ? or(eq(billClaims.id, claimId), and(eq(billClaims.memberId, c.memberId!), or(isNull(billClaims.matchSource), ne(billClaims.matchSource, "manual"))))! : eq(billClaims.id, claimId);
+    await d.update(billClaims).set({ subjectKey: null, patientId: null, matchSource: "manual" }).where(target);
+    await audit(a, "link_bill_patient", { entityType: "billClaim", entityId: claimId, description: "Marked a claim's patient as not in MyPCP" });
+    return { ok: true };
   }
   if (subjectKey) {
     const target = member ? or(eq(billClaims.id, claimId), and(eq(billClaims.memberId, c.memberId!), ne(billClaims.matchSource, "manual")))! : eq(billClaims.id, claimId);
@@ -723,6 +820,59 @@ export async function saveSheetMapping(signature: string, mapping: Record<string
   for (const k of keys.slice(0, Math.max(0, keys.length - 40))) delete all[k];
   await d.insert(appSettings).values({ key: SHEET_MAPS_KEY, value: all }).onDuplicateKeyUpdate({ set: { value: all } });
   return { ok: true };
+}
+
+/**
+ * IAM-only "master-billing-rematch" job: match again the saved claims that have no patient, or were
+ * matched by member ID or a close name (after matching improves). The owner's own picks stay. Counts
+ * only, no patient details. Dry run unless `apply`; re-run until `left` is 0 if time runs out.
+ */
+export async function rematchClaims(opts: { apply: boolean; deadline: number }) {
+  const d = await db();
+  peopleCache = null;
+  const rows = await d.select({
+    id: billClaims.id, patientName: billClaims.patientName, patientDob: billClaims.patientDob, memberId: billClaims.memberId, providerNpi: billClaims.providerNpi,
+    providerName: billClaims.providerName, firstServiceDate: billClaims.firstServiceDate, subjectKey: billClaims.subjectKey, matchSource: billClaims.matchSource, clinicId: billClaims.clinicId,
+  }).from(billClaims).where(or(isNull(billClaims.matchSource), inArray(billClaims.matchSource, ["member", "close"])));
+  const lineDates = new Map<number, string[]>();
+  for (const part of chunks(rows.map((r) => r.id), 1000)) {
+    for (const l of await d.select({ claimId: billLines.claimId, serviceDate: billLines.serviceDate }).from(billLines).where(inArray(billLines.claimId, part))) {
+      if (l.serviceDate) lineDates.set(l.claimId, [...(lineDates.get(l.claimId) ?? []), l.serviceDate]);
+    }
+  }
+  const inputs = rows.map((r) => ({ r, m: { ...r, lines: (lineDates.get(r.id) ?? []).map((serviceDate) => ({ serviceDate })) } as MatchInput }));
+  const ctx = await matchContext(d, inputs.flatMap(({ m }) => claimDates(m)));
+  const count = (o: Record<string, number>, k: string) => { o[k] = (o[k] ?? 0) + 1; };
+  const before: Record<string, number> = {}, after: Record<string, number> = {};
+  const why: Record<string, number> = {};
+  let memberOtherFirstName = 0;
+  const changes: { id: number; subjectKey: string | null; patientId: number | null; matchSource: string | null; clinicId: number | null }[] = [];
+  for (const { r, m } of inputs) {
+    count(before, r.matchSource ?? "none");
+    const x = matchClaim(ctx, m);
+    count(after, x.matchSource ?? "none");
+    const clinicId = x.clinicId ?? r.clinicId;
+    if (x.subjectKey !== r.subjectKey || x.matchSource !== r.matchSource || clinicId !== r.clinicId) changes.push({ id: r.id, subjectKey: x.subjectKey, patientId: x.patientId, matchSource: x.matchSource, clinicId });
+    if (x.subjectKey) continue;
+    // Why the rest still have no patient (counts only).
+    const name = r.patientName ?? "";
+    if (!name.trim()) { count(why, "no name on the bill"); continue; }
+    if (personByMember(ctx.index, ctx.members, r.memberId, name, false).length) memberOtherFirstName++;
+    const cands = findPeople(ctx.index, { name, dates: claimDates(m), providerId: null }, true);
+    if (!cands.length) count(why, "no one with a similar name");
+    else if (cands.every((c) => c.level === "weak")) count(why, "only loosely similar names (shown as suggestions)");
+    else if (cands.filter((c) => c.level !== "weak").length === 1) count(why, "one similar name, nothing else confirming it (shown as a suggestion)");
+    else count(why, "several people with that name (shown as suggestions)");
+  }
+  let applied = 0;
+  if (opts.apply) {
+    for (const part of chunks(changes, 10)) {
+      if (Date.now() > opts.deadline) break;
+      await Promise.all(part.map((c) => d.update(billClaims).set({ subjectKey: c.subjectKey, patientId: c.patientId, matchSource: c.matchSource, clinicId: c.clinicId }).where(eq(billClaims.id, c.id))));
+      applied += part.length;
+    }
+  }
+  return { checked: rows.length, before, after, changes: changes.length, applied, left: opts.apply ? changes.length - applied : null, stillNoPatient: why, memberOtherFirstName, people: ctx.index.people.length, memberIds: ctx.members.size };
 }
 
 /** IAM-only "master-billing-counts" job: counts and totals only, no patient details. */
