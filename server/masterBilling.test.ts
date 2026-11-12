@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { eraToEvents, isX12, parseEra835 } from "../shared/era835";
 import { parseBillSheet, detectSheetMapping, sheetCents, headerSignature } from "../shared/billSheet";
-import { mergeClaim, claimRefOf, CLAIM_LEVEL, NOT_LISTED, type BillEventInput } from "../shared/masterBilling";
+import { mergeClaim, claimRefOf, CLAIM_LEVEL, NOT_LISTED, deductibleOwedCents, groupDeductible, type BillEventInput, type DeductibleLine } from "../shared/masterBilling";
 import { adjustmentKind, insuranceType, statusFromText, describeAdjustment } from "../shared/billCodes";
 import { parseCsvRows } from "../shared/workspace";
 import { parsePdfReading } from "../shared/billPdf";
@@ -302,5 +302,28 @@ describe("codes in plain words", () => {
     expect(statusFromText("DENIED")).toBe("denied");
     expect(statusFromText("Paid")).toBe("paid");
     expect(statusFromText("")).toBeNull();
+  });
+});
+
+describe("high-deductible patients", () => {
+  it("counts only the deductible the patient still owes", () => {
+    const ded = [{ group: "PR", code: "1", cents: 15000 }, { group: "PR", code: "2", cents: 2000 }, { group: "CO", code: "45", cents: 9000 }];
+    expect(deductibleOwedCents(ded, 17000)).toBe(15000); // deductible + coinsurance owed: only the deductible part
+    expect(deductibleOwedCents(ded, 4000)).toBe(4000); // a second insurance paid most of it
+    expect(deductibleOwedCents(ded, 0)).toBe(0); // e.g. Medicaid behind Medicare paid it all
+    expect(deductibleOwedCents([{ group: "PR", code: "3", cents: 2500 }], 2500)).toBe(0); // a copay isn't a deductible
+    expect(deductibleOwedCents(null, 5000)).toBe(0);
+  });
+
+  it("finds people with a deductible on several separate visits", () => {
+    const line = (personKey: string, date: string, cents: number, claimId: number): DeductibleLine => ({ claimId, personKey, date, deductibleCents: cents, payerName: "DEMO PLAN", providerId: 1, clinicId: 2 });
+    const found = groupDeductible([
+      line("p:1", "2026-02-03", 12000, 1), line("p:1", "2026-02-03", 3000, 1), line("p:1", "2026-03-10", 9000, 2), line("p:1", "2026-05-01", 4000, 3), // 3 visits
+      line("p:2", "2026-04-04", 20000, 4), // one visit only
+      line("p:3", "2026-01-15", 5000, 5), line("p:3", "2026-06-20", 0, 6), line("p:3", "2026-07-01", 6000, 7), // the $0 line doesn't count
+    ], 2);
+    expect(found.map((p) => [p.personKey, p.visits.length, p.deductibleCents])).toEqual([["p:1", 3, 28000], ["p:3", 2, 11000]]);
+    expect(found[0]!.lastDate).toBe("2026-05-01");
+    expect(groupDeductible([line("p:1", "2026-02-03", 100, 1), line("p:1", "2026-03-03", 100, 2)], 3)).toEqual([]);
   });
 });

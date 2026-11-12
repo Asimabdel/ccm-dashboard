@@ -57,7 +57,7 @@ const filters = z.object({
   payer: z.string().max(160).nullish(), payerType: z.string().max(40).nullish(),
   providerId: z.number().int().positive().nullish(), clinicId: z.number().int().positive().nullish(),
   cpt: z.string().max(16).nullish(), reason: z.string().max(20).nullish(), q: z.string().max(80).nullish(), needsPatient: z.boolean().nullish(),
-  closeMatch: z.boolean().nullish(),
+  closeMatch: z.boolean().nullish(), subjectKey: z.string().max(120).nullish(),
 });
 const importId = z.number().int().positive();
 const subjectKey = z.string().regex(/^(p:\d+|s:.{1,110}|f:.{1,120})$/);
@@ -121,6 +121,9 @@ export const masterBillingRouter = router({
     .query(async ({ ctx, input }) => run(async () => mb.breakdown(await owner(ctx), input, input.dims))),
   claims: protectedProcedure.input(filters.extend({ page: z.number().int().min(1).max(10_000).default(1), sort: z.enum(["date", "billed", "paid", "denied"]).default("date") }))
     .query(async ({ ctx, input }) => run(async () => mb.listClaims(await owner(ctx), input, input.page, input.sort))),
+  /** Patients whose deductible was applied on several visits (likely a high-deductible plan). */
+  highDeductible: protectedProcedure.input(filters.extend({ minVisits: z.number().int().min(1).max(50).default(2) }))
+    .query(async ({ ctx, input }) => run(async () => mb.highDeductible(await owner(ctx), input, input.minVisits))),
   claim: protectedProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ ctx, input }) => run(async () => mb.claimDetail(await owner(ctx), input.id))),
   options: protectedProcedure.query(async ({ ctx }) => {
     await owner(ctx);

@@ -33,10 +33,12 @@ interface Filters {
   q?: string | null;
   needsPatient?: boolean | null;
   closeMatch?: boolean | null;
+  subjectKey?: string | null;
 }
-type Tab = "summary" | "breakdown" | "claims" | "denials" | "uploads";
+type Tab = "summary" | "breakdown" | "claims" | "denials" | "deductible" | "uploads";
 const TABS: { key: Tab; label: string }[] = [
-  { key: "summary", label: "Summary" }, { key: "breakdown", label: "Breakdown" }, { key: "claims", label: "Claims" }, { key: "denials", label: "Denials" }, { key: "uploads", label: "Uploads" },
+  { key: "summary", label: "Summary" }, { key: "breakdown", label: "Breakdown" }, { key: "claims", label: "Claims" }, { key: "denials", label: "Denials" },
+  { key: "deductible", label: "High deductible" }, { key: "uploads", label: "Uploads" },
 ];
 
 type Preset = "month" | "lastMonth" | "3m" | "ytd" | "12m" | "all";
@@ -91,7 +93,7 @@ export default function MasterBillingPage() {
   const active = [f.status?.length ? `Status: ${f.status.map((s) => BILL_STATUS_LABELS[s]).join(", ")}` : null, f.payer ? `Insurance: ${f.payer}` : null, f.payerType ? `Type: ${f.payerType}` : null,
     f.providerId ? `Provider: ${options.data?.providers.find((p) => p.id === f.providerId)?.name ?? "#" + f.providerId}` : null,
     f.clinicId ? `Clinic: ${options.data?.clinics.find((c) => c.id === f.clinicId)?.name ?? "#" + f.clinicId}` : null,
-    f.cpt ? `CPT ${f.cpt}` : null, f.reason ? `Reason ${f.reason}` : null, f.q ? `"${f.q}"` : null, f.needsPatient ? "Needs a patient" : null, f.closeMatch ? "Similar-name matches" : null].filter(Boolean) as string[];
+    f.cpt ? `CPT ${f.cpt}` : null, f.reason ? `Reason ${f.reason}` : null, f.q ? `"${f.q}"` : null, f.needsPatient ? "Needs a patient" : null, f.closeMatch ? "Similar-name matches" : null, f.subjectKey ? "One patient" : null].filter(Boolean) as string[];
 
   return (
     <CCMDashboardLayout title="Master Billing" pageTitle={false}>
@@ -148,7 +150,7 @@ export default function MasterBillingPage() {
           {active.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 text-xs">
               {active.map((a) => <span key={a} className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700 dark:bg-slate-800 dark:text-slate-200">{a}</span>)}
-              <button type="button" className="inline-flex items-center gap-1 text-slate-500 hover:underline" onClick={() => patch({ status: null, payer: null, payerType: null, providerId: null, clinicId: null, cpt: null, reason: null, q: null, needsPatient: null, closeMatch: null })}><X size={12} /> Clear filters</button>
+              <button type="button" className="inline-flex items-center gap-1 text-slate-500 hover:underline" onClick={() => patch({ status: null, payer: null, payerType: null, providerId: null, clinicId: null, cpt: null, reason: null, q: null, needsPatient: null, closeMatch: null, subjectKey: null })}><X size={12} /> Clear filters</button>
             </div>
           )}
         </div>
@@ -158,6 +160,7 @@ export default function MasterBillingPage() {
       {tab === "breakdown" && <Breakdown f={f} onDrill={drill} />}
       {tab === "claims" && <Claims f={f} patch={patch} onOpen={setClaimId} />}
       {tab === "denials" && <Denials f={f} onDrill={drill} onOpen={setClaimId} />}
+      {tab === "deductible" && <HighDeductible f={f} onDrill={drill} />}
       {tab === "uploads" && <Uploads onUpload={() => setUpload(true)} />}
 
       <UploadDialog open={upload} onOpenChange={setUpload} />
@@ -461,6 +464,110 @@ function Denials({ f, onDrill, onOpen }: { f: Filters; onDrill: (p: Partial<Filt
         ) : <p className="px-4 py-6 text-sm text-slate-500">No denials in this range.</p>)}
       </Panel>
       <Claims f={f} onOpen={onOpen} title="Denied and partly paid claims" lockStatus={denied} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+type DeductibleRow = RouterOutputs["masterBilling"]["highDeductible"]["rows"][number];
+type DeductibleSort = "visits" | "deductible" | "owes" | "next";
+
+/**
+ * Patients whose deductible was applied on several separate visits: likely a high-deductible plan.
+ * Amounts are what insurance said the patient owes, not whether they paid the clinic.
+ */
+function HighDeductible({ f, onDrill }: { f: Filters; onDrill: (p: Partial<Filters>) => void }) {
+  const [minVisits, setMinVisits] = useState(2);
+  const [sort, setSort] = useState<DeductibleSort>("visits");
+  const [search, setSearch] = useState("");
+  const q = trpc.masterBilling.highDeductible.useQuery({ ...f, status: null, subjectKey: null, minVisits });
+  const rows = useMemo(() => {
+    const s = search.trim().toLowerCase();
+    const list = (q.data?.rows ?? []).filter((r) => !s || (r.name ?? "").toLowerCase().includes(s) || (r.payerName ?? "").toLowerCase().includes(s));
+    const by: Record<DeductibleSort, (a: DeductibleRow, b: DeductibleRow) => number> = {
+      visits: (a, b) => b.visits - a.visits || b.deductibleCents - a.deductibleCents,
+      deductible: (a, b) => b.deductibleCents - a.deductibleCents,
+      owes: (a, b) => b.patientOwesCents - a.patientOwesCents,
+      next: (a, b) => (a.nextVisit ?? "9999").localeCompare(b.nextVisit ?? "9999"),
+    };
+    return list.slice().sort(by[sort]);
+  }, [q.data, search, sort]);
+  const all = q.data?.rows ?? [];
+  const totalDeductible = all.reduce((a, r) => a + r.deductibleCents, 0);
+  const totalOwes = all.reduce((a, r) => a + r.patientOwesCents, 0);
+  const coming = all.filter((r) => r.nextVisit).length;
+  const csv = () => downloadCsv(`high-deductible-${f.from}-to-${f.to}.csv`, [
+    ["Patient", "Date of birth", "Insurance", "Visits with a deductible", "Deductible owed", "Patient owes (all)", "Insurance paid", "Last deductible visit", "Next visit", "Provider", "Clinic"],
+    ...rows.map((r) => [niceName(r.name) || "", r.dob ?? "", r.payerName ?? "", String(r.visits), (r.deductibleCents / 100).toFixed(2), (r.patientOwesCents / 100).toFixed(2), (r.paidCents / 100).toFixed(2), r.lastDate ?? "", r.nextVisit ?? "", r.provider ?? "", r.clinic ?? ""]),
+  ]);
+  const th = "px-3 py-2 text-right font-medium";
+  const td = "px-3 py-2 text-right tabular-nums";
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <MetricCard label="Patients" value={q.data ? all.length.toLocaleString() : "…"} hint={`deductible on ${minVisits}+ visits`} />
+        <MetricCard label="Deductible owed" value={q.data ? money(totalDeductible) : "…"} hint="what insurance left to them as deductible" />
+        <MetricCard label="Patient owes, all reasons" value={q.data ? money(totalOwes) : "…"} hint="deductible + coinsurance + copays" />
+        <MetricCard label="Coming in soon" value={q.data ? coming.toLocaleString() : "…"} hint="have a visit on the schedule" />
+      </div>
+      <Panel title="High-deductible patients" bodyClassName="p-0"
+        subtitle={`Insurance applied the deductible on ${minVisits} or more separate visits in this date range. Amounts are what insurance says the patient owes, not whether they paid you. Staff see "High deductible: collect at check-in" (no amounts) for anyone with 2+ in the last 12 months.`}
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative">
+              <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input className={cn(inputCls, "h-8 w-48 pl-8 text-sm")} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Patient or insurance" aria-label="Search high-deductible patients" />
+            </div>
+            <SelectBox value={String(minVisits)} onChange={(v) => setMinVisits(Number(v))} ariaLabel="Visits with a deductible">
+              {[2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}+ visits</option>)}
+            </SelectBox>
+            <SelectBox value={sort} onChange={(v) => setSort(v as DeductibleSort)} ariaLabel="Sort">
+              <option value="visits">Most visits</option><option value="deductible">Most deductible owed</option><option value="owes">Most owed, all reasons</option><option value="next">Next visit soonest</option>
+            </SelectBox>
+            <Btn size="sm" variant="secondary" onClick={csv} disabled={!rows.length}><Download size={13} /> CSV</Btn>
+          </div>
+        }>
+        {q.isLoading && <Loading />}
+        {q.error && <div className="p-4"><ErrorNote message={q.error.message} /></div>}
+        {q.data && (rows.length ? (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1000px] text-sm">
+              <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
+                <tr>
+                  <th className="px-3 py-2 text-left font-medium">Patient</th><th className="px-3 py-2 text-left font-medium">Insurance</th>
+                  <th className={th}>Visits w/ deductible</th><th className={th}>Deductible owed</th><th className={th}>Owes, all reasons</th><th className={th}>Insurance paid</th>
+                  <th className="px-3 py-2 text-left font-medium">Last deductible</th><th className="px-3 py-2 text-left font-medium">Next visit</th><th className="px-3 py-2 text-left font-medium">Provider · clinic</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.key} onClick={() => onDrill(r.matched ? { subjectKey: r.key, q: null } : { q: r.name ?? null, subjectKey: null })} title="See this patient's claims"
+                    className="cursor-pointer border-t border-slate-100 hover:bg-slate-50 dark:border-slate-700/60 dark:hover:bg-slate-800/40">
+                    <td className="px-3 py-2">
+                      <span className="font-medium text-slate-800 dark:text-slate-100">{niceName(r.name) || "—"}</span>
+                      {!r.matched && <span className="ml-1.5 rounded bg-amber-100 px-1 text-[11px] text-amber-800 dark:bg-amber-950/50 dark:text-amber-200">no match</span>}
+                      {r.dob && <span className="block text-xs text-slate-500">born {new Date(`${r.dob}T12:00:00`).toLocaleDateString("en-US")}</span>}
+                    </td>
+                    <td className="max-w-[200px] truncate px-3 py-2" title={r.payerName ?? ""}>{r.payerName ?? "—"}</td>
+                    <td className={td}>{r.visits}</td>
+                    <td className={td}>{money(r.deductibleCents)}</td>
+                    <td className={td}>{money(r.patientOwesCents)}</td>
+                    <td className={td}>{money(r.paidCents)}</td>
+                    <td className="whitespace-nowrap px-3 py-2">{day(r.lastDate)}</td>
+                    <td className="whitespace-nowrap px-3 py-2">{r.nextVisit ? <span className="font-medium text-emerald-700 dark:text-emerald-300">{day(r.nextVisit)}</span> : <span className="text-slate-400">—</span>}</td>
+                    <td className="max-w-[200px] truncate px-3 py-2 text-slate-600 dark:text-slate-300">{[r.provider, r.clinic].filter(Boolean).join(" · ") || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : <p className="px-4 py-6 text-sm text-slate-500">{all.length ? "No one matches that search." : `No patients had a deductible applied on ${minVisits} or more visits in this range.`}</p>)}
+      </Panel>
+      <p className="text-xs text-slate-500">
+        How this works: on each payment, insurance marks the deductible part as the patient's to pay (reason code 1; 2 is coinsurance, 3 is copay). A deductible a second insurance then paid
+        (for example Medicaid behind Medicare) isn't counted. Deductibles usually start over each January. How you collect these balances is your practice's policy: confirm it with your biller.
+      </p>
     </div>
   );
 }

@@ -1505,6 +1505,26 @@ export const workspaceRouter = router({
     }),
   }),
 
+  /**
+   * "High deductible: collect at check-in" (from the payment files in Master Billing): insurance applied
+   * the deductible on 2+ visits in the last year. Staff get a yes and a visit count only, no amounts.
+   */
+  highDeductible: router({
+    /** Patient Flow / Insurance schedule: who on that day's schedule has one (subject key → visits). */
+    day: protectedProcedure.input(z.object({ date: dateStr })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "flowView");
+      const { highDeductibleForDay } = await import("../masterBillingDb");
+      return run(() => highDeductibleForDay(actor, input.date));
+    }),
+    /** Patient 360 header. */
+    patient: protectedProcedure.input(z.object({ key: patientKey })).query(async ({ ctx, input }) => {
+      await actorFor(ctx, "flowView");
+      const { highDeductibleKeys } = await import("../masterBillingDb");
+      const hit = (await highDeductibleKeys()).get(input.key);
+      return hit ? { visits: hit.visits } : null;
+    }),
+  }),
+
   /** Program approvals: patients whose diagnoses qualify them for CCM / BHI / RPM / APCM (approvers only). */
   programs: router({
     list: protectedProcedure

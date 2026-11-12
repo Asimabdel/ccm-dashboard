@@ -5,11 +5,12 @@
 // → addEvents (the claims the browser read, a chunk at a time) → finishImport (claims recomputed a
 // few hundred at a time, so no request runs long). Removing an upload works the same way backwards.
 import { createHash } from "node:crypto";
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lte, ne, or, sql, type SQL } from "drizzle-orm";
 import { getDb } from "./db";
 import { appSettings, appointments, billClaimEvents, billClaims, billImports, billLines, clinics, coverageOnFile, fhirPatients, fhirResources, patients, providers, users } from "../drizzle/schema";
 import {
-  altKeyOf, claimRefOf, mergeClaim, type BillAdjustment, type BillEventInput, type BillLineInput, type BillSource, type BreakdownDim, type DateBasis,
+  altKeyOf, claimRefOf, deductibleOwedCents, groupDeductible, HIGH_DEDUCTIBLE_MIN_VISITS, HIGH_DEDUCTIBLE_WINDOW_DAYS, mergeClaim,
+  type BillAdjustment, type BillEventInput, type BillLineInput, type BillSource, type BreakdownDim, type DateBasis, type DeductibleLine,
 } from "../shared/masterBilling";
 import { BILL_STATUS_LABELS, describeAdjustment, insuranceType, type BillStatus } from "../shared/billCodes";
 import { nameKey } from "../shared/workspace";
@@ -499,6 +500,8 @@ export interface BillFilters {
   needsPatient?: boolean | null;
   /** Only claims matched by a name spelled differently (to check them). */
   closeMatch?: boolean | null;
+  /** One patient's claims (from the high-deductible list). */
+  subjectKey?: string | null;
 }
 
 function claimWhere(f: BillFilters): SQL {
@@ -511,6 +514,7 @@ function claimWhere(f: BillFilters): SQL {
   if (f.clinicId) parts.push(eq(billClaims.clinicId, f.clinicId));
   if (f.needsPatient) parts.push(isNull(billClaims.subjectKey));
   if (f.closeMatch) parts.push(eq(billClaims.matchSource, "close"));
+  if (f.subjectKey) parts.push(eq(billClaims.subjectKey, f.subjectKey));
   if (f.q?.trim()) {
     const like = `%${f.q.trim().replace(/[%_]/g, "")}%`;
     parts.push(or(sql`${billClaims.patientName} LIKE ${like}`, sql`${billClaims.claimNo} LIKE ${like}`, sql`${billClaims.payerClaimNo} LIKE ${like}`, sql`${billClaims.memberId} LIKE ${like}`));
@@ -716,6 +720,127 @@ export async function claimDetail(a: WorkspaceActor, id: number) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// High-deductible patients
+// ---------------------------------------------------------------------------
+
+/** Lines where insurance applied a deductible the patient still owes (claims not taken back). */
+async function deductibleLines(d: Db, where: SQL): Promise<DeductibleLine[]> {
+  const rows = await d.select({
+    claimId: billClaims.id, subjectKey: billClaims.subjectKey, patientName: billClaims.patientName, serviceDate: billLines.serviceDate, firstServiceDate: billClaims.firstServiceDate,
+    payerName: billClaims.payerName, providerId: billClaims.providerId, clinicId: billClaims.clinicId, adjustments: billLines.adjustments, patientOwesCents: billLines.patientOwesCents,
+  }).from(billLines).innerJoin(billClaims, eq(billClaims.id, billLines.claimId))
+    .where(and(where, ne(billClaims.status, "taken_back"), gt(billLines.patientOwesCents, 0), sql`JSON_CONTAINS(${billLines.adjustments}, JSON_OBJECT('group', 'PR', 'code', '1'))`));
+  return rows.map((r) => ({
+    claimId: r.claimId, personKey: r.subjectKey ?? `n:${nameKey(r.patientName ?? "")}`, date: r.serviceDate ?? r.firstServiceDate,
+    deductibleCents: deductibleOwedCents(r.adjustments as BillAdjustment[] | null, r.patientOwesCents), payerName: r.payerName, providerId: r.providerId, clinicId: r.clinicId,
+  }));
+}
+
+/**
+ * The owner's High deductible list: patients whose deductible was applied on at least `minVisits`
+ * separate visits in the range, with what they owe in all (deductible, coinsurance, copays), what
+ * insurance paid, and their next visit on the schedule.
+ */
+export async function highDeductible(a: WorkspaceActor, f: BillFilters, minVisits: number) {
+  const d = await db();
+  const range = { ...f, status: null };
+  const patientsFound = groupDeductible(await deductibleLines(d, claimWhere(range)), minVisits);
+  const keys = patientsFound.map((p) => p.personKey).filter((k) => !k.startsWith("n:"));
+  const names = patientsFound.filter((p) => p.personKey.startsWith("n:"));
+
+  // Everything these patients owe / were paid in the range, every reason.
+  const totals = new Map<string, { owes: number; paid: number; billed: number; claims: number }>();
+  for (const part of chunks(keys, 500)) {
+    const rows = await d.select({ key: billClaims.subjectKey, owes: sql<number>`SUM(${billClaims.patientOwesCents})`, paid: sql<number>`SUM(${billClaims.paidCents})`, billed: sql<number>`SUM(${billClaims.billedCents})`, n: sql<number>`COUNT(*)` })
+      .from(billClaims).where(and(claimWhere(range), inArray(billClaims.subjectKey, part))).groupBy(billClaims.subjectKey);
+    for (const r of rows) totals.set(r.key!, { owes: Number(r.owes ?? 0), paid: Number(r.paid ?? 0), billed: Number(r.billed ?? 0), claims: Number(r.n ?? 0) });
+  }
+  if (names.length) {
+    const rows = await d.select({ name: billClaims.patientName, owes: billClaims.patientOwesCents, paid: billClaims.paidCents, billed: billClaims.billedCents }).from(billClaims).where(and(claimWhere(range), isNull(billClaims.subjectKey)));
+    for (const r of rows) {
+      const k = `n:${nameKey(r.name ?? "")}`;
+      if (!names.some((p) => p.personKey === k)) continue;
+      const t = totals.get(k) ?? { owes: 0, paid: 0, billed: 0, claims: 0 };
+      t.owes += r.owes; t.paid += r.paid; t.billed += r.billed; t.claims += 1;
+      totals.set(k, t);
+    }
+  }
+
+  // Names as MyPCP has them, and each patient's next visit.
+  const { index } = await people();
+  const today = localDateStr();
+  const next = new Map<string, string>();
+  const upcoming = await d.select({ date: appointments.date, patientId: appointments.patientId, patientName: appointments.patientName, dob: appointments.dateOfBirth, status: appointments.status })
+    .from(appointments).where(and(gte(appointments.date, today), ne(appointments.status, "cancelled")));
+  for (const r of upcoming) {
+    if (MISSED.test(r.status ?? "")) continue;
+    const k = subjectKeyFor(r.patientId, r.patientName, r.dob);
+    const main = index.byKey.get(k)?.key ?? k;
+    if (!next.has(main) || r.date < next.get(main)!) next.set(main, r.date);
+  }
+  const billName = new Map<string, string | null>();
+  if (names.length || keys.some((k) => !index.byKey.get(k))) {
+    const ids = patientsFound.flatMap((p) => p.claimIds.slice(0, 1));
+    for (const part of chunks(ids, 500)) {
+      for (const r of await d.select({ id: billClaims.id, key: billClaims.subjectKey, name: billClaims.patientName }).from(billClaims).where(inArray(billClaims.id, part))) billName.set(r.key ?? `n:${nameKey(r.name ?? "")}`, r.name);
+    }
+  }
+  const nm = await nameMaps();
+  await audit(a, "view_master_billing", { entityType: "billClaims", description: `Master Billing high-deductible list ${f.from} to ${f.to}` });
+  return {
+    rows: patientsFound.map((p) => {
+      const person = p.personKey.startsWith("n:") ? null : index.byKey.get(p.personKey) ?? null;
+      const t = totals.get(p.personKey);
+      return {
+        key: p.personKey, matched: !p.personKey.startsWith("n:"), name: person?.name ?? billName.get(p.personKey) ?? null, dob: person?.dob ?? null,
+        visits: p.visits.length, deductibleCents: p.deductibleCents, patientOwesCents: t?.owes ?? p.deductibleCents, paidCents: t?.paid ?? 0, billedCents: t?.billed ?? 0, claims: t?.claims ?? p.claimIds.length,
+        lastDate: p.lastDate, payerName: p.payerName, provider: p.providerId ? nm.provider.get(p.providerId) ?? null : null, clinic: p.clinicId ? nm.clinic.get(p.clinicId) ?? null : null,
+        nextVisit: person ? next.get(person.key) ?? null : null,
+      };
+    }),
+  };
+}
+
+// Staff see a "High deductible" note; the list is worked out at most every 10 minutes per server.
+let hdCache: { at: number; keys: Map<string, { visits: number; lastDate: string | null }> } | null = null;
+
+/**
+ * Everyone (under each of their keys: roster, schedule, Practice Fusion) whose deductible was applied
+ * on HIGH_DEDUCTIBLE_MIN_VISITS+ visits in the last year. Only a yes / no and a visit count leave
+ * this function for staff: no dollar amounts.
+ */
+export async function highDeductibleKeys(): Promise<Map<string, { visits: number; lastDate: string | null }>> {
+  if (hdCache && Date.now() - hdCache.at < 10 * 60_000) return hdCache.keys;
+  const d = await db();
+  const since = addDays(localDateStr(), -HIGH_DEDUCTIBLE_WINDOW_DAYS);
+  const found = groupDeductible(await deductibleLines(d, and(isNull(billClaims.supersededBy), isNotNull(billClaims.subjectKey), gte(billClaims.firstServiceDate, since))!), HIGH_DEDUCTIBLE_MIN_VISITS);
+  const keys = new Map<string, { visits: number; lastDate: string | null }>();
+  if (found.length) {
+    const { index } = await people();
+    for (const p of found) for (const k of index.byKey.get(p.personKey)?.keys ?? [p.personKey]) keys.set(k, { visits: p.visits.length, lastDate: p.lastDate });
+  }
+  hdCache = { at: Date.now(), keys };
+  return keys;
+}
+
+/** Staff: who on that day's schedule (in clinics they can see) has a high deductible. Subject key → visit count. */
+export async function highDeductibleForDay(actor: WorkspaceActor, date: string): Promise<Record<string, { visits: number }>> {
+  const flagged = await highDeductibleKeys();
+  if (!flagged.size) return {};
+  const d = await db();
+  const rows = await d.select({ patientId: appointments.patientId, patientName: appointments.patientName, dob: appointments.dateOfBirth, clinicId: appointments.clinicId })
+    .from(appointments).where(eq(appointments.date, date));
+  const out: Record<string, { visits: number }> = {};
+  for (const r of rows) {
+    if (actor.clinicIds && (r.clinicId == null || !actor.clinicIds.includes(r.clinicId))) continue;
+    const key = subjectKeyFor(r.patientId, r.patientName, r.dob);
+    const hit = flagged.get(key);
+    if (hit) out[key] = { visits: hit.visits };
+  }
+  return out;
+}
+
 /**
  * For the claim's Patient row: the matched person's name as MyPCP has it and, for a name spelled
  * differently, why it was matched; with no patient yet, the likely people to pick from (best first).
@@ -889,12 +1014,24 @@ export async function masterBillingCounts() {
   }).from(billClaims);
   const [lines] = await d.select({ n: sql<number>`COUNT(*)` }).from(billLines);
   const bySource = await d.select({ matchSource: billClaims.matchSource, n: sql<number>`COUNT(*)` }).from(billClaims).groupBy(billClaims.matchSource);
+  // High-deductible patients in the last year (what staff see flagged), by visits with a deductible.
+  const dedLines = await deductibleLines(d, and(isNull(billClaims.supersededBy), gte(billClaims.firstServiceDate, addDays(localDateStr(), -HIGH_DEDUCTIBLE_WINDOW_DAYS)))!);
+  const dedPeople = groupDeductible(dedLines, 1);
   const num = (x: unknown) => Number(x ?? 0);
   return {
     imports: imports.map((i) => ({ kind: i.kind, status: i.status, files: num(i.n), claims: num(i.claims) })),
     events: num(events?.n), lines: num(lines?.n),
     claims: { total: num(m?.claims), matchedToPatient: num(m?.matched), withProvider: num(m?.withProvider), withClinic: num(m?.withClinic), replacedReportRows: num(m?.superseded) },
     matchedBy: Object.fromEntries(bySource.map((s) => [s.matchSource ?? "none", num(s.n)])),
+    highDeductibleLast12Months: {
+      deductibleOn1Visit: dedPeople.filter((p) => p.visits.length === 1).length,
+      on2Visits: dedPeople.filter((p) => p.visits.length === 2).length,
+      on3to4Visits: dedPeople.filter((p) => p.visits.length >= 3 && p.visits.length <= 4).length,
+      on5PlusVisits: dedPeople.filter((p) => p.visits.length >= 5).length,
+      flaggedForStaff: dedPeople.filter((p) => p.visits.length >= HIGH_DEDUCTIBLE_MIN_VISITS).length,
+      flaggedWithoutPatientMatch: dedPeople.filter((p) => p.visits.length >= HIGH_DEDUCTIBLE_MIN_VISITS && p.personKey.startsWith("n:")).length,
+      deductibleDollarsFlagged: Math.round(dedPeople.filter((p) => p.visits.length >= HIGH_DEDUCTIBLE_MIN_VISITS).reduce((a, p) => a + p.deductibleCents, 0) / 100),
+    },
     byStatus: byStatus.map((s) => ({ status: s.status, claims: num(s.n), billedDollars: Math.round(num(s.billed) / 100), paidDollars: Math.round(num(s.paid) / 100) })),
   };
 }

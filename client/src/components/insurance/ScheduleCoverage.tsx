@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Btn, EmptyState, ErrorNote, Loading, Panel, inputCls } from "@/components/workspace/ui";
 import { chartHref } from "@/components/chart/ChartLookup";
 import { InsurancePanel } from "./InsurancePanel";
+import { HighDeductibleChip } from "@/components/billing/HighDeductibleChip";
 import { cn } from "@/lib/utils";
 
 type Row = RouterOutputs["workspace"]["eligibility"]["schedule"]["rows"][number];
@@ -32,6 +33,9 @@ export function ScheduleCoverage() {
   const [filter, setFilter] = useState<Kind | "all">("all");
   const [open, setOpen] = useState<Row | null>(null);
   const q = trpc.workspace.eligibility.schedule.useQuery({ date }, { refetchInterval: 60_000 });
+  // High deductible (from the payment files): collect at check-in. A yes only, no amounts.
+  const day = date ?? q.data?.date ?? null;
+  const deductibles = trpc.workspace.highDeductible.day.useQuery({ date: day ?? "" }, { enabled: !!day, retry: false, staleTime: 5 * 60_000 });
   if (q.isLoading) return <Loading />;
   if (q.error) return <ErrorNote message={q.error.message} />;
   const data = q.data!;
@@ -75,6 +79,7 @@ export function ScheduleCoverage() {
                   <div className="min-w-[12rem] flex-1">
                     {r.patientId ? <Link href={`/patients/${r.patientId}?tab=insurance`} className="font-semibold hover:underline">{r.name}</Link> : <Link href={chartHref(r.subjectKey)} className="font-semibold hover:underline">{r.name}</Link>}
                     <p className="text-xs text-slate-500">{[r.providerName, r.clinicName].filter(Boolean).join(" · ")}{r.onFile ? ` · ${r.onFile.payerName} ${r.onFile.memberId}` : ""}</p>
+                    {deductibles.data?.[r.subjectKey] && <HighDeductibleChip visits={deductibles.data[r.subjectKey]!.visits} className="mt-1" />}
                   </div>
                   <div className="min-w-[10rem] text-xs">
                     <p className={cn("flex items-center gap-1 font-semibold", K.cls)}><K.icon size={13} /> {k === "error" && r.check?.error ? "Couldn't check" : K.label}</p>

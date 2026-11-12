@@ -35,6 +35,7 @@ import { PatientFolder } from "@/components/folder/PatientFolder";
 import { FOLDER_SECTION_LIST, isPatientKey, type FolderSection } from "@shared/folder";
 import { fmtDay } from "@shared/workforce";
 import { DIRECTORY_PROGRAM_LABELS, type DirectoryProgram } from "@shared/directory";
+import { HighDeductibleChip } from "@/components/billing/HighDeductibleChip";
 
 type Tab = "overview" | "folder" | "appointments" | "tasks" | "messages" | "care" | "careplan" | "education" | "testing" | "chart" | "insurance" | "forms" | "payments";
 
@@ -72,6 +73,8 @@ function Patient360({ subjectKey, id }: { subjectKey: string; id: number | null 
   const [faxOpen, setFaxOpen] = useState(false);
   const [injectionOpen, setInjectionOpen] = useState(false);
   const q = trpc.workspace.patients.byKey.useQuery({ key: subjectKey }, { retry: false });
+  // High deductible (from the payment files): collect at check-in. A yes only, no amounts.
+  const deductible = trpc.workspace.highDeductible.patient.useQuery({ key: subjectKey }, { enabled: !!caps?.flowView && isPatientKey(subjectKey), retry: false, staleTime: 5 * 60_000 });
   const today = localDateStr();
 
   const tabs: { key: Tab; label: string; icon: React.ElementType; count?: number }[] = [
@@ -128,10 +131,11 @@ function Patient360({ subjectKey, id }: { subjectKey: string; id: number | null 
                     {p.preferredLanguage && <span className="inline-flex items-center gap-1"><Globe size={13} /> {p.preferredLanguage}</span>}
                     {p.mrn && <span>MRN {p.mrn}</span>}
                   </div>
-                  {(p.programs.length > 0 || !p.sources.roster) && (
+                  {(p.programs.length > 0 || !p.sources.roster || !!deductible.data) && (
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {p.programs.map((g) => <span key={g} className="rounded-full bg-brand-soft px-2 py-0.5 text-[11px] font-semibold text-brand">{DIRECTORY_PROGRAM_LABELS[g as DirectoryProgram]}</span>)}
                       {!p.sources.roster && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500 dark:bg-slate-800">{p.sources.practiceFusion ? "From Practice Fusion" : "From the schedule"} · not in a care program</span>}
+                      {deductible.data && <HighDeductibleChip visits={deductible.data.visits} className="px-2 text-[11px]" />}
                     </div>
                   )}
                 </div>

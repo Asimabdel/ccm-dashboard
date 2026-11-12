@@ -324,6 +324,58 @@ function firstDate(lines: MergedLine[], e: Ev): string | null {
   return [e.serviceFrom, ...lines.map((l) => l.serviceDate)].filter((d): d is string => !!d).sort()[0] ?? null;
 }
 
+// ---- High-deductible patients (2026-11-12) ----
+// Insurance marks the deductible part of a visit as patient responsibility, reason 1 ("PR-1",
+// standard claim adjustment reason code 1 = deductible; 2 = coinsurance, 3 = copay). A patient whose
+// deductible was applied on several separate visits likely has a high-deductible plan.
+
+/** Staff see "High deductible" when the deductible was applied on this many visits in the last year. */
+export const HIGH_DEDUCTIBLE_MIN_VISITS = 2;
+export const HIGH_DEDUCTIBLE_WINDOW_DAYS = 365;
+
+/**
+ * The deductible a line still leaves to the patient: what the first insurance applied as deductible,
+ * capped at what the patient owes after every insurance (a second insurance, e.g. Medicaid behind
+ * Medicare, often pays it).
+ */
+export function deductibleOwedCents(adjustments: BillAdjustment[] | null | undefined, patientOwesCents: number): number {
+  const ded = sum((adjustments ?? []).filter((a) => a.group.toUpperCase() === "PR" && a.code.replace(/^0+/, "") === "1").map((a) => a.cents));
+  return Math.max(0, Math.min(patientOwesCents, ded));
+}
+
+export interface DeductibleLine { claimId: number; personKey: string; date: string | null; deductibleCents: number; payerName: string | null; providerId: number | null; clinicId: number | null }
+export interface DeductiblePerson {
+  personKey: string; visits: string[]; claimIds: number[]; deductibleCents: number;
+  /** The latest visit with a deductible, and its insurance, provider and clinic. */
+  lastDate: string | null; payerName: string | null; providerId: number | null; clinicId: number | null;
+}
+
+/** People whose deductible was applied on at least `minVisits` separate days (most visits first). */
+export function groupDeductible(lines: DeductibleLine[], minVisits: number): DeductiblePerson[] {
+  const by = new Map<string, DeductiblePerson & { days: Set<string>; ids: Set<number> }>();
+  for (const l of lines) {
+    if (l.deductibleCents <= 0) continue;
+    let p = by.get(l.personKey);
+    if (!p) {
+      p = { personKey: l.personKey, visits: [], claimIds: [], deductibleCents: 0, lastDate: null, payerName: null, providerId: null, clinicId: null, days: new Set(), ids: new Set() };
+      by.set(l.personKey, p);
+    }
+    p.days.add(l.date ?? `claim ${l.claimId}`);
+    p.ids.add(l.claimId);
+    p.deductibleCents += l.deductibleCents;
+    if (l.date && (!p.lastDate || l.date >= p.lastDate)) {
+      p.lastDate = l.date;
+      p.payerName = l.payerName ?? p.payerName;
+      p.providerId = l.providerId ?? p.providerId;
+      p.clinicId = l.clinicId ?? p.clinicId;
+    }
+  }
+  return Array.from(by.values())
+    .filter((p) => p.days.size >= minVisits)
+    .map(({ days, ids, ...p }) => ({ ...p, visits: Array.from(days).sort(), claimIds: Array.from(ids) }))
+    .sort((x, y) => y.visits.length - x.visits.length || y.deductibleCents - x.deductibleCents);
+}
+
 // ---- Breakdown dimensions (shared by the server and the page) ----
 
 export const BREAKDOWN_DIMS = {
