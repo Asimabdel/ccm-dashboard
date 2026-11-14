@@ -397,6 +397,12 @@ export const handler = async (event: any, context: any) => {
     const rematched = e.rematch ? await rematchUnmatched() : null;
     return { rematched, ...(await zocdocCounts({ from: e.from, to: e.to })) };
   }
+  // ZocDoc: why "seen, no insurance payment found" patients have no payment (IAM-only, counts only). { from?, to? }
+  if (event && event.__job === "zocdoc-seen-no-payment" && !event.requestContext && !event.version) {
+    const { zocdocSeenNoPaymentCounts } = await import("../zocdocDb");
+    const e = event as { from?: string; to?: string };
+    return zocdocSeenNoPaymentCounts({ from: e.from, to: e.to });
+  }
   // Master Billing: match saved claims to patients again after matching improves (IAM-only; counts only; dry run unless apply).
   if (event && event.__job === "master-billing-rematch" && !event.requestContext && !event.version) {
     const { rematchClaims } = await import("../masterBillingDb");

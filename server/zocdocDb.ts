@@ -10,9 +10,10 @@ import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } 
 import { getDb } from "./db";
 import { billClaims, fhirResources, users, zocdocBookings, zocdocImports } from "../drizzle/schema";
 import { SEEN_STATUSES, nameKey } from "../shared/workspace";
-import { localDateStr } from "../shared/workforce";
+import { addDays, localDateStr } from "../shared/workforce";
 import { bookingKeySource, zocdocSummary, type ZBooking, type ZClaim, type ZocdocPatientFilter, type ZocdocRow, type ZocdocStatus, type ZOutcome, type ZVisit } from "../shared/zocdoc";
 import { findPeople, type PeopleIndex } from "./billPatientMatch";
+import { similarSpelling, tok } from "./rosterMatch";
 import { audit, loadScheduleSubjects, WorkspaceError, type WorkspaceActor } from "./workspaceDb";
 
 async function db() {
@@ -158,21 +159,26 @@ async function load(from: string, to: string) {
       for (const v of schedule.get(k)?.visits ?? []) {
         const date = localDateStr(v.startsAt);
         const kind: ZVisit["kind"] | null = SEEN_STATUSES.includes(v.status) ? "seen" : v.status === "no_show" ? "no_show" : v.status === "cancelled" ? "cancelled" : date >= today ? "upcoming" : null;
-        if (kind) addVisit(k, { date, kind });
+        if (kind) addVisit(k, { date, kind, source: "schedule", provider: v.providerName, visitType: v.visitType });
       }
     }
     // Encounters with no visit type ("Unknown") aren't visits (Practice Fusion made ~5,600 of them on 2026-09-28/29).
+    // Their title reads "YYYY-MM-DD; <calendar>; <provider>; My PCP Dr; <signed date>".
     for (let i = 0; i < keyList.length; i += 1000) {
-      const rows = await d.select({ key: fhirResources.subjectKey, date: fhirResources.date, status: fhirResources.status }).from(fhirResources)
+      const rows = await d.select({ key: fhirResources.subjectKey, date: fhirResources.date, status: fhirResources.status, title: fhirResources.title }).from(fhirResources)
         .where(and(eq(fhirResources.section, "Encounter"), inArray(fhirResources.subjectKey, keyList.slice(i, i + 1000)), isNotNull(fhirResources.date), isNotNull(fhirResources.title), sql`${fhirResources.title} <> 'Unknown'`));
-      for (const r of rows) if (r.key && r.date && r.date <= today && !["cancelled", "entered-in-error"].includes(r.status ?? "")) addVisit(r.key, { date: r.date, kind: "seen" });
+      for (const r of rows) {
+        if (!r.key || !r.date || r.date > today || ["cancelled", "entered-in-error"].includes(r.status ?? "")) continue;
+        const parts = (r.title ?? "").split(";").map((x) => x.trim());
+        addVisit(r.key, { date: r.date, kind: "seen", source: "chart", provider: parts[2] || null, visitType: parts[1] || null });
+      }
     }
   }
   const zb: ZBooking[] = bookings.map((b) => ({
     person: personOf(b, aliasOf), matched: !!b.subjectKey, appointmentDate: b.appointmentDate, status: b.status as ZocdocStatus,
     patientType: (b.patientType as ZBooking["patientType"]) ?? null, costCents: b.costCents, costReason: b.costReason, providerName: b.providerName, insuranceCarrier: b.insuranceCarrier,
   }));
-  return { bookings, aliasOf, summary: zocdocSummary(zb, claimsByPerson, today, visitsByPerson) };
+  return { bookings, aliasOf, visitsByPerson, summary: zocdocSummary(zb, claimsByPerson, today, visitsByPerson) };
 }
 
 /** The ZocDoc tab: spend vs. what those patients brought in, by month / provider / insurance, and where money leaks. */
@@ -250,5 +256,86 @@ export async function zocdocCounts(input: { from?: string; to?: string } = {}) {
       months: summary.lost.months.map((m) => `${m.key} ${m.lost}/${m.judged} $${dollars(m.costCents)}`),
     },
     alreadyOursCost: dollars(summary.leaks.alreadyOurs.costCents),
+  };
+}
+
+/** A claim's patient name looks like the booked patient's: any word order, one-letter typos, a first name's start. */
+export function nameLooksLike(first: string | null, last: string | null, other: string | null): boolean {
+  const o = tok(other).words;
+  if (!o.length) return false;
+  const near = (x: string) => !!x && o.some((w) => w === x || similarSpelling(w, x));
+  const f = tok(first).first;
+  const firstOk = near(f) || (f.length >= 3 && o.some((w) => w.length >= 3 && (w.startsWith(f.slice(0, 3)) || f.startsWith(w.slice(0, 3)))));
+  return tok(last).words.some(near) && firstOk;
+}
+
+const tally = (list: (string | null | undefined)[], top = 12) => {
+  const m = new Map<string, number>();
+  for (const k of list) m.set(k || "(blank)", (m.get(k || "(blank)") ?? 0) + 1);
+  return Object.fromEntries(Array.from(m.entries()).sort((a, b) => b[1] - a[1]).slice(0, top));
+};
+
+/**
+ * IAM-only "zocdoc-seen-no-payment" job, counts only: the charged new patients who were seen (our schedule or a signed
+ * Practice Fusion visit) but have no insurance claim in Master Billing. Why: a claim for that day under another / no
+ * patient match, the same name + birth date on another date, how recent the visit is, who saw them, the insurance.
+ */
+export async function zocdocSeenNoPaymentCounts(input: { from?: string; to?: string } = {}) {
+  const from = input.from ?? `${localDateStr().slice(0, 4)}-01-01`;
+  const to = input.to ?? localDateStr();
+  const today = localDateStr();
+  const { bookings, aliasOf, visitsByPerson, summary } = await load(from, to);
+  const d = await db();
+  const named = new Map<string, { first: string | null; last: string | null; dob: string | null }>();
+  for (const b of bookings) { const p = personOf(b, aliasOf); if (!named.has(p)) named.set(p, { first: b.patientFirst, last: b.patientLast, dob: b.patientDob }); }
+  const list = summary.people.filter((p) => p.isNew && p.chargedBookings > 0 && p.outcome === "seen_no_payment");
+  const seenOf = (p: (typeof list)[number]) => (visitsByPerson.get(p.person) ?? [])
+    .filter((v) => v.kind === "seen" && v.date >= addDays(p.firstDate, -1) && v.date <= today).sort((a, b) => a.date.localeCompare(b.date));
+
+  // Claims on (or 3 days around) each seen day, and claims with the same birth date, whoever they were matched to.
+  type C = { date: string | null; name: string | null; dob: string | null; subjectKey: string | null; status: string; paid: number };
+  const cols = { date: billClaims.firstServiceDate, name: billClaims.patientName, dob: billClaims.patientDob, subjectKey: billClaims.subjectKey, status: billClaims.status, paid: billClaims.paidCents };
+  const dates = new Set<string>();
+  for (const p of list) for (const v of seenOf(p)) for (let k = -3; k <= 3; k++) dates.add(addDays(v.date, k));
+  const near: C[] = [];
+  const dl = Array.from(dates);
+  for (let i = 0; i < dl.length; i += 500) near.push(...await d.select(cols).from(billClaims).where(and(inArray(billClaims.firstServiceDate, dl.slice(i, i + 500)), isNull(billClaims.supersededBy))));
+  const dobs = Array.from(new Set(list.map((p) => named.get(p.person)?.dob).filter((x): x is string => !!x)));
+  const sameDob: C[] = [];
+  for (let i = 0; i < dobs.length; i += 500) sameDob.push(...await d.select(cols).from(billClaims).where(and(inArray(billClaims.patientDob, dobs.slice(i, i + 500)), isNull(billClaims.supersededBy))));
+  const [{ last: latestPayment } = { last: null }] = await d.select({ last: sql<string | null>`max(${billClaims.lastPaidDate})` }).from(billClaims);
+
+  const evidence: string[] = [], age: string[] = [], month: string[] = [], found: string[] = [], foundStatus: string[] = [];
+  const provider: (string | null)[] = [], visitType: (string | null | undefined)[] = [];
+  let costCents = 0, twoPlusVisits = 0;
+  for (const p of list) {
+    const n = named.get(p.person) ?? { first: null, last: null, dob: null };
+    const seen = seenOf(p);
+    const first = seen[0]!;
+    costCents += p.costCents;
+    if (seen.length > 1) twoPlusVisits++;
+    const chart = seen.some((v) => v.source === "chart"), sched = seen.some((v) => v.source === "schedule");
+    evidence.push(chart && sched ? "schedule + signed chart visit" : chart ? "signed chart visit only" : "schedule only");
+    const days = Math.round((Date.parse(`${today}T12:00:00Z`) - Date.parse(`${first.date}T12:00:00Z`)) / 86_400_000);
+    age.push(days <= 30 ? "0-30 days ago" : days <= 60 ? "31-60 days ago" : days <= 90 ? "61-90 days ago" : "over 90 days ago");
+    month.push(first.date.slice(0, 7));
+    provider.push(seen.find((v) => v.provider)?.provider ?? p.provider);
+    visitType.push(first.visitType);
+    const seenDays = seen.map((v) => v.date);
+    const close = (date: string | null) => !!date && seenDays.some((s) => Math.abs(Date.parse(`${s}T12:00:00Z`) - Date.parse(`${date}T12:00:00Z`)) <= 3 * 86_400_000);
+    const sameDay = near.filter((c) => close(c.date) && nameLooksLike(n.first, n.last, c.name));
+    const otherDate = n.dob ? sameDob.filter((c) => c.dob === n.dob && !!c.date && c.date >= addDays(p.firstDate, -1) && nameLooksLike(n.first, n.last, c.name)) : [];
+    const hit = sameDay[0] ?? otherDate[0];
+    found.push(sameDay.length ? (sameDay.some((c) => !c.subjectKey) ? "claim near the visit day, not matched to any patient" : "claim near the visit day, matched to another patient record")
+      : otherDate.length ? "same name + birth date claim on another day" : "no claim found at all");
+    if (hit) foundStatus.push(hit.status);
+  }
+  return {
+    from, to, today, latestPaymentInMasterBilling: latestPayment, patients: list.length, zocdocCost: Math.round(costCents / 100),
+    whatWeFound: tally(found), statusOfFoundClaims: tally(foundStatus),
+    visitEvidence: tally(evidence), seenMoreThanOnce: twoPlusVisits,
+    firstVisitAge: tally(age), firstVisitMonth: Object.fromEntries(Object.entries(tally(month, 24)).sort()),
+    provider: tally(provider), visitType: tally(visitType, 10),
+    zocdocInsurance: tally(list.map((p) => p.insurance)), lastZocdocStatus: tally(list.map((p) => p.statuses[p.statuses.length - 1])),
   };
 }

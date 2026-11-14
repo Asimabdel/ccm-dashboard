@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { parseCsvRows } from "../shared/workspace";
 import { bookingKeySource, detectZocdocMapping, parseZocdocRows, splitZocdocName, zocdocStatus, zocdocSummary, type ZBooking, type ZClaim, type ZVisit } from "../shared/zocdoc";
-import { bookingKeyOf } from "./zocdocDb";
+import { bookingKeyOf, nameLooksLike } from "./zocdocDb";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 
@@ -151,6 +151,15 @@ describe("ZocDoc spend vs. revenue", () => {
     // The old 45-day "no visit" count is exactly lost + the three "not lost" groups.
     expect(s.leaks.noVisit.patients).toBe(5 + 3);
     expect(s.leaks.alreadyOurs).toEqual({ patients: 0, costCents: 0 });
+  });
+
+  it("spots a claim whose patient name looks like the booked patient's (order, typos, cut names)", () => {
+    expect(nameLooksLike("Jane", "Sample", "SAMPLE, JANE")).toBe(true);
+    expect(nameLooksLike("Jane", "Sample", "JANE Q SAMPLES")).toBe(true);          // one-letter typo
+    expect(nameLooksLike("Janet", "Garcia-Lopez", "JAN LOPEZ")).toBe(true);        // cut first name, one surname
+    expect(nameLooksLike("Jane", "Sample", "JOHN SAMPLE")).toBe(false);            // family member
+    expect(nameLooksLike("Jane", "Sample", "JANE EXAMPLE")).toBe(false);
+    expect(nameLooksLike("Jane", "Sample", null)).toBe(false);
   });
 
   it("is only open to the owner (other admins and staff are refused before anything is read)", async () => {

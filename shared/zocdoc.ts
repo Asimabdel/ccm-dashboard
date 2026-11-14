@@ -226,7 +226,14 @@ export interface ZBooking {
 }
 export interface ZClaim { date: string; paidCents: number; owesCents: number; billedCents: number }
 /** A visit on our schedule or in the Practice Fusion chart ("upcoming" = still scheduled, in the future). */
-export interface ZVisit { date: string; kind: "seen" | "no_show" | "cancelled" | "upcoming" }
+export interface ZVisit {
+  date: string;
+  kind: "seen" | "no_show" | "cancelled" | "upcoming";
+  /** Where it came from (for the "seen, no payment" check): our schedule or a signed Practice Fusion visit. */
+  source?: "schedule" | "chart";
+  provider?: string | null;
+  visitType?: string | null;
+}
 
 /**
  * What became of a booked patient. Without a billed visit within `CAME_IN_DAYS` days: they came later, were seen
