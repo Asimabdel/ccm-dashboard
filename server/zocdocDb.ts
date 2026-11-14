@@ -217,7 +217,7 @@ export async function zocdocCounts(input: { from?: string; to?: string } = {}) {
     matched: t.matchedPatients, matchBySource: Object.fromEntries(bySource.map((r) => [r.source ?? "none", Number(r.n)])),
     cameIn: t.cameIn, judged: t.judged, pending: t.pending, alreadyOurs: t.alreadyOurs,
     insurancePaidFirst45: dollars(t.paidFirstCents), insurancePaidLater: dollars(t.paidLaterCents), patientResponsibility: dollars(t.owesCents),
-    leaks: { noVisit: { ...summary.leaks.noVisit, cost: dollars(summary.leaks.noVisit.costCents) }, practiceCanceled: { bookings: summary.leaks.practiceCanceled.bookings, cost: dollars(summary.leaks.practiceCanceled.costCents) } },
+    leaks: { noVisit: { ...summary.leaks.noVisit, cost: dollars(summary.leaks.noVisit.costCents) }, practiceCanceled: { bookings: summary.leaks.practiceCanceled.bookings, cost: dollars(summary.leaks.practiceCanceled.costCents) }, patientCanceled: { bookings: summary.leaks.patientCanceled.bookings, cost: dollars(summary.leaks.patientCanceled.costCents) } },
     months: summary.months.map((m) => ({ month: m.key, charged: m.chargedBookings, cost: dollars(m.costCents), patients: m.patients, cameIn: m.cameIn, paid: dollars(m.paidCents) })),
   };
 }

@@ -31,6 +31,20 @@ describe("reading ZocDoc's appointment report", () => {
     expect(p.rows[2]).toMatchObject({ status: "practice_canceled", patientType: "existing", costCents: 0, bookedAt: null });
   });
 
+  it("reads ZocDoc's real download layout (run-together headers, local times, ISO birth dates, a redacted DOB)", () => {
+    const head = "AppointmentId,Professional,Location,LocationAddress,PatientFirstName,PatientLastName,PatientDateOfBirth,PatientType,PatientPhoneNumber,PatientEmail,PatientAddress,AppointmentTimeLocal,AppointmentTimeUtc,BookingTimeLocal,BookingTimeUtc,AppointmentStatus,InsuranceCarrier,InsurancePlan,BookingSource,SourceChannel,VisitReason,SupervisingProfessional,Cost,AppointmentType,OrganizationName,PracticeName,ProfessionalNpi,ProviderType,Specialty,SupervisingProviderNpi,PatientGender,InsuranceProgram,InsurancePlanType,ChargedAppointment,DaysBetweenBookingAndLatestAppointment,InitialAppointmentTimestampEst,AppointmentOutcomeTimestampEst";
+    const row = (id: string, dob: string, at: string, status: string, cost: string) =>
+      [id, "Dr. Test One", "Test Clinic", "1 Test St", "Jane", "Sample", dob, "New", "555-0100", "jane@example.com", "1 Test St", at, "1/1/2026 3:00 PM", "12/30/2025 8:05 PM", "12/31/2025 2:05 AM", status, "Sample Health", "Sample PPO", "Zocdoc Marketplace", "Zocdoc.com & app", "Sick Visit", "", cost, "Video Visit", "Test Org", "Test Practice", "1234567890", "Doctor", "Family Physician", "", "F", "Commercial", "PPO", cost === "0" ? "No" : "Yes", "2", at, at].join(",");
+    const p = parseZocdocRows(parseCsvRows(["﻿" + head, row("apt_test-1", "2000-02-12", "1/1/2026 9:05 AM", "PatientCanceled", "45"), row("apt_test-2", "[Redacted]", "11/13/2026 12:30 PM", "Confirmed", "0")].join("\r\n")));
+    expect(p.missing).toEqual([]);
+    expect(p.rows).toHaveLength(2);
+    expect(p.rows[0]).toMatchObject({ appointmentId: "apt_test-1", patientDob: "2000-02-12", appointmentAt: "2026-01-01 09:05", appointmentDate: "2026-01-01", bookedAt: "2025-12-30 20:05", status: "patient_canceled", patientType: "new", costCents: 4500, providerName: "Dr. Test One", locationName: "Test Clinic", insuranceCarrier: "Sample Health", insurancePlan: "Sample PPO", bookingSource: "Zocdoc Marketplace", visitReason: "Sick Visit" });
+    expect(p.rows[1]).toMatchObject({ patientDob: null, appointmentAt: "2026-11-13 12:30", costCents: 0 });
+    const s = zocdocSummary(p.rows.map((r) => ({ person: "u:jane", matched: false, appointmentDate: r.appointmentDate, status: r.status, patientType: r.patientType, costCents: r.costCents, costReason: r.costReason, providerName: r.providerName, insuranceCarrier: r.insuranceCarrier })), new Map(), "2026-11-14");
+    expect(s.leaks.patientCanceled).toEqual({ bookings: 1, costCents: 4500 });
+    expect(s.leaks.cancellationCharges).toEqual({ bookings: 0, costCents: 0 });
+  });
+
   it("reads a single patient column (Last, First / with DOB under it) and separate date + time columns", () => {
     const rows = parseCsvRows(["Patient,Appointment Date,Time,Cost,Status", `"Sample, Jane Q\nDOB 2/12/2000",2026-03-04,9:30 AM,45,Practice Rescheduled`].join("\n"));
     const p = parseZocdocRows(rows);

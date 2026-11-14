@@ -111,9 +111,11 @@ export function ZocdocTab() {
                 note={`No billed visit within ${CAME_IN_DAYS} days (${d.leaks.noVisit.notInMyPcp.toLocaleString()} of them aren't in MyPCP at all).`} />
               <Leak title="Charged, but the practice canceled" count={d.leaks.practiceCanceled.bookings} unit="booking" cents={d.leaks.practiceCanceled.costCents} onClick={() => showPatients("practice_canceled")}
                 note="Worth asking ZocDoc about: the practice canceled these bookings and was still charged." />
-              <Leak title="Cancellation charges" count={d.leaks.cancellationCharges.bookings} unit="booking" cents={d.leaks.cancellationCharges.costCents}
-                note="ZocDoc's own reason says the charge was for a cancellation." />
-              <Leak title="Charged no-shows" count={d.leaks.noShow.bookings} unit="booking" cents={d.leaks.noShow.costCents} note="Marked as a no-show in ZocDoc." />
+              <Leak title="Charged, but the patient canceled" count={d.leaks.patientCanceled.bookings} unit="booking" cents={d.leaks.patientCanceled.costCents}
+                note="The patient canceled and ZocDoc still charged. Some of them booked again and came in; the first card counts people who never did." />
+              {d.leaks.cancellationCharges.bookings > 0 && <Leak title="Cancellation charges" count={d.leaks.cancellationCharges.bookings} unit="booking" cents={d.leaks.cancellationCharges.costCents}
+                note="ZocDoc's own reason says the charge was for a cancellation." />}
+              {d.leaks.noShow.bookings > 0 && <Leak title="Charged no-shows" count={d.leaks.noShow.bookings} unit="booking" cents={d.leaks.noShow.costCents} note="Marked as a no-show in ZocDoc." />}
             </div>
           </Panel>
 

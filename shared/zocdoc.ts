@@ -37,9 +37,10 @@ const ALIASES: Record<ZocdocField, string[]> = {
   patientName: ["patient", "patient name", "name", "patient full name", "full name"],
   dob: ["dob", "date of birth", "birth date", "birthdate", "patient dob", "patient date of birth", "patient birthday", "birthday"],
   appointmentDate: ["appointment date", "appt date", "date of appointment", "visit date", "date"],
-  appointmentAt: ["appointment time", "appointment date/time", "appointment date & time", "appointment datetime", "appointment date and time", "appt time", "appointment", "appointment start", "start time", "appointment start time"],
+  // ZocDoc's real download (checked 2026-11-14) says "AppointmentTimeLocal" / "BookingTimeLocal" (also UTC/EST copies, left alone).
+  appointmentAt: ["appointment time local", "appointment time", "appointment date/time", "appointment date & time", "appointment datetime", "appointment date and time", "appt time", "appointment", "appointment start", "start time", "appointment start time"],
   appointmentTime: ["time", "start", "appt start"],
-  bookedAt: ["booked", "booked on", "booked at", "booking date", "booking time", "booked date", "booked time", "date booked", "time booked", "created", "created at", "booking created", "booked date/time"],
+  bookedAt: ["booking time local", "booked", "booked on", "booked at", "booking date", "booking time", "booked date", "booked time", "date booked", "time booked", "created", "created at", "booking created", "booked date/time"],
   status: ["status", "appointment status", "booking status"],
   patientType: ["patient type", "new/existing", "new or existing", "new / existing", "new patient", "patient status"],
   cost: ["cost", "booking cost", "cost ($)", "fee", "booking fee", "charge", "price", "amount", "zocdoc fee", "cost usd"],
@@ -53,7 +54,7 @@ const ALIASES: Record<ZocdocField, string[]> = {
 };
 const FIELD_ORDER: ZocdocField[] = ["appointmentId", "firstName", "lastName", "patientName", "dob", "bookedAt", "appointmentDate", "appointmentAt", "appointmentTime", "status", "patientType", "costReason", "cost", "bookingSource", "provider", "location", "insurancePlan", "insuranceCarrier", "visitReason"];
 
-const normHeader = (h: string) => h.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_\s]+/g, " ").replace(/\s*#/g, " #").toLowerCase().trim();
+const normHeader = (h: string) => h.replace(/^﻿/, "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_\s]+/g, " ").replace(/\s*#/g, " #").toLowerCase().trim();
 
 /** Find the header row (in the first 15) and guess each column. */
 export function detectZocdocMapping(rows: string[][]): { headerRow: number; headers: string[]; mapping: ZocdocMapping } {
@@ -262,6 +263,9 @@ export interface ZocdocSummary {
   leaks: {
     noVisit: { patients: number; notInMyPcp: number; costCents: number };
     practiceCanceled: { bookings: number; costCents: number };
+    /** Charged bookings the patient canceled (ZocDoc's report has a status but no cost reason). */
+    patientCanceled: { bookings: number; costCents: number };
+    /** Only when the file has a cost-reason column. */
     cancellationCharges: { bookings: number; costCents: number };
     noShow: { bookings: number; costCents: number };
   };
@@ -337,6 +341,7 @@ export function zocdocSummary(bookings: ZBooking[], claimsByPerson: Map<string, 
   const noVisit = paying.filter((p) => !p.cameIn && !p.pending);
   const cancelCharged = bookings.filter((b) => b.costCents > 0 && /cancel/i.test(b.costReason ?? ""));
   const practiceCanceled = bookings.filter((b) => b.costCents > 0 && b.status === "practice_canceled");
+  const patientCanceled = bookings.filter((b) => b.costCents > 0 && b.status === "patient_canceled");
   const noShow = bookings.filter((b) => b.costCents > 0 && b.status === "no_show");
   const byCost = (a: ZRow, b: ZRow) => b.costCents - a.costCents || b.bookings - a.bookings;
 
@@ -364,6 +369,7 @@ export function zocdocSummary(bookings: ZBooking[], claimsByPerson: Map<string, 
     leaks: {
       noVisit: { patients: noVisit.length, notInMyPcp: noVisit.filter((p) => !p.matched).length, costCents: sum(noVisit, (p) => p.costCents) },
       practiceCanceled: { bookings: practiceCanceled.length, costCents: sum(practiceCanceled, (b) => b.costCents) },
+      patientCanceled: { bookings: patientCanceled.length, costCents: sum(patientCanceled, (b) => b.costCents) },
       cancellationCharges: { bookings: cancelCharged.length, costCents: sum(cancelCharged, (b) => b.costCents) },
       noShow: { bookings: noShow.length, costCents: sum(noShow, (b) => b.costCents) },
     },
