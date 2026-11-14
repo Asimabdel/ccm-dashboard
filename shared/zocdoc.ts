@@ -406,8 +406,9 @@ export function zocdocSummary(bookings: ZBooking[], claimsByPerson: Map<string, 
   const noShow = bookings.filter((b) => b.costCents > 0 && b.status === "no_show");
   const byCost = (a: ZRow, b: ZRow) => b.costCents - a.costCents || b.bookings - a.bookings;
 
-  // Money lost: who never came, by first-booking month / provider / insurance.
-  const judged = paying.filter((p) => !p.pending);
+  // Money lost: who never came, by first-booking month / provider / insurance. Only people whose window is over
+  // (not "!pending": someone booked last week who already came would make a recent month look perfect).
+  const judged = paying.filter((p) => plusDays(p.firstDate, CAME_IN_DAYS) <= today);
   const never = judged.filter((p) => p.outcome === "never");
   const lostBy = (f: (p: ZPerson) => string) => {
     const m = new Map<string, ZLostRow>();

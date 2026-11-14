@@ -130,8 +130,9 @@ describe("ZocDoc spend vs. revenue", () => {
       b("p:7", "2026-11-01"),                                                     // too soon
       b("p:8", "2026-02-01"),                                                     // never (their only visit was before the booking)
       b("p:9", "2026-08-01", { status: "practice_rescheduled" }),                   // never: rescheduled
+      b("p:10", "2026-10-20"),                                                    // came in already, but booked < 45 days ago: not judged here
     ];
-    const claims = new Map<string, ZClaim[]>([["p:1", [c("2026-03-11", 9000)]], ["p:3", [c("2026-06-20", 8000)]]]);
+    const claims = new Map<string, ZClaim[]>([["p:1", [c("2026-03-11", 9000)]], ["p:3", [c("2026-06-20", 8000)]], ["p:10", [c("2026-10-21", 5000)]]]);
     const visits = new Map<string, ZVisit[]>([
       ["p:4", [{ date: "2026-05-02", kind: "seen" }]],
       ["p:5", [{ date: "2026-11-20", kind: "upcoming" }]],
@@ -143,7 +144,8 @@ describe("ZocDoc spend vs. revenue", () => {
     expect(Object.fromEntries(s.lost.reasons.map((r) => [r.key, r.patients]))).toEqual({ kept_booking: 2, patient_canceled: 1, rescheduled: 1, practice_canceled: 1 });
     expect(s.lost.notLost).toEqual({ came_later: { patients: 1, costCents: 4500 }, seen_no_payment: { patients: 1, costCents: 4500 }, upcoming: { patients: 1, costCents: 4500 } });
     expect(s.lost.months.find((m) => m.key === "2026-03")).toEqual({ key: "2026-03", judged: 2, lost: 1, costCents: 4500 });
-    expect(s.lost.months.some((m) => m.key === "2026-11")).toBe(false); // too soon isn't judged
+    expect(s.lost.months.some((m) => m.key === "2026-11" || m.key === "2026-10")).toBe(false); // booked < 45 days ago isn't judged, even if they came
+    expect(s.totals.cameIn).toBe(2); // ...but the main "Came in" card still counts p:10
     const outcome = (k: string) => s.people.find((p) => p.person === k)!.outcome;
     expect([outcome("p:1"), outcome("p:3"), outcome("p:4"), outcome("p:5"), outcome("p:7")]).toEqual(["came_in", "came_later", "seen_no_payment", "upcoming", "pending"]);
     // The old 45-day "no visit" count is exactly lost + the three "not lost" groups.
