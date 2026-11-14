@@ -1,7 +1,7 @@
 // ZocDoc in Master Billing: reading the report and the spend-vs-revenue math. Made-up patients only.
 import { describe, expect, it } from "vitest";
 import { parseCsvRows } from "../shared/workspace";
-import { bookingKeySource, detectZocdocMapping, parseZocdocRows, splitZocdocName, zocdocStatus, zocdocSummary, type ZBooking, type ZClaim } from "../shared/zocdoc";
+import { bookingKeySource, detectZocdocMapping, parseZocdocRows, splitZocdocName, zocdocStatus, zocdocSummary, type ZBooking, type ZClaim, type ZVisit } from "../shared/zocdoc";
 import { bookingKeyOf } from "./zocdocDb";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
@@ -115,6 +115,40 @@ describe("ZocDoc spend vs. revenue", () => {
     const s = zocdocSummary([b("p:1", "2026-02-01"), b("p:1", "2026-02-20", { costCents: 0 })], new Map([["p:1", [c("2026-02-21", 10000)]]]), "2026-11-14");
     expect(s.totals).toMatchObject({ patients: 1, chargedPatients: 1, cameIn: 1, paidFirstCents: 10000, spentCents: 4500 });
     expect(s.people[0]).toMatchObject({ bookings: 2, chargedBookings: 1, firstDate: "2026-02-01" });
+  });
+
+  it("money lost: only patients who never came (no claim, not seen, nothing booked), with why", () => {
+    const bookings = [
+      b("p:1", "2026-03-10"),                                                     // came in
+      b("p:2", "2026-03-15", { status: "practice_canceled" }),                      // never: practice canceled
+      b("p:3", "2026-04-01"),                                                     // came after 45 days
+      b("p:4", "2026-05-01"),                                                     // seen, insurance hasn't paid
+      b("p:5", "2026-05-05", { status: "patient_canceled" }),                       // has a visit booked
+      b("p:6", "2026-06-01"),                                                     // never: kept the booking, no-show on our schedule
+      b("u:x|1990-01-01", "2026-07-01", { status: "practice_rescheduled" }),        // never: last booking = patient canceled
+      b("u:x|1990-01-01", "2026-07-03", { status: "patient_canceled", costCents: 0 }),
+      b("p:7", "2026-11-01"),                                                     // too soon
+      b("p:8", "2026-02-01"),                                                     // never (their only visit was before the booking)
+      b("p:9", "2026-08-01", { status: "practice_rescheduled" }),                   // never: rescheduled
+    ];
+    const claims = new Map<string, ZClaim[]>([["p:1", [c("2026-03-11", 9000)]], ["p:3", [c("2026-06-20", 8000)]]]);
+    const visits = new Map<string, ZVisit[]>([
+      ["p:4", [{ date: "2026-05-02", kind: "seen" }]],
+      ["p:5", [{ date: "2026-11-20", kind: "upcoming" }]],
+      ["p:6", [{ date: "2026-06-01", kind: "no_show" }]],
+      ["p:8", [{ date: "2026-01-15", kind: "seen" }]],
+    ]);
+    const s = zocdocSummary(bookings, claims, "2026-11-14", visits);
+    expect(s.lost).toMatchObject({ patients: 5, judged: 9, costCents: 22500, notInMyPcp: 1, noShowOnSchedule: 1 });
+    expect(Object.fromEntries(s.lost.reasons.map((r) => [r.key, r.patients]))).toEqual({ kept_booking: 2, patient_canceled: 1, rescheduled: 1, practice_canceled: 1 });
+    expect(s.lost.notLost).toEqual({ came_later: { patients: 1, costCents: 4500 }, seen_no_payment: { patients: 1, costCents: 4500 }, upcoming: { patients: 1, costCents: 4500 } });
+    expect(s.lost.months.find((m) => m.key === "2026-03")).toEqual({ key: "2026-03", judged: 2, lost: 1, costCents: 4500 });
+    expect(s.lost.months.some((m) => m.key === "2026-11")).toBe(false); // too soon isn't judged
+    const outcome = (k: string) => s.people.find((p) => p.person === k)!.outcome;
+    expect([outcome("p:1"), outcome("p:3"), outcome("p:4"), outcome("p:5"), outcome("p:7")]).toEqual(["came_in", "came_later", "seen_no_payment", "upcoming", "pending"]);
+    // The old 45-day "no visit" count is exactly lost + the three "not lost" groups.
+    expect(s.leaks.noVisit.patients).toBe(5 + 3);
+    expect(s.leaks.alreadyOurs).toEqual({ patients: 0, costCents: 0 });
   });
 
   it("is only open to the owner (other admins and staff are refused before anything is read)", async () => {

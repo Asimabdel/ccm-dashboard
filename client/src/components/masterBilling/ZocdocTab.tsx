@@ -10,11 +10,15 @@ import { cn } from "@/lib/utils";
 import { headerSignature } from "@shared/billSheet";
 import { addDays, money } from "@shared/payments";
 import { localDateStr } from "@shared/workforce";
-import { CAME_IN_DAYS, ZOCDOC_FIELDS, ZOCDOC_FIELD_KEYS, ZOCDOC_STATUS_LABELS, parseZocdocRows, type ZocdocField, type ZocdocMapping } from "@shared/zocdoc";
+import {
+  CAME_IN_DAYS, ZOCDOC_FIELDS, ZOCDOC_FIELD_KEYS, ZOCDOC_LOST_REASONS, ZOCDOC_OUTCOME_LABELS, ZOCDOC_STATUS_LABELS, parseZocdocRows,
+  type ZLostReason, type ZOutcome, type ZocdocField, type ZocdocMapping, type ZocdocPatientFilter,
+} from "@shared/zocdoc";
 
 type Report = RouterOutputs["masterBilling"]["zocdocReport"];
 type ZRow = Report["months"][number];
-type Filter = "all" | "no_visit" | "practice_canceled" | "not_matched" | "already_ours" | "came_in";
+type LostRow = Report["lost"]["months"][number];
+type Filter = ZocdocPatientFilter;
 
 type Preset = "ytd" | "12m" | "3m" | "lastMonth" | "month" | "all";
 const PRESETS: { key: Preset; label: string }[] = [
@@ -35,9 +39,16 @@ function presetRange(p: Preset, today: string): { from: string; to: string } {
 }
 
 const FILTERS: { key: Filter; label: string }[] = [
-  { key: "all", label: "Everyone" }, { key: "no_visit", label: "Charged, never came in" }, { key: "practice_canceled", label: "Charged, practice canceled" },
-  { key: "not_matched", label: "Not found in MyPCP" }, { key: "already_ours", label: "Already our patient" }, { key: "came_in", label: "Came in" },
+  { key: "all", label: "Everyone" }, { key: "never", label: "Never came in (money lost)" }, { key: "seen_no_payment", label: "Seen, no insurance payment found" },
+  { key: "came_later", label: `Came in after ${CAME_IN_DAYS} days` }, { key: "upcoming", label: "Has a visit booked" }, { key: "no_visit", label: `No billed visit within ${CAME_IN_DAYS} days` },
+  { key: "practice_canceled", label: "Charged, practice canceled" }, { key: "not_matched", label: "Not found in MyPCP" }, { key: "already_ours", label: "Already our patient" },
+  { key: "came_in", label: "Came in" },
 ];
+const REASON_LABEL = Object.fromEntries(ZOCDOC_LOST_REASONS.map((r) => [r.key, r.label])) as Record<ZLostReason, string>;
+const OUTCOME_TONE: Record<ZOutcome, string> = {
+  came_in: "text-emerald-700 dark:text-emerald-300", came_later: "text-emerald-700 dark:text-emerald-300", pending: "text-slate-400",
+  seen_no_payment: "text-amber-700 dark:text-amber-300", upcoming: "text-blue-700 dark:text-blue-300", never: "text-rose-700 dark:text-rose-300",
+};
 
 const day = (d: string | null | undefined) => (d ? new Date(`${d}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—");
 const monthLabel = (m: string) => (/^\d{4}-\d{2}$/.test(m) ? new Date(`${m}-15T12:00:00`).toLocaleDateString("en-US", { month: "short", year: "numeric" }) : m);
@@ -100,19 +111,21 @@ export function ZocdocTab() {
             <MetricCard label="Already our patients" value={t.alreadyOurs.toLocaleString()} tone={t.alreadyOurs ? "warn" : "neutral"} hint="charged as new, but had a visit before" />
           </div>
 
+          <MoneyLost lost={d.lost} spentCents={t.spentCents} noVisit={d.leaks.noVisit.patients} onShow={showPatients} />
+
           <Panel title="By month booked" bodyClassName="p-0" action={<Btn size="sm" variant="secondary" onClick={monthsCsv}><Download size={13} /> CSV</Btn>}
             subtitle={`Cost by each booking's month; patients and insurance by the month of their first ZocDoc booking. Recent months fill in as insurance pays (Master Billing has payments through the last Office Ally upload).`}>
             <ZTable rows={d.months} label="Month" fmt={monthLabel} totals={t} />
           </Panel>
 
-          <Panel title="Where money leaks" subtitle="Charges that didn't turn into a visit. Click one to see the patients.">
+          <Panel title="Charges worth a look" subtitle="Per booking, whether or not the patient came in later. Click one to see the patients.">
             <div className="grid gap-3 md:grid-cols-2">
-              <Leak title="Charged, never came in" count={d.leaks.noVisit.patients} unit="patient" cents={d.leaks.noVisit.costCents} onClick={() => showPatients("no_visit")}
-                note={`No billed visit within ${CAME_IN_DAYS} days (${d.leaks.noVisit.notInMyPcp.toLocaleString()} of them aren't in MyPCP at all).`} />
               <Leak title="Charged, but the practice canceled" count={d.leaks.practiceCanceled.bookings} unit="booking" cents={d.leaks.practiceCanceled.costCents} onClick={() => showPatients("practice_canceled")}
                 note="Worth asking ZocDoc about: the practice canceled these bookings and was still charged." />
               <Leak title="Charged, but the patient canceled" count={d.leaks.patientCanceled.bookings} unit="booking" cents={d.leaks.patientCanceled.costCents}
-                note="The patient canceled and ZocDoc still charged. Some of them booked again and came in; the first card counts people who never did." />
+                note="The patient canceled and ZocDoc still charged. Some of them booked again and came in." />
+              <Leak title="Charged as new, but already our patient" count={d.leaks.alreadyOurs.patients} unit="patient" cents={d.leaks.alreadyOurs.costCents} onClick={() => showPatients("already_ours")}
+                note="Insurance paid us for a visit before their first ZocDoc booking. Worth asking ZocDoc about." />
               {d.leaks.cancellationCharges.bookings > 0 && <Leak title="Cancellation charges" count={d.leaks.cancellationCharges.bookings} unit="booking" cents={d.leaks.cancellationCharges.costCents}
                 note="ZocDoc's own reason says the charge was for a cancellation." />}
               {d.leaks.noShow.bookings > 0 && <Leak title="Charged no-shows" count={d.leaks.noShow.bookings} unit="booking" cents={d.leaks.noShow.costCents} note="Marked as a no-show in ZocDoc." />}
@@ -177,6 +190,114 @@ function ZTable({ rows, label, fmt, totals, compact }: { rows: ZRow[]; label: st
   );
 }
 
+/** What ZocDoc was paid for new patients who never came in at all, and why. */
+function MoneyLost({ lost, spentCents, noVisit, onShow }: { lost: Report["lost"]; spentCents: number; noVisit: number; onShow: (f: Filter) => void }) {
+  const csv = () => downloadCsv("zocdoc-money-lost-by-month.csv", [
+    ["Month of first booking", "New patients charged (window over)", "Never came in", "Share never came", "ZocDoc cost lost"],
+    ...lost.months.map((m) => [m.key, m.judged, m.lost, m.judged ? (m.lost / m.judged).toFixed(3) : "", (m.costCents / 100).toFixed(2)]),
+  ]);
+  const notLost: { key: "came_later" | "seen_no_payment" | "upcoming"; note: string }[] = [
+    { key: "seen_no_payment", note: "on our schedule or in the chart; check the claim was sent and paid" },
+    { key: "came_later", note: "a billed visit, just later" },
+    { key: "upcoming", note: "on our schedule; not lost yet" },
+  ];
+  const maxReason = Math.max(1, ...lost.reasons.map((r) => r.costCents));
+  return (
+    <Panel title="Money lost: paid ZocDoc, patient never came"
+      subtitle={`New patients ZocDoc charged for with no billed visit, no visit on our schedule or in the Practice Fusion chart, and nothing booked since. Only counts people booked at least ${CAME_IN_DAYS} days ago.`}
+      action={<Btn size="sm" variant="secondary" onClick={() => onShow("never")}>See these patients</Btn>}>
+      <div className="space-y-5">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <MetricCard label="Money lost" value={money(lost.costCents)} tone={lost.costCents ? "bad" : "neutral"} hint={`${pct(lost.costCents, spentCents)} of what ZocDoc cost`} />
+          <MetricCard label="Never came in" value={lost.patients.toLocaleString()} tone={lost.judged && lost.patients / lost.judged > 0.3 ? "bad" : "neutral"}
+            hint={`${pct(lost.patients, lost.judged)} of ${lost.judged.toLocaleString()} new patients charged`} />
+          <MetricCard label="Not in MyPCP at all" value={lost.notInMyPcp.toLocaleString()} hint="never became a patient of the practice" />
+          <MetricCard label="No-show on our schedule" value={lost.noShowOnSchedule.toLocaleString()} hint="booked with us too, didn't come" />
+        </div>
+
+        <div className="grid gap-5 lg:grid-cols-2">
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Why they never came (their last ZocDoc booking)</p>
+            <ul className="space-y-2">
+              {ZOCDOC_LOST_REASONS.map((r) => {
+                const row = lost.reasons.find((x) => x.key === r.key) ?? { patients: 0, costCents: 0 };
+                return (
+                  <li key={r.key}>
+                    <div className="flex items-baseline justify-between gap-3 text-sm">
+                      <span className="text-slate-700 dark:text-slate-200">{r.label}</span>
+                      <span className="shrink-0 tabular-nums text-slate-900 dark:text-slate-50">{money(row.costCents)} <span className="text-xs text-slate-500">· {row.patients.toLocaleString()}</span></span>
+                    </div>
+                    <div className="mt-1 h-2 rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-2 rounded-full bg-rose-500/80" style={{ width: `${(row.costCents / maxReason) * 100}%` }} /></div>
+                    <p className="mt-0.5 text-xs text-slate-500">{r.note}</p>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Not counted as lost</p>
+            <p className="mb-2 text-xs text-slate-500">{noVisit.toLocaleString()} charged new patients had no billed visit within {CAME_IN_DAYS} days. Besides the {lost.patients.toLocaleString()} who never came:</p>
+            <div className="space-y-2">
+              {notLost.map((n) => (
+                <button key={n.key} type="button" onClick={() => onShow(n.key)}
+                  className="flex w-full items-baseline justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-left text-sm hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/40">
+                  <span><span className="text-slate-700 dark:text-slate-200">{ZOCDOC_OUTCOME_LABELS[n.key]}</span><span className="block text-xs text-slate-500">{n.note}</span></span>
+                  <span className="shrink-0 tabular-nums font-medium text-slate-900 dark:text-slate-50">{lost.notLost[n.key].patients.toLocaleString()}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">By month of first booking</p>
+            <Btn size="sm" variant="secondary" onClick={csv}><Download size={13} /> CSV</Btn>
+          </div>
+          <LostTable rows={lost.months} label="Month" fmt={monthLabel} bars />
+        </div>
+
+        <div className="grid gap-5 xl:grid-cols-2">
+          <div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">By provider booked</p><LostTable rows={lost.providers} label="Provider" top={10} /></div>
+          <div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">By insurance (as booked)</p><LostTable rows={lost.insurances} label="Insurance" top={10} /></div>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function LostTable({ rows, label, fmt, bars, top }: { rows: LostRow[]; label: string; fmt?: (k: string) => string; bars?: boolean; top?: number }) {
+  const [all, setAll] = useState(false);
+  if (!rows.length) return <p className="py-3 text-sm text-slate-500">Nothing in this range yet.</p>;
+  const shown = top && !all ? rows.slice(0, top) : rows;
+  const max = Math.max(1, ...rows.map((r) => r.costCents));
+  return (
+    <div className="overflow-x-auto rounded-lg border border-slate-100 dark:border-slate-700/60">
+      <table className="w-full min-w-[480px] text-sm">
+        <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
+          <tr><th className="px-3 py-2 text-left font-medium">{label}</th><th className={th}>New pts</th><th className={th}>Never came</th><th className={th}>Money lost</th>{bars && <th className="w-1/4 px-3 py-2" />}</tr>
+        </thead>
+        <tbody>
+          {shown.map((r) => (
+            <tr key={r.key} className="border-t border-slate-100 dark:border-slate-700/60">
+              <td className="px-3 py-2">{fmt ? fmt(r.key) : r.key}</td>
+              <td className={td}>{r.judged.toLocaleString()}</td>
+              <td className={td}>{r.lost.toLocaleString()} <span className="text-xs text-slate-500">({pct(r.lost, r.judged)})</span></td>
+              <td className={td}>{money(r.costCents)}</td>
+              {bars && <td className="px-3 py-2"><div className="h-2 rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-2 rounded-full bg-rose-500/80" style={{ width: `${(r.costCents / max) * 100}%` }} /></div></td>}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {top && rows.length > top && (
+        <button type="button" onClick={() => setAll((x) => !x)} className="w-full border-t border-slate-100 px-3 py-2 text-xs font-medium text-blue-700 hover:bg-slate-50 dark:border-slate-700/60 dark:text-blue-300 dark:hover:bg-slate-800/40">
+          {all ? "Show the top 10" : `Show all ${rows.length}`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function Leak({ title, count, unit, cents, note, onClick }: { title: string; count: number; unit: string; cents: number; note: string; onClick?: () => void }) {
   const body = (
     <>
@@ -209,9 +330,10 @@ function Patients({ range, filter, setFilter }: { range: { from: string; to: str
         if (p * r.pageSize >= r.total) break;
       }
       downloadCsv(`zocdoc-patients-${filter}-${range.from}-to-${range.to}.csv`, [
-        ["Patient", "Date of birth", "First ZocDoc date", "Bookings", "Charged bookings", "ZocDoc cost", "Statuses", "In MyPCP", "Came in", "Insurance paid", "Billed to patient", "Provider", "Insurance"],
+        ["Patient", "Date of birth", "First ZocDoc date", "Bookings", "Charged bookings", "ZocDoc cost", "Statuses", "In MyPCP", "Outcome", "Why (never came)", "No-show on our schedule", "Insurance paid", "Billed to patient", "Provider", "Insurance"],
         ...all.map((r) => [niceName(r.name), r.dob ?? "", r.firstDate, r.bookings, r.chargedBookings, (r.costCents / 100).toFixed(2), r.statuses.map((s) => ZOCDOC_STATUS_LABELS[s]).join("; "),
-          r.matched ? "yes" : "no", r.pending ? "too soon" : r.cameIn ? "yes" : "no", ((r.paidFirstCents + r.paidLaterCents) / 100).toFixed(2), (r.owesCents / 100).toFixed(2), r.provider ?? "", r.insurance ?? ""]),
+          r.matched ? "yes" : "no", ZOCDOC_OUTCOME_LABELS[r.outcome], r.lostReason ? REASON_LABEL[r.lostReason] : "", r.noShowOnSchedule ? "yes" : "",
+          ((r.paidFirstCents + r.paidLaterCents) / 100).toFixed(2), (r.owesCents / 100).toFixed(2), r.provider ?? "", r.insurance ?? ""]),
       ]);
     } catch (e) {
       toast.error((e as Error).message);
@@ -237,7 +359,7 @@ function Patients({ range, filter, setFilter }: { range: { from: string; to: str
             <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
               <tr>
                 <th className="px-3 py-2 text-left font-medium">Patient</th><th className="px-3 py-2 text-left font-medium">First ZocDoc date</th><th className="px-3 py-2 text-left font-medium">ZocDoc status</th>
-                <th className={th}>Charged</th><th className="px-3 py-2 text-left font-medium">Came in</th><th className={th}>Insurance paid</th><th className="px-3 py-2 text-left font-medium">Provider</th>
+                <th className={th}>Charged</th><th className="px-3 py-2 text-left font-medium">Outcome</th><th className={th}>Insurance paid</th><th className="px-3 py-2 text-left font-medium">Provider</th>
               </tr>
             </thead>
             <tbody>
@@ -252,7 +374,10 @@ function Patients({ range, filter, setFilter }: { range: { from: string; to: str
                   <td className="px-3 py-2">{day(r.firstDate)}{r.bookings > 1 ? <span className="text-xs text-slate-400"> · {r.bookings} bookings</span> : null}</td>
                   <td className="px-3 py-2 text-xs">{Array.from(new Set(r.statuses)).map((s) => ZOCDOC_STATUS_LABELS[s]).join(", ")}</td>
                   <td className={td}>{r.costCents ? money(r.costCents) : "—"}</td>
-                  <td className="px-3 py-2">{r.cameIn ? <span className="text-emerald-700 dark:text-emerald-300">Yes</span> : r.pending ? <span className="text-slate-400">Too soon</span> : <span className="text-rose-700 dark:text-rose-300">No</span>}</td>
+                  <td className="px-3 py-2">
+                    <span className={OUTCOME_TONE[r.outcome]}>{ZOCDOC_OUTCOME_LABELS[r.outcome]}</span>
+                    {(r.lostReason || r.noShowOnSchedule) && <span className="block text-xs text-slate-400">{[r.lostReason ? REASON_LABEL[r.lostReason] : null, r.noShowOnSchedule ? "no-show on our schedule" : null].filter(Boolean).join(" · ")}</span>}
+                  </td>
                   <td className={td}>{money(r.paidFirstCents + r.paidLaterCents)}</td>
                   <td className="px-3 py-2 text-xs">{r.provider ?? "—"}</td>
                 </tr>

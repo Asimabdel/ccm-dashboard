@@ -8,12 +8,12 @@
 import { createHash } from "node:crypto";
 import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { billClaims, users, zocdocBookings, zocdocImports } from "../drizzle/schema";
-import { nameKey } from "../shared/workspace";
+import { billClaims, fhirResources, users, zocdocBookings, zocdocImports } from "../drizzle/schema";
+import { SEEN_STATUSES, nameKey } from "../shared/workspace";
 import { localDateStr } from "../shared/workforce";
-import { bookingKeySource, zocdocSummary, type ZBooking, type ZClaim, type ZocdocRow, type ZocdocStatus } from "../shared/zocdoc";
+import { bookingKeySource, zocdocSummary, type ZBooking, type ZClaim, type ZocdocPatientFilter, type ZocdocRow, type ZocdocStatus, type ZOutcome, type ZVisit } from "../shared/zocdoc";
 import { findPeople, type PeopleIndex } from "./billPatientMatch";
-import { audit, WorkspaceError, type WorkspaceActor } from "./workspaceDb";
+import { audit, loadScheduleSubjects, WorkspaceError, type WorkspaceActor } from "./workspaceDb";
 
 async function db() {
   const d = await getDb();
@@ -146,11 +146,33 @@ async function load(from: string, to: string) {
       claimsByPerson.set(person, [...(claimsByPerson.get(person) ?? []), { date: r.date!, paidCents: r.paid, owesCents: r.owes, billedCents: r.billed }]);
     }
   }
+
+  // Visits: our schedule (seen / no-show / canceled / booked) and signed Practice Fusion visits, so a patient who was
+  // seen but whose insurance hasn't paid isn't counted as "never came".
+  const today = localDateStr();
+  const visitsByPerson = new Map<string, ZVisit[]>();
+  const addVisit = (key: string, v: ZVisit) => { const person = aliasOf.get(key) ?? key; visitsByPerson.set(person, [...(visitsByPerson.get(person) ?? []), v]); };
+  if (allKeys.size) {
+    const schedule = await loadScheduleSubjects();
+    for (const k of keyList) {
+      for (const v of schedule.get(k)?.visits ?? []) {
+        const date = localDateStr(v.startsAt);
+        const kind: ZVisit["kind"] | null = SEEN_STATUSES.includes(v.status) ? "seen" : v.status === "no_show" ? "no_show" : v.status === "cancelled" ? "cancelled" : date >= today ? "upcoming" : null;
+        if (kind) addVisit(k, { date, kind });
+      }
+    }
+    // Encounters with no visit type ("Unknown") aren't visits (Practice Fusion made ~5,600 of them on 2026-09-28/29).
+    for (let i = 0; i < keyList.length; i += 1000) {
+      const rows = await d.select({ key: fhirResources.subjectKey, date: fhirResources.date, status: fhirResources.status }).from(fhirResources)
+        .where(and(eq(fhirResources.section, "Encounter"), inArray(fhirResources.subjectKey, keyList.slice(i, i + 1000)), isNotNull(fhirResources.date), isNotNull(fhirResources.title), sql`${fhirResources.title} <> 'Unknown'`));
+      for (const r of rows) if (r.key && r.date && r.date <= today && !["cancelled", "entered-in-error"].includes(r.status ?? "")) addVisit(r.key, { date: r.date, kind: "seen" });
+    }
+  }
   const zb: ZBooking[] = bookings.map((b) => ({
     person: personOf(b, aliasOf), matched: !!b.subjectKey, appointmentDate: b.appointmentDate, status: b.status as ZocdocStatus,
     patientType: (b.patientType as ZBooking["patientType"]) ?? null, costCents: b.costCents, costReason: b.costReason, providerName: b.providerName, insuranceCarrier: b.insuranceCarrier,
   }));
-  return { bookings, aliasOf, summary: zocdocSummary(zb, claimsByPerson, localDateStr()) };
+  return { bookings, aliasOf, summary: zocdocSummary(zb, claimsByPerson, today, visitsByPerson) };
 }
 
 /** The ZocDoc tab: spend vs. what those patients brought in, by month / provider / insurance, and where money leaks. */
@@ -165,7 +187,7 @@ export async function zocdocReport(a: WorkspaceActor, input: { from: string; to:
   return { ...rest, lastUpload: last ?? null, bookingsOnFile: Number(total) };
 }
 
-export type ZocdocPatientFilter = "all" | "no_visit" | "practice_canceled" | "not_matched" | "already_ours" | "came_in";
+export type { ZocdocPatientFilter } from "../shared/zocdoc";
 const PAGE = 50;
 
 /** One row per booked patient (owner only), for checking and for disputes with ZocDoc. */
@@ -183,6 +205,8 @@ export async function zocdocPatients(a: WorkspaceActor, input: { from: string; t
       case "not_matched": return !p.matched;
       case "already_ours": return p.alreadyOurs;
       case "came_in": return p.cameIn;
+      case "never": case "came_later": case "seen_no_payment": case "upcoming":
+        return p.isNew && p.chargedBookings > 0 && p.outcome === (input.filter as ZOutcome);
       default: return true;
     }
   };
@@ -219,5 +243,12 @@ export async function zocdocCounts(input: { from?: string; to?: string } = {}) {
     insurancePaidFirst45: dollars(t.paidFirstCents), insurancePaidLater: dollars(t.paidLaterCents), patientResponsibility: dollars(t.owesCents),
     leaks: { noVisit: { ...summary.leaks.noVisit, cost: dollars(summary.leaks.noVisit.costCents) }, practiceCanceled: { bookings: summary.leaks.practiceCanceled.bookings, cost: dollars(summary.leaks.practiceCanceled.costCents) }, patientCanceled: { bookings: summary.leaks.patientCanceled.bookings, cost: dollars(summary.leaks.patientCanceled.costCents) } },
     months: summary.months.map((m) => ({ month: m.key, charged: m.chargedBookings, cost: dollars(m.costCents), patients: m.patients, cameIn: m.cameIn, paid: dollars(m.paidCents) })),
+    lost: {
+      patients: summary.lost.patients, judged: summary.lost.judged, cost: dollars(summary.lost.costCents), notInMyPcp: summary.lost.notInMyPcp, noShowOnSchedule: summary.lost.noShowOnSchedule,
+      reasons: Object.fromEntries(summary.lost.reasons.map((r) => [r.key, { patients: r.patients, cost: dollars(r.costCents) }])),
+      notLost: Object.fromEntries(Object.entries(summary.lost.notLost).map(([k, v]) => [k, { patients: v.patients, cost: dollars(v.costCents) }])),
+      months: summary.lost.months.map((m) => `${m.key} ${m.lost}/${m.judged} $${dollars(m.costCents)}`),
+    },
+    alreadyOursCost: dollars(summary.leaks.alreadyOurs.costCents),
   };
 }

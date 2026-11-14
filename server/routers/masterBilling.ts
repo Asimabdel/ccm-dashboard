@@ -6,6 +6,7 @@ import { protectedProcedure, router } from "../_core/trpc";
 import { BILL_STATUSES } from "../../shared/billCodes";
 import { BREAKDOWN_DIM_KEYS, type BreakdownDim } from "../../shared/masterBilling";
 import { isValidDateStr } from "../../shared/workforce";
+import { ZOCDOC_PATIENT_FILTERS } from "../../shared/zocdoc";
 import * as mb from "../masterBillingDb";
 import { hasMasterBilling } from "../masterBillingAccess";
 import { WorkspaceError, type WorkspaceActor } from "../workspaceDb";
@@ -191,7 +192,7 @@ export const masterBillingRouter = router({
     return run(() => zocdocReport(actor, input));
   }),
   zocdocPatients: protectedProcedure.input(z.object({
-    from: dateStr, to: dateStr, filter: z.enum(["all", "no_visit", "practice_canceled", "not_matched", "already_ours", "came_in"]).default("all"), page: z.number().int().min(1).max(10_000).default(1),
+    from: dateStr, to: dateStr, filter: z.enum(ZOCDOC_PATIENT_FILTERS).default("all"), page: z.number().int().min(1).max(10_000).default(1),
   })).query(async ({ ctx, input }) => {
     const actor = await owner(ctx);
     const { zocdocPatients } = await import("../zocdocDb");

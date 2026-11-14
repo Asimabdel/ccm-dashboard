@@ -225,6 +225,31 @@ export interface ZBooking {
   insuranceCarrier: string | null;
 }
 export interface ZClaim { date: string; paidCents: number; owesCents: number; billedCents: number }
+/** A visit on our schedule or in the Practice Fusion chart ("upcoming" = still scheduled, in the future). */
+export interface ZVisit { date: string; kind: "seen" | "no_show" | "cancelled" | "upcoming" }
+
+/**
+ * What became of a booked patient. Without a billed visit within `CAME_IN_DAYS` days: they came later, were seen
+ * but no insurance payment is on file, have a visit booked, or never came (the money lost).
+ */
+export type ZOutcome = "came_in" | "pending" | "came_later" | "seen_no_payment" | "upcoming" | "never";
+export const ZOCDOC_OUTCOME_LABELS: Record<ZOutcome, string> = {
+  came_in: "Came in", pending: "Too soon to tell", came_later: `Came in after ${CAME_IN_DAYS} days`, seen_no_payment: "Seen, no insurance payment found",
+  upcoming: "Has a visit booked", never: "Never came in",
+};
+/** Why a patient who never came didn't: their LAST ZocDoc booking. */
+export type ZLostReason = "kept_booking" | "patient_canceled" | "rescheduled" | "practice_canceled";
+export const ZOCDOC_LOST_REASONS: { key: ZLostReason; label: string; note: string }[] = [
+  { key: "kept_booking", label: "Kept the booking, never showed", note: "ZocDoc still says booked; they didn't come (a no-show)." },
+  { key: "patient_canceled", label: "Patient canceled, never rebooked", note: "They canceled and didn't book again." },
+  { key: "rescheduled", label: "Rescheduled, never came", note: "The visit was moved and they didn't come to the new one." },
+  { key: "practice_canceled", label: "Practice canceled", note: "The practice canceled; worth asking ZocDoc about these charges." },
+];
+export interface ZLostRow { key: string; judged: number; lost: number; costCents: number }
+
+/** The patient list's filters (owner only). */
+export const ZOCDOC_PATIENT_FILTERS = ["all", "no_visit", "never", "seen_no_payment", "came_later", "upcoming", "practice_canceled", "not_matched", "already_ours", "came_in"] as const;
+export type ZocdocPatientFilter = (typeof ZOCDOC_PATIENT_FILTERS)[number];
 
 export interface ZPerson {
   person: string;
@@ -247,6 +272,11 @@ export interface ZPerson {
   practiceCanceledCharged: number;
   provider: string | null;
   insurance: string | null;
+  outcome: ZOutcome;
+  /** Only when they never came. */
+  lostReason: ZLostReason | null;
+  /** Marked as a no-show on our schedule after booking. */
+  noShowOnSchedule: boolean;
 }
 
 export interface ZRow { key: string; bookings: number; chargedBookings: number; costCents: number; patients: number; cameIn: number; judged: number; paidCents: number; owesCents: number }
@@ -268,6 +298,23 @@ export interface ZocdocSummary {
     /** Only when the file has a cost-reason column. */
     cancellationCharges: { bookings: number; costCents: number };
     noShow: { bookings: number; costCents: number };
+    /** Charged as new, but already had a claim before the first booking. */
+    alreadyOurs: { patients: number; costCents: number };
+  };
+  /** Money lost: charged new patients who never came in (window over; no claim, no seen visit, nothing booked). */
+  lost: {
+    patients: number;
+    /** Charged new patients whose window is over (the "out of"). */
+    judged: number;
+    costCents: number;
+    notInMyPcp: number;
+    noShowOnSchedule: number;
+    reasons: { key: ZLostReason; patients: number; costCents: number }[];
+    /** No billed visit within the window, but not lost. */
+    notLost: Record<"came_later" | "seen_no_payment" | "upcoming", { patients: number; costCents: number }>;
+    months: ZLostRow[];
+    providers: ZLostRow[];
+    insurances: ZLostRow[];
   };
   people: ZPerson[];
 }
@@ -283,7 +330,7 @@ const blank = (key: string): ZRow => ({ key, bookings: 0, chargedBookings: 0, co
  * Spend vs. what the booked patients brought in. Spend counts every booking in range; revenue counts the claims of
  * patients ZocDoc charged for as new, from their first booking on (first `CAME_IN_DAYS` days vs. later).
  */
-export function zocdocSummary(bookings: ZBooking[], claimsByPerson: Map<string, ZClaim[]>, today: string): ZocdocSummary {
+export function zocdocSummary(bookings: ZBooking[], claimsByPerson: Map<string, ZClaim[]>, today: string, visitsByPerson: Map<string, ZVisit[]> = new Map()): ZocdocSummary {
   const byPerson = new Map<string, ZBooking[]>();
   for (const b of bookings) byPerson.set(b.person, [...(byPerson.get(b.person) ?? []), b]);
 
@@ -299,7 +346,21 @@ export function zocdocSummary(bookings: ZBooking[], claimsByPerson: Map<string, 
     const windowEnd = plusDays(firstDate, CAME_IN_DAYS);
     const after = claims.filter((c) => c.date >= from);
     const inWindow = after.filter((c) => c.date <= windowEnd);
+    const visits = (visitsByPerson.get(person) ?? []).filter((v) => v.date >= from);
+    const outcome: ZOutcome = inWindow.length ? "came_in"
+      : windowEnd > today ? "pending"
+      : after.length ? "came_later"
+      : visits.some((v) => v.kind === "seen" && v.date <= today) ? "seen_no_payment"
+      : visits.some((v) => v.kind === "upcoming" && v.date >= today) ? "upcoming"
+      : "never";
+    const last = list[list.length - 1]!.status;
+    const lostReason: ZLostReason | null = outcome !== "never" ? null
+      : last === "patient_canceled" ? "patient_canceled"
+      : last === "practice_canceled" ? "practice_canceled"
+      : last === "practice_rescheduled" || last === "patient_rescheduled" ? "rescheduled"
+      : "kept_booking";
     people.push({
+      outcome, lostReason, noShowOnSchedule: visits.some((v) => v.kind === "no_show"),
       person, matched: first.matched, firstDate, bookings: list.length, chargedBookings: charged.length,
       costCents: charged.reduce((s, b) => s + b.costCents, 0), isNew,
       alreadyOurs: claims.some((c) => c.date < from),
@@ -345,6 +406,24 @@ export function zocdocSummary(bookings: ZBooking[], claimsByPerson: Map<string, 
   const noShow = bookings.filter((b) => b.costCents > 0 && b.status === "no_show");
   const byCost = (a: ZRow, b: ZRow) => b.costCents - a.costCents || b.bookings - a.bookings;
 
+  // Money lost: who never came, by first-booking month / provider / insurance.
+  const judged = paying.filter((p) => !p.pending);
+  const never = judged.filter((p) => p.outcome === "never");
+  const lostBy = (f: (p: ZPerson) => string) => {
+    const m = new Map<string, ZLostRow>();
+    for (const p of judged) {
+      const k = f(p);
+      const r = m.get(k) ?? { key: k, judged: 0, lost: 0, costCents: 0 };
+      r.judged++;
+      if (p.outcome === "never") { r.lost++; r.costCents += p.costCents; }
+      m.set(k, r);
+    }
+    return Array.from(m.values());
+  };
+  const byLost = (a: ZLostRow, b: ZLostRow) => b.costCents - a.costCents || b.lost - a.lost || a.key.localeCompare(b.key);
+  const outcomeTotal = (o: ZOutcome) => { const l = judged.filter((p) => p.outcome === o); return { patients: l.length, costCents: sum(l, (p) => p.costCents) }; };
+  const ours = paying.filter((p) => p.alreadyOurs);
+
   return {
     totals: {
       bookings: bookings.length,
@@ -372,6 +451,19 @@ export function zocdocSummary(bookings: ZBooking[], claimsByPerson: Map<string, 
       patientCanceled: { bookings: patientCanceled.length, costCents: sum(patientCanceled, (b) => b.costCents) },
       cancellationCharges: { bookings: cancelCharged.length, costCents: sum(cancelCharged, (b) => b.costCents) },
       noShow: { bookings: noShow.length, costCents: sum(noShow, (b) => b.costCents) },
+      alreadyOurs: { patients: ours.length, costCents: sum(ours, (p) => p.costCents) },
+    },
+    lost: {
+      patients: never.length,
+      judged: judged.length,
+      costCents: sum(never, (p) => p.costCents),
+      notInMyPcp: never.filter((p) => !p.matched).length,
+      noShowOnSchedule: never.filter((p) => p.noShowOnSchedule).length,
+      reasons: ZOCDOC_LOST_REASONS.map(({ key }) => { const l = never.filter((p) => p.lostReason === key); return { key, patients: l.length, costCents: sum(l, (p) => p.costCents) }; }),
+      notLost: { came_later: outcomeTotal("came_later"), seen_no_payment: outcomeTotal("seen_no_payment"), upcoming: outcomeTotal("upcoming") },
+      months: lostBy((p) => p.firstDate.slice(0, 7)).sort((a, b) => a.key.localeCompare(b.key)),
+      providers: lostBy((p) => p.provider || "(not in the file)").sort(byLost),
+      insurances: lostBy((p) => p.insurance || "(none / self-pay)").sort(byLost),
     },
     people,
   };
