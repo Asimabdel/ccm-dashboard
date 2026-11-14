@@ -308,6 +308,8 @@ export async function zocdocSeenNoPaymentCounts(input: { from?: string; to?: str
   const evidence: string[] = [], age: string[] = [], month: string[] = [], found: string[] = [], foundStatus: string[] = [];
   const provider: (string | null)[] = [], visitType: (string | null | undefined)[] = [];
   let costCents = 0, twoPlusVisits = 0;
+  /** Per ZocDoc insurance: how many have a signed Practice Fusion visit note vs. only "seen" on our schedule. */
+  const byInsurance = new Map<string, { patients: number; signedNote: number; scheduleOnly: number }>();
   for (const p of list) {
     const n = named.get(p.person) ?? { first: null, last: null, dob: null };
     const seen = seenOf(p);
@@ -316,6 +318,10 @@ export async function zocdocSeenNoPaymentCounts(input: { from?: string; to?: str
     if (seen.length > 1) twoPlusVisits++;
     const chart = seen.some((v) => v.source === "chart"), sched = seen.some((v) => v.source === "schedule");
     evidence.push(chart && sched ? "schedule + signed chart visit" : chart ? "signed chart visit only" : "schedule only");
+    const ins = byInsurance.get(p.insurance || "(none / self-pay)") ?? { patients: 0, signedNote: 0, scheduleOnly: 0 };
+    ins.patients++;
+    if (chart) ins.signedNote++; else ins.scheduleOnly++;
+    byInsurance.set(p.insurance || "(none / self-pay)", ins);
     const days = Math.round((Date.parse(`${today}T12:00:00Z`) - Date.parse(`${first.date}T12:00:00Z`)) / 86_400_000);
     age.push(days <= 30 ? "0-30 days ago" : days <= 60 ? "31-60 days ago" : days <= 90 ? "61-90 days ago" : "over 90 days ago");
     month.push(first.date.slice(0, 7));
@@ -336,6 +342,9 @@ export async function zocdocSeenNoPaymentCounts(input: { from?: string; to?: str
     visitEvidence: tally(evidence), seenMoreThanOnce: twoPlusVisits,
     firstVisitAge: tally(age), firstVisitMonth: Object.fromEntries(Object.entries(tally(month, 24)).sort()),
     provider: tally(provider), visitType: tally(visitType, 10),
-    zocdocInsurance: tally(list.map((p) => p.insurance)), lastZocdocStatus: tally(list.map((p) => p.statuses[p.statuses.length - 1])),
+    zocdocInsurance: tally(list.map((p) => p.insurance)),
+    insuranceBySignedNote: Object.fromEntries(Array.from(byInsurance.entries()).sort((a, b) => b[1].patients - a[1].patients)),
+    insurersWithPaymentFiles: (await d.selectDistinct({ payer: billClaims.payerName }).from(billClaims)).map((r) => r.payer).filter(Boolean),
+    lastZocdocStatus: tally(list.map((p) => p.statuses[p.statuses.length - 1])),
   };
 }
