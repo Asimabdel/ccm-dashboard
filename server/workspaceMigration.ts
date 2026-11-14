@@ -31,6 +31,8 @@ const ENUM_ADDITIONS: { table: string; column: string; values: string[] }[] = [
   { table: "auditLogs", column: "action", values: ["view_master_billing", "import_bills", "remove_bill_import", "link_bill_patient"] },
   // Added 2026-11-12: Payroll in Master Billing (owner only).
   { table: "auditLogs", column: "action", values: ["view_payroll", "set_pay_rate"] },
+  // Added 2026-11-13: ZocDoc in Master Billing (owner only).
+  { table: "auditLogs", column: "action", values: ["view_zocdoc", "import_zocdoc"] },
 ];
 
 export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
@@ -1311,6 +1313,46 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     INDEX \`payRates_user_idx\` (\`userId\`, \`startDate\`),
     CONSTRAINT \`payRates_userId_fk\` FOREIGN KEY (\`userId\`) REFERENCES \`users\`(\`id\`),
     CONSTRAINT \`payRates_createdByUserId_fk\` FOREIGN KEY (\`createdByUserId\`) REFERENCES \`users\`(\`id\`))` },
+  // ZocDoc in Master Billing (owner only, added 2026-11-13): uploaded ZocDoc reports and their bookings.
+  { label: "zocdocImports", sql: `CREATE TABLE IF NOT EXISTS \`zocdocImports\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`fileName\` varchar(255) NOT NULL,
+    \`sha256\` varchar(64) NOT NULL,
+    \`rowCount\` int NOT NULL DEFAULT 0,
+    \`firstDate\` varchar(10),
+    \`lastDate\` varchar(10),
+    \`uploadedByUserId\` int,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    CONSTRAINT \`zocdocImports_uploadedByUserId_fk\` FOREIGN KEY (\`uploadedByUserId\`) REFERENCES \`users\`(\`id\`))` },
+  { label: "zocdocBookings", sql: `CREATE TABLE IF NOT EXISTS \`zocdocBookings\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`bookingKey\` varchar(80) NOT NULL,
+    \`appointmentAt\` varchar(16) NOT NULL,
+    \`appointmentDate\` varchar(10) NOT NULL,
+    \`bookedAt\` varchar(16),
+    \`status\` varchar(24) NOT NULL,
+    \`statusText\` varchar(80),
+    \`patientType\` varchar(10),
+    \`costCents\` int NOT NULL DEFAULT 0,
+    \`costReason\` varchar(80),
+    \`bookingSource\` varchar(80),
+    \`providerName\` varchar(160),
+    \`locationName\` varchar(160),
+    \`insuranceCarrier\` varchar(160),
+    \`insurancePlan\` varchar(160),
+    \`visitReason\` varchar(160),
+    \`patientFirst\` varchar(100),
+    \`patientLast\` varchar(100),
+    \`patientDob\` varchar(10),
+    \`subjectKey\` varchar(120),
+    \`matchSource\` varchar(20),
+    \`lastImportId\` int,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE INDEX \`zocdocBookings_bookingKey_unique\` (\`bookingKey\`),
+    INDEX \`zocdocBookings_date_idx\` (\`appointmentDate\`),
+    INDEX \`zocdocBookings_subject_idx\` (\`subjectKey\`),
+    CONSTRAINT \`zocdocBookings_lastImportId_fk\` FOREIGN KEY (\`lastImportId\`) REFERENCES \`zocdocImports\`(\`id\`))` },
 ];
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;

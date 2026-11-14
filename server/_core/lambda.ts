@@ -389,6 +389,14 @@ export const handler = async (event: any, context: any) => {
     const { masterBillingCounts } = await import("../masterBillingDb");
     return masterBillingCounts();
   }
+  // ZocDoc in Master Billing: counts and dollar totals only, no patient details (IAM-only).
+  // { from?, to? } = appointment dates (default this year); { rematch: true } first matches unmatched bookings again.
+  if (event && event.__job === "zocdoc-counts" && !event.requestContext && !event.version) {
+    const { zocdocCounts, rematchUnmatched } = await import("../zocdocDb");
+    const e = event as { from?: string; to?: string; rematch?: boolean };
+    const rematched = e.rematch ? await rematchUnmatched() : null;
+    return { rematched, ...(await zocdocCounts({ from: e.from, to: e.to })) };
+  }
   // Master Billing: match saved claims to patients again after matching improves (IAM-only; counts only; dry run unless apply).
   if (event && event.__job === "master-billing-rematch" && !event.requestContext && !event.version) {
     const { rematchClaims } = await import("../masterBillingDb");

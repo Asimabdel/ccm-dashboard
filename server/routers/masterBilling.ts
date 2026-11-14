@@ -60,6 +60,14 @@ const filters = z.object({
   closeMatch: z.boolean().nullish(), subjectKey: z.string().max(120).nullish(),
 });
 const importId = z.number().int().positive();
+const shortText = (n: number) => z.string().max(n).nullable();
+const zocdocRow = z.object({
+  appointmentId: shortText(60), patientFirst: shortText(100), patientLast: shortText(100), patientDob: ymd,
+  appointmentAt: z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/), appointmentDate: dateStr, bookedAt: z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/).nullable(),
+  status: z.enum(["confirmed", "completed", "patient_canceled", "practice_canceled", "patient_rescheduled", "practice_rescheduled", "no_show", "other"]),
+  statusText: shortText(80), patientType: z.enum(["new", "existing"]).nullable(), costCents: z.number().int().min(0).max(10_000_000), costReason: shortText(80),
+  bookingSource: shortText(80), providerName: shortText(160), locationName: shortText(160), insuranceCarrier: shortText(160), insurancePlan: shortText(160), visitReason: shortText(160),
+});
 const subjectKey = z.string().regex(/^(p:\d+|s:.{1,110}|f:.{1,120})$/);
 
 export const masterBillingRouter = router({
@@ -160,6 +168,39 @@ export const masterBillingRouter = router({
     const actor = await owner(ctx);
     const { removePayRate } = await import("../payrollDb");
     return run(() => removePayRate(actor, input.id));
+  }),
+
+  /** ZocDoc: an uploaded "Appointment report" file starts here (one row per file). */
+  zocdocImportStart: protectedProcedure.input(z.object({
+    fileName: z.string().min(1).max(255), sha256: z.string().regex(/^[a-f0-9]{64}$/), rowCount: z.number().int().min(0).max(1_000_000), firstDate: ymd, lastDate: ymd,
+  })).mutation(async ({ ctx, input }) => {
+    const actor = await owner(ctx);
+    const { importStart } = await import("../zocdocDb");
+    return run(() => importStart(actor, input));
+  }),
+  /** ZocDoc: the bookings the browser read, up to 500 at a time (the same booking again updates its row). */
+  zocdocImportRows: protectedProcedure.input(z.object({ importId: z.number().int().positive(), rows: z.array(zocdocRow).max(500) })).mutation(async ({ ctx, input }) => {
+    const actor = await owner(ctx);
+    const { importRows } = await import("../zocdocDb");
+    return run(() => importRows(actor, input));
+  }),
+  /** ZocDoc: spend vs. what those patients brought in, for a date range of appointments. */
+  zocdocReport: protectedProcedure.input(z.object({ from: dateStr, to: dateStr })).query(async ({ ctx, input }) => {
+    const actor = await owner(ctx);
+    const { zocdocReport } = await import("../zocdocDb");
+    return run(() => zocdocReport(actor, input));
+  }),
+  zocdocPatients: protectedProcedure.input(z.object({
+    from: dateStr, to: dateStr, filter: z.enum(["all", "no_visit", "practice_canceled", "not_matched", "already_ours", "came_in"]).default("all"), page: z.number().int().min(1).max(10_000).default(1),
+  })).query(async ({ ctx, input }) => {
+    const actor = await owner(ctx);
+    const { zocdocPatients } = await import("../zocdocDb");
+    return run(() => zocdocPatients(actor, input));
+  }),
+  zocdocImports: protectedProcedure.query(async ({ ctx }) => {
+    await owner(ctx);
+    const { zocdocImportsList } = await import("../zocdocDb");
+    return zocdocImportsList();
   }),
 
   /** Pick the patient (null = match again; `none` = the patient isn't in MyPCP, leave it unmatched). */

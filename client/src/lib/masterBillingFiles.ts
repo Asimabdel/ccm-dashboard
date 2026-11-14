@@ -146,6 +146,26 @@ export async function prepareFiles(files: File[], onProgress?: (done: number, to
   return [...notes, ...out];
 }
 
+/** One table file (CSV or Excel) → rows, for reports like ZocDoc's that aren't bills. */
+export async function readTableFile(file: File): Promise<{ name: string; sha256: string; rows: string[][] } | { error: string }> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (bytes.length > MAX_BYTES) return { error: "Too big (25 MB at most)." };
+  const sha256 = await sha256Hex(bytes);
+  if (isZip(bytes) && /\.xlsx$/i.test(file.name)) {
+    try {
+      const { default: readXlsxFile } = await import("read-excel-file");
+      const raw = (await readXlsxFile(new Blob([bytes as BlobPart]))) as unknown[][];
+      return { name: file.name, sha256, rows: raw.map((r) => r.map(cellText)) };
+    } catch {
+      return { error: "This Excel file couldn't be read. Try File → Save As → CSV and upload that." };
+    }
+  }
+  if (/\.xls$/i.test(file.name)) return { error: "Old Excel (.xls) files can't be read. Save it as .xlsx or CSV and upload that." };
+  const rows = parseCsvRows(decode(bytes));
+  if (rows.length < 2) return { error: "This file has no rows to read." };
+  return { name: file.name, sha256, rows };
+}
+
 export function toBase64(bytes: Uint8Array): string {
   let s = "";
   for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...Array.from(bytes.subarray(i, i + 0x8000)));

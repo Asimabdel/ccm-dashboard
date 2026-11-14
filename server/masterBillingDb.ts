@@ -268,7 +268,8 @@ let peopleCache: { at: number; nameDob: MatchContext["nameDob"]; names: MatchCon
 const ymdOf = (dt: Date | null | undefined) => (dt ? dt.toISOString().slice(0, 10) : null);
 const MISSED = /cancel|no.?show/i;
 
-async function people() {
+/** Everyone MyPCP knows (roster, schedule, Practice Fusion) for matching a bill / booking to a person; cached a minute. Also used by server/zocdocDb.ts. */
+export async function people() {
   if (peopleCache && Date.now() - peopleCache.at < 60_000) return peopleCache;
   const d = await db();
   const nameDob = new Map<string, { key: string; patientId: number | null }>();

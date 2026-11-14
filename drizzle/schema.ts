@@ -480,6 +480,9 @@ export const auditLogs = mysqlTable("auditLogs", {
     // Payroll in Master Billing (owner only), added 2026-11-12
     "view_payroll",
     "set_pay_rate",
+    // ZocDoc in Master Billing (owner only), added 2026-11-13
+    "view_zocdoc",
+    "import_zocdoc",
   ]).notNull(),
   entityType: varchar("entityType", { length: 50 }),
   entityId: int("entityId"),
@@ -2411,4 +2414,55 @@ export const payRates = mysqlTable("payRates", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (t) => ({
   userIdx: index("payRates_user_idx").on(t.userId, t.startDate),
+}));
+
+/**
+ * ZocDoc in Master Billing (owner only, 2026-11-13): each uploaded ZocDoc "Appointment report" file.
+ * The same booking in a later file updates its row (bookingKey), so re-uploading "this year" is safe.
+ */
+export const zocdocImports = mysqlTable("zocdocImports", {
+  id: int("id").autoincrement().primaryKey(),
+  fileName: varchar("fileName", { length: 255 }).notNull(),
+  sha256: varchar("sha256", { length: 64 }).notNull(),
+  rowCount: int("rowCount").default(0).notNull(),
+  firstDate: varchar("firstDate", { length: 10 }),
+  lastDate: varchar("lastDate", { length: 10 }),
+  uploadedByUserId: int("uploadedByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+/** One ZocDoc booking (appointment). No phone, email or address is kept (only what the numbers need). */
+export const zocdocBookings = mysqlTable("zocdocBookings", {
+  id: int("id").autoincrement().primaryKey(),
+  /** ZocDoc's appointment ID when the file has one, else a hash of patient + DOB + appointment time + provider. */
+  bookingKey: varchar("bookingKey", { length: 80 }).notNull().unique(),
+  /** Clinic-local "YYYY-MM-DD HH:MM" as the file says it. */
+  appointmentAt: varchar("appointmentAt", { length: 16 }).notNull(),
+  appointmentDate: varchar("appointmentDate", { length: 10 }).notNull(),
+  bookedAt: varchar("bookedAt", { length: 16 }),
+  /** confirmed | patient_canceled | practice_canceled | practice_rescheduled | no_show | other (shared/zocdoc.ts). */
+  status: varchar("status", { length: 24 }).notNull(),
+  statusText: varchar("statusText", { length: 80 }),
+  /** new | existing | (null = not in the file) */
+  patientType: varchar("patientType", { length: 10 }),
+  costCents: int("costCents").default(0).notNull(),
+  costReason: varchar("costReason", { length: 80 }),
+  bookingSource: varchar("bookingSource", { length: 80 }),
+  providerName: varchar("providerName", { length: 160 }),
+  locationName: varchar("locationName", { length: 160 }),
+  insuranceCarrier: varchar("insuranceCarrier", { length: 160 }),
+  insurancePlan: varchar("insurancePlan", { length: 160 }),
+  visitReason: varchar("visitReason", { length: 160 }),
+  patientFirst: varchar("patientFirst", { length: 100 }),
+  patientLast: varchar("patientLast", { length: 100 }),
+  patientDob: varchar("patientDob", { length: 10 }),
+  /** The MyPCP person (subjectKeyFor), matched by name + date of birth. */
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  matchSource: varchar("matchSource", { length: 20 }),
+  lastImportId: int("lastImportId").references(() => zocdocImports.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  dateIdx: index("zocdocBookings_date_idx").on(t.appointmentDate),
+  subjectIdx: index("zocdocBookings_subject_idx").on(t.subjectKey),
 }));

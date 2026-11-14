@@ -274,6 +274,8 @@ type AuditAction =
   | "link_bill_patient"
   | "view_payroll"
   | "set_pay_rate"
+  | "view_zocdoc"
+  | "import_zocdoc"
   | "export_data";
 
 export async function audit(actor: WorkspaceActor, action: AuditAction, opts: { entityType?: string; entityId?: number; description?: string } = {}) {
