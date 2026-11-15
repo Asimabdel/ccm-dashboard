@@ -3,14 +3,14 @@ import { can } from "./workspace";
 /**
  * The menu pages that can show a number bubble ("this many are waiting") for a role.
  * Each follows who can really open that page and act on it there:
- *  - Website bookings opens only for people who also handle the patient inboxes;
+ *  - the patient inboxes (Faxes, Patient emails) are for the people who match them to patients;
  *  - filing finished patient forms is office work, so providers get no bubble for it;
  *  - Refill Requests / Escalations are for providers and admins; Follow-ups for admins, front desk and MAs.
  */
 export function navCountPaths(role: string): string[] {
   if (!can(role, "tasks")) return [];
   const out = ["/my-work"];
-  if (can(role, "bookings") && can(role, "emailTriage")) out.push("/bookings");
+  if (can(role, "bookings")) out.push("/bookings");
   if (can(role, "emailTriage")) out.push("/faxes", "/patient-emails");
   if (can(role, "documents")) out.push("/documents");
   if (can(role, "intakeForms") && role !== "provider") out.push("/intake-forms");

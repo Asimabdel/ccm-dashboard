@@ -41,7 +41,8 @@ export default function WebsiteBookingsPage() {
   const ws = useWorkspace();
   const deepLink = typeof window !== "undefined" ? Number(new URLSearchParams(window.location.search).get("b")) || null : null;
   const [filter, setFilter] = useState<Filter>(deepLink ? "all" : "open");
-  const enabled = !!user && !!ws.caps?.emailTriage;
+  // The same rule as the server: everyone with the bookings ability (office managers: their own office's requests).
+  const enabled = !!user && !!ws.caps?.bookings;
   const list = trpc.workspace.bookings.list.useQuery({ filter }, { enabled, refetchInterval: 30_000 });
   const stats = trpc.workspace.bookings.stats.useQuery(undefined, { enabled, refetchInterval: 60_000 });
   const utils = trpc.useUtils();
@@ -79,7 +80,7 @@ export default function WebsiteBookingsPage() {
         subtitle="Appointment requests from mypcpdr.com. Call to confirm, book it in Practice Fusion, then mark how it went."
         actions={user?.role === "admin" ? <Btn variant="secondary" size="sm" disabled={importing} onClick={loadEarlier}>{importing ? <Loader2 size={14} className="animate-spin" /> : <History size={14} />} Load earlier bookings from email</Btn> : undefined}
       />
-      {ws.caps && !ws.caps.emailTriage && <ErrorNote message="You don't have access to website bookings." />}
+      {ws.caps && !ws.caps.bookings && <ErrorNote message="You don't have access to website bookings." />}
       {s && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
           <Stat label="Waiting for a call" value={s.waiting} tone={s.waiting ? "warn" : undefined} sub={s.overdue ? `${s.overdue} not called after ${WAIT_ALERT_MIN}+ min` : undefined} />

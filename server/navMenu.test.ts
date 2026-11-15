@@ -38,8 +38,8 @@ describe("side menu: who gets which number bubbles", () => {
     expect(navCountPaths("staff")).toEqual(["/my-work", "/bookings", "/faxes", "/patient-emails", "/documents", "/intake-forms"]);
     // Providers: their own refills and escalations; filing forms and the patient inboxes are office work.
     expect(navCountPaths("provider")).toEqual(["/my-work", "/documents", "/refill-requests", "/escalations"]);
-    // The office manager cannot open the patient inboxes (so no Website bookings bubble either).
-    expect(navCountPaths("office_manager")).toEqual(["/my-work", "/documents", "/intake-forms"]);
+    // The office manager: her office's website bookings, but not the patient inboxes (Faxes, Patient emails).
+    expect(navCountPaths("office_manager")).toEqual(["/my-work", "/bookings", "/documents", "/intake-forms"]);
     expect(navCountPaths("billing")).toEqual(["/my-work"]);
   });
 
