@@ -40,6 +40,12 @@ describe("reading ZocDoc's appointment report", () => {
     expect(p.rows).toHaveLength(2);
     expect(p.rows[0]).toMatchObject({ appointmentId: "apt_test-1", patientDob: "2000-02-12", appointmentAt: "2026-01-01 09:05", appointmentDate: "2026-01-01", bookedAt: "2025-12-30 20:05", status: "patient_canceled", patientType: "new", costCents: 4500, providerName: "Dr. Test One", locationName: "Test Clinic", insuranceCarrier: "Sample Health", insurancePlan: "Sample PPO", bookingSource: "Zocdoc Marketplace", visitReason: "Sick Visit" });
     expect(p.rows[1]).toMatchObject({ patientDob: null, appointmentAt: "2026-11-13 12:30", costCents: 0 });
+    // ZocDoc leaves "Location" empty in the real download: the office address is used instead, also under a
+    // column mapping saved before "Location address" existed.
+    const blank = parseCsvRows([head, row("apt_test-3", "2000-02-12", "1/2/2026 9:05 AM", "Confirmed", "45").replace(",Test Clinic,", ",,")].join("\r\n"));
+    expect(parseZocdocRows(blank).rows[0]!.locationName).toBe("1 Test St");
+    expect(parseZocdocRows(blank, { appointmentId: 0, provider: 1, location: 2, firstName: 4, lastName: 5, appointmentAt: 11 }).rows[0]!.locationName).toBe("1 Test St");
+    expect(parseZocdocRows(blank, { appointmentId: 0, firstName: 4, lastName: 5, appointmentAt: 11, location: 2, locationAddress: undefined }).rows[0]!.locationName).toBeNull();
     const s = zocdocSummary(p.rows.map((r) => ({ person: "u:jane", matched: false, appointmentDate: r.appointmentDate, status: r.status, patientType: r.patientType, costCents: r.costCents, costReason: r.costReason, providerName: r.providerName, insuranceCarrier: r.insuranceCarrier })), new Map(), "2026-11-14");
     expect(s.leaks.patientCanceled).toEqual({ bookings: 1, costCents: 4500 });
     expect(s.leaks.cancellationCharges).toEqual({ bookings: 0, costCents: 0 });

@@ -416,7 +416,8 @@ function ZocdocUpload({ onClose }: { onClose: () => void }) {
   const signature = parsed ? `zocdoc|${headerSignature(parsed.headers)}` : "";
   const saved = trpc.masterBilling.sheetMapping.useQuery({ signature: signature.slice(0, 600) }, { enabled: !!parsed, staleTime: Infinity });
   useEffect(() => {
-    if (saved.data && !override) setOverride(Object.fromEntries(Object.entries(saved.data as Record<string, number>).filter(([, v]) => v >= 0)) as ZocdocMapping);
+    // -1 = "not in this file" (kept, so it isn't re-detected); fields the saved mapping doesn't list are detected.
+    if (saved.data && !override) setOverride(Object.fromEntries(Object.entries(saved.data as Record<string, number>).map(([k, v]) => [k, v >= 0 ? v : undefined])) as ZocdocMapping);
   }, [saved.data, override]);
   const mapping = parsed?.mapping ?? {};
   const rows = parsed?.rows ?? [];

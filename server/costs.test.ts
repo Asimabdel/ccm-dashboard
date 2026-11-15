@@ -46,6 +46,10 @@ describe("monthly costs", () => {
     expect(matchClinic("Highland Knolls Office, Katy TX", clinics)?.id).toBe(4);
     expect(matchClinic("12121 Richmond Ave Suite 216, Houston", clinics)?.id).toBe(3);
     expect(matchClinic("Lakeview Haven", clinics)?.id).toBe(2);
+    // ZocDoc's LocationAddress style: "<number> <street>, Ste <n>, <city>, TX, <zip>".
+    expect(matchClinic("7050 Lakeview Haven Dr, Ste 100, Houston, TX, 77095", clinics)?.id).toBe(2);
+    expect(matchClinic("100 Provincial Blvd, Katy, TX, 77450", clinics)?.id).toBe(1);
+    expect(matchClinic("12121 Richmond Ave, Ste 216, Houston, TX, 77082", clinics)?.id).toBe(3);
     expect(matchClinic("Sugar Land", clinics)).toBeNull();
     expect(matchClinic(null, clinics)).toBeNull();
   });

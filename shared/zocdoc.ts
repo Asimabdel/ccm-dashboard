@@ -21,6 +21,7 @@ export const ZOCDOC_FIELDS = {
   bookingSource: "Booking source",
   provider: "Provider",
   location: "Location",
+  locationAddress: "Location address",
   insuranceCarrier: "Insurance",
   insurancePlan: "Insurance plan",
   visitReason: "Visit reason",
@@ -48,11 +49,13 @@ const ALIASES: Record<ZocdocField, string[]> = {
   bookingSource: ["booking source", "source", "source channel", "channel", "booked via", "booked through", "booking channel"],
   provider: ["professional", "provider", "doctor", "provider name", "professional name", "physician"],
   location: ["location", "office", "practice location", "location name", "address"],
+  // ZocDoc's real download (checked 2026-11-15) leaves "Location" empty and puts the office in "LocationAddress".
+  locationAddress: ["location address", "office address", "practice address"],
   insuranceCarrier: ["insurance", "insurance carrier", "carrier", "insurance company", "payer", "insurance name"],
   insurancePlan: ["insurance plan", "plan", "plan name"],
   visitReason: ["appointment type", "visit reason", "reason for visit", "procedure", "visit type", "reason", "service"],
 };
-const FIELD_ORDER: ZocdocField[] = ["appointmentId", "firstName", "lastName", "patientName", "dob", "bookedAt", "appointmentDate", "appointmentAt", "appointmentTime", "status", "patientType", "costReason", "cost", "bookingSource", "provider", "location", "insurancePlan", "insuranceCarrier", "visitReason"];
+const FIELD_ORDER: ZocdocField[] = ["appointmentId", "firstName", "lastName", "patientName", "dob", "bookedAt", "appointmentDate", "appointmentAt", "appointmentTime", "status", "patientType", "costReason", "cost", "bookingSource", "provider", "location", "locationAddress", "insurancePlan", "insuranceCarrier", "visitReason"];
 
 const normHeader = (h: string) => h.replace(/^﻿/, "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_\s]+/g, " ").replace(/\s*#/g, " #").toLowerCase().trim();
 
@@ -154,7 +157,9 @@ export function splitZocdocName(raw: string): { first: string | null; last: stri
 /** Read the report's rows. `override` = the owner's own column choices. */
 export function parseZocdocRows(rows: string[][], override?: ZocdocMapping): ZocdocParseResult {
   const det = detectZocdocMapping(rows);
-  const mapping: ZocdocMapping = override ?? det.mapping;
+  // A chosen or saved mapping wins field by field (undefined = "not in this file"); fields it never mentions
+  // (e.g. one added after it was saved) keep the detected column.
+  const mapping: ZocdocMapping = override ? { ...det.mapping, ...override } : det.mapping;
   const out: ZocdocRow[] = [];
   let skipped = 0;
   for (const r of rows.slice(det.headerRow + 1)) {
@@ -186,7 +191,7 @@ export function parseZocdocRows(rows: string[][], override?: ZocdocMapping): Zoc
       costReason: clip(cell(r, mapping.costReason), 80),
       bookingSource: clip(cell(r, mapping.bookingSource), 80),
       providerName: clip(cell(r, mapping.provider), 160),
-      locationName: clip(cell(r, mapping.location), 160),
+      locationName: clip(cell(r, mapping.location) || cell(r, mapping.locationAddress), 160),
       insuranceCarrier: clip(cell(r, mapping.insuranceCarrier).split(/\r?\n/)[0]!, 160),
       insurancePlan: clip(cell(r, mapping.insurancePlan), 160),
       visitReason: clip(cell(r, mapping.visitReason), 160),
