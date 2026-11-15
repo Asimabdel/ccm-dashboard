@@ -2,9 +2,9 @@
 // a pay period, from time-clock hours (server/workforceDb.ts getTimesheet) and the pay rates the owner
 // enters here. For the month / period in progress it also projects the total from the shifts still
 // on the schedule. Rates are only ever read and written through the Master Billing router.
-import { and, asc, eq, gt, inArray, lte } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, lt, lte } from "drizzle-orm";
 import { getDb } from "./db";
-import { clinics, jobRoles, payRates, shifts, staffProfiles, users } from "../drizzle/schema";
+import { appointments, ccmTasks, clinics, jobRoles, payRates, providers, shifts, staffProfiles, users } from "../drizzle/schema";
 import { getTimesheet } from "./workforceDb";
 import { paySettings } from "./payPeriodsDb";
 import { audit, WorkspaceError, type WorkspaceActor } from "./workspaceDb";
@@ -13,6 +13,64 @@ import { payPeriodOf, recentPayPeriods } from "../shared/payPeriods";
 import { addDays, isValidDateStr, localDateStr, shiftMinutes, weekStart } from "../shared/workforce";
 import { LUNCH_EXPECTED_AFTER } from "../shared/attendance";
 import { SUGGESTED_LUNCH_MINUTES } from "../shared/punchFixes";
+import { SEEN_STATUSES, nameKey } from "../shared/workspace";
+import { WORKED_DAY_MIN, dayKind } from "../shared/providerReport";
+
+/** Care calls that count as completed (the Reports page's completion count). */
+const CCM_COMPLETED = ["completed", "ready_for_billing", "billed"] as const;
+
+/**
+ * Days worked by providers paid per day, keyed by their user account: past days with 3+ patients seen on the
+ * schedule (the provider report's rule; a person seen twice in a day counts once), plus days from today on
+ * with 3+ visits still booked (for "on track for").
+ */
+async function providerWorkDays(userIds: number[], from: string, to: string, today: string) {
+  const out = new Map<number, { worked: Set<string>; ahead: Set<string> }>();
+  if (!userIds.length) return out;
+  const d = await db();
+  const links = await d.select({ id: providers.id, userId: providers.userId }).from(providers).where(inArray(providers.userId, userIds));
+  if (!links.length) return out;
+  const userOf = new Map(links.map((l) => [l.id, l.userId!]));
+  const visits = await d.select({ providerId: appointments.providerId, patientId: appointments.patientId, name: appointments.patientName, dob: appointments.dateOfBirth, status: appointments.status, date: appointments.date })
+    .from(appointments).where(and(inArray(appointments.providerId, links.map((l) => l.id)), gte(appointments.date, from), lte(appointments.date, to)));
+  const cells = new Map<string, { userId: number; date: string; seen: Set<string>; booked: number; stillScheduled: number }>();
+  for (const v of visits) {
+    const userId = v.providerId ? userOf.get(v.providerId) : undefined;
+    if (!userId || v.status === "cancelled") continue;
+    const k = `${userId}|${v.date}`;
+    const c = cells.get(k) ?? { userId, date: v.date, seen: new Set<string>(), booked: 0, stillScheduled: 0 };
+    cells.set(k, c);
+    c.booked++;
+    if ((SEEN_STATUSES as string[]).includes(v.status)) c.seen.add(v.patientId ? `p:${v.patientId}` : `n:${nameKey(v.name)}|${v.dob ? new Date(v.dob).toISOString().slice(0, 10) : ""}`);
+    else if (v.status === "scheduled" && v.date < today) c.stillScheduled++;
+  }
+  for (const c of Array.from(cells.values())) {
+    const days = out.get(c.userId) ?? { worked: new Set<string>(), ahead: new Set<string>() };
+    out.set(c.userId, days);
+    if (dayKind({ date: c.date, seen: c.seen.size, stillScheduled: c.stillScheduled }, today) === "worked") days.worked.add(c.date);
+    else if (c.date >= today && c.booked >= WORKED_DAY_MIN) days.ahead.add(c.date);
+  }
+  return out;
+}
+
+/** Care calls each person completed per (clinic-local) day, for people paid per CCM. */
+async function ccmsByDay(userIds: number[], from: string, to: string) {
+  const out = new Map<number, Map<string, number>>();
+  if (!userIds.length) return out;
+  const d = await db();
+  // A day of slack each side of the UTC range; days are then read in clinic time.
+  const rows = await d.select({ userId: ccmTasks.completedByStaffId, at: ccmTasks.completedAt }).from(ccmTasks)
+    .where(and(inArray(ccmTasks.completedByStaffId, userIds), inArray(ccmTasks.status, [...CCM_COMPLETED]),
+      gte(ccmTasks.completedAt, new Date(`${addDays(from, -1)}T00:00:00Z`)), lt(ccmTasks.completedAt, new Date(`${addDays(to, 2)}T00:00:00Z`))));
+  for (const r of rows) {
+    if (!r.userId || !r.at) continue;
+    const day = localDateStr(new Date(r.at));
+    const m = out.get(r.userId) ?? new Map<string, number>();
+    out.set(r.userId, m);
+    m.set(day, (m.get(day) ?? 0) + 1);
+  }
+  return out;
+}
 
 async function db() {
   const d = await getDb();
@@ -57,6 +115,8 @@ export async function payroll(actor: WorkspaceActor, input: PayrollInput) {
   const rateRows = await d.select().from(payRates).orderBy(asc(payRates.startDate), asc(payRates.id));
   const ratesBy = new Map<number, (typeof rateRows)[number][]>();
   for (const r of rateRows) ratesBy.set(r.userId, [...(ratesBy.get(r.userId) ?? []), r]);
+  const paidBy = (t: PayType) => Array.from(ratesBy.entries()).filter(([, rs]) => rs.some((r) => r.payType === t)).map(([id]) => id);
+  const [provDays, ccmDays] = await Promise.all([providerWorkDays(paidBy("per_day"), from, to, today), ccmsByDay(paidBy("per_ccm"), from, to)]);
 
   // People: everyone the timesheet shows, plus anyone with a pay rate (e.g. salaried staff off the clock).
   const fromSheet = new Map(sheet.people.filter((p) => p.usesTimeClock || p.totalMinutes > 0).map((p) => [p.userId, p]));
@@ -73,7 +133,10 @@ export async function payroll(actor: WorkspaceActor, input: PayrollInput) {
       const rates: PayRateInput[] = (ratesBy.get(p.userId) ?? []).map((r) => ({ payType: r.payType as PayType, amountCents: r.amountCents, overtime: r.overtime, startDate: r.startDate }));
       const worked = new Map<string, number>();
       for (const x of p.punches) worked.set(x.workDate, (worked.get(x.workDate) ?? 0) + x.minutes);
-      const soFar = estimatePay({ from, to: workedTo, dayMinutes: worked, rates, basis });
+      // Providers paid per day: their days come from the schedule, not the time clock.
+      const prov = provDays.get(p.userId);
+      const ccmsPerDay = ccmDays.get(p.userId);
+      const soFar = estimatePay({ from, to: workedTo, dayMinutes: worked, rates, basis, workedDays: prov?.worked, ccmsPerDay });
       let projected: ReturnType<typeof estimatePay> | null = null;
       if (to > today) {
         const withShifts = new Map(worked);
@@ -81,7 +144,7 @@ export async function payroll(actor: WorkspaceActor, input: PayrollInput) {
           const m = shiftMinutes(s.startTime, s.endTime);
           withShifts.set(s.date, (withShifts.get(s.date) ?? 0) + m - (m > LUNCH_EXPECTED_AFTER ? SUGGESTED_LUNCH_MINUTES : 0));
         }
-        projected = estimatePay({ from, to, dayMinutes: withShifts, rates, basis });
+        projected = estimatePay({ from, to, dayMinutes: withShifts, rates, basis, workedDays: prov ? new Set([...Array.from(prov.worked), ...Array.from(prov.ahead)]) : undefined, ccmsPerDay });
       }
       const current = rates.length ? rates.filter((r) => r.startDate <= workedTo).at(-1) ?? rates[0]! : null;
       return {
@@ -89,7 +152,7 @@ export async function payroll(actor: WorkspaceActor, input: PayrollInput) {
         rate: current ? { ...current, label: rateLabel(current) } : null,
         rateChanges: rates.filter((r) => r.startDate > from && r.startDate <= to).length,
         soFar, projected,
-        daysWorked: new Set(p.punches.filter((x) => x.workDate >= from && x.workDate <= workedTo && x.minutes > 0).map((x) => x.workDate)).size,
+        daysWorked: prov ? soFar.paidDays : new Set(p.punches.filter((x) => x.workDate >= from && x.workDate <= workedTo && x.minutes > 0).map((x) => x.workDate)).size,
         missedClockOuts: p.punches.filter((x) => x.workDate >= from && x.workDate <= workedTo && !x.clockOutAt && x.workDate < today).length,
       };
     })
@@ -133,6 +196,8 @@ export async function setPayRate(actor: WorkspaceActor, input: { userId: number;
   if (!isValidDateStr(input.startDate)) throw new WorkspaceError("Pick the date the rate starts.");
   if (input.amountCents <= 0) throw new WorkspaceError("Enter the pay amount.");
   if (input.payType === "hourly" && input.amountCents > 100_000) throw new WorkspaceError("That hourly rate looks too high. Salaries go in as a yearly amount.");
+  if (input.payType === "per_day" && input.amountCents > 1_000_000) throw new WorkspaceError("That day rate looks too high. Salaries go in as a yearly amount.");
+  if (input.payType === "per_ccm" && input.amountCents > 100_000) throw new WorkspaceError("That amount per CCM looks too high.");
   const d = await db();
   const [u] = await d.select({ id: users.id, name: users.name }).from(users).where(eq(users.id, input.userId)).limit(1);
   if (!u) throw new WorkspaceError("That person wasn't found.", "NOT_FOUND");

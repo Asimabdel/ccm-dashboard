@@ -7,6 +7,7 @@ import { BILL_STATUSES } from "../../shared/billCodes";
 import { BREAKDOWN_DIM_KEYS, type BreakdownDim } from "../../shared/masterBilling";
 import { isValidDateStr } from "../../shared/workforce";
 import { ZOCDOC_PATIENT_FILTERS } from "../../shared/zocdoc";
+import { PAY_TYPES } from "../../shared/payroll";
 import * as mb from "../masterBillingDb";
 import { hasMasterBilling } from "../masterBillingAccess";
 import { WorkspaceError, type WorkspaceActor } from "../workspaceDb";
@@ -158,7 +159,7 @@ export const masterBillingRouter = router({
     return payrollPeople();
   }),
   setPayRate: protectedProcedure.input(z.object({
-    userId: z.number().int().positive(), payType: z.enum(["hourly", "salary"]), amountCents: z.number().int().min(1).max(100_000_000),
+    userId: z.number().int().positive(), payType: z.enum(PAY_TYPES), amountCents: z.number().int().min(1).max(100_000_000),
     overtime: z.boolean(), startDate: dateStr, note: z.string().max(255).nullish(),
   })).mutation(async ({ ctx, input }) => {
     const actor = await owner(ctx);

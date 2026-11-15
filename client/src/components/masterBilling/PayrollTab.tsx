@@ -8,12 +8,18 @@ import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { money } from "@shared/payments";
 import { localDateStr } from "@shared/workforce";
-import type { PayType } from "@shared/payroll";
+import { PAY_TYPES, PAY_TYPE_LABELS, type PayType } from "@shared/payroll";
 
 type Payroll = RouterOutputs["masterBilling"]["payroll"];
 type Row = Payroll["rows"][number];
 
 const hrs = (m: number) => (m / 60).toFixed(2);
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+/** Per-day and per-CCM pay for a row: "$4,500 · 9 days", "$950 · 95 CCMs", or null when neither applies. */
+const unitPay = (e: Row["soFar"]) => {
+  const parts = [e.paidDays || e.dayPayCents ? `${money(e.dayPayCents)} · ${plural(e.paidDays, "day")}` : null, e.ccms || e.ccmPayCents ? `${money(e.ccmPayCents)} · ${plural(e.ccms, "CCM")}` : null].filter(Boolean);
+  return parts.length ? parts.join(" + ") : null;
+};
 const day = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 const monthName = (m: string) => new Date(`${m}-15T12:00:00`).toLocaleDateString("en-US", { month: "long", year: "numeric" });
 
@@ -36,9 +42,10 @@ export function PayrollTab() {
   const csv = () => {
     if (!d) return;
     downloadCsv(`payroll-${d.from}-to-${d.to}.csv`, [
-      ["Employee", "Role", "Clinic", "Pay rate", "Regular hours", "Overtime hours", "Regular pay", "Overtime pay", "Salary", live ? "Estimated pay so far" : "Estimated pay", ...(live ? ["On track for"] : []), "Missed clock-outs"],
+      ["Employee", "Role", "Clinic", "Pay rate", "Regular hours", "Overtime hours", "Regular pay", "Overtime pay", "Salary", "Days paid", "Day pay", "CCMs", "CCM pay", live ? "Estimated pay so far" : "Estimated pay", ...(live ? ["On track for"] : []), "Missed clock-outs"],
       ...d.rows.map((r) => [r.name, r.jobRoleName ?? "", r.homeClinicName ?? "", r.rate?.label ?? "no rate", hrs(r.soFar.regularMinutes), hrs(r.soFar.overtimeMinutes),
-        (r.soFar.regularCents / 100).toFixed(2), (r.soFar.overtimeCents / 100).toFixed(2), (r.soFar.salaryCents / 100).toFixed(2), (r.soFar.totalCents / 100).toFixed(2),
+        (r.soFar.regularCents / 100).toFixed(2), (r.soFar.overtimeCents / 100).toFixed(2), (r.soFar.salaryCents / 100).toFixed(2),
+        r.soFar.paidDays, (r.soFar.dayPayCents / 100).toFixed(2), r.soFar.ccms, (r.soFar.ccmPayCents / 100).toFixed(2), (r.soFar.totalCents / 100).toFixed(2),
         ...(live ? [((r.projected ?? r.soFar).totalCents / 100).toFixed(2)] : []), r.missedClockOuts]),
     ]);
   };
@@ -66,7 +73,7 @@ export function PayrollTab() {
           </SelectBox>
         )}
         <div className="ml-auto flex flex-wrap gap-2">
-          <Btn size="sm" variant="secondary" onClick={() => setAdding(true)}><UserPlus size={13} /> Add a salaried person</Btn>
+          <Btn size="sm" variant="secondary" onClick={() => setAdding(true)}><UserPlus size={13} /> Add a person</Btn>
           <Btn size="sm" variant="secondary" onClick={csv} disabled={!d?.rows.length}><Download size={13} /> CSV</Btn>
         </div>
       </div>
@@ -89,11 +96,11 @@ export function PayrollTab() {
             subtitle={live ? `In progress: pay so far through today, and what it's on track for with the shifts still on the schedule.` : `${day(d.from)} – ${day(d.to)}.`}>
             {d.rows.length ? (
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[900px] text-sm">
+                <table className="w-full min-w-[1020px] text-sm">
                   <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
                     <tr>
                       <th className="px-3 py-2 text-left font-medium">Employee</th><th className="px-3 py-2 text-left font-medium">Pay rate</th>
-                      <th className={th}>Regular hrs</th><th className={th}>Overtime hrs</th><th className={th}>Regular pay</th><th className={th}>Overtime pay</th><th className={th}>Salary</th>
+                      <th className={th}>Regular hrs</th><th className={th}>Overtime hrs</th><th className={th}>Regular pay</th><th className={th}>Overtime pay</th><th className={th}>Salary</th><th className={th}>Per day / CCM</th>
                       <th className={th}>{live ? "So far" : "Estimated pay"}</th>{live && <th className={th}>On track for</th>}
                     </tr>
                   </thead>
@@ -105,7 +112,8 @@ export function PayrollTab() {
                       <td className="px-3 py-2" colSpan={2}>Total</td>
                       <td className={td}>{hrs(t.soFar.regularMinutes)}</td><td className={td}>{hrs(t.soFar.overtimeMinutes)}</td>
                       <td className={td}>{money(d.rows.reduce((s, r) => s + r.soFar.regularCents, 0))}</td><td className={td}>{money(t.soFar.overtimeCents)}</td>
-                      <td className={td}>{money(d.rows.reduce((s, r) => s + r.soFar.salaryCents, 0))}</td><td className={td}>{money(t.soFar.totalCents)}</td>
+                      <td className={td}>{money(d.rows.reduce((s, r) => s + r.soFar.salaryCents, 0))}</td>
+                      <td className={td}>{money(d.rows.reduce((s, r) => s + r.soFar.dayPayCents + r.soFar.ccmPayCents, 0))}</td><td className={td}>{money(t.soFar.totalCents)}</td>
                       {live && <td className={td}>{money(t.projectedCents ?? t.soFar.totalCents)}</td>}
                     </tr>
                   </tfoot>
@@ -115,7 +123,8 @@ export function PayrollTab() {
           </Panel>
           <p className="text-xs text-slate-500">
             An estimate of gross pay before taxes and deductions, from the time clock. QuickBooks Payroll has the official numbers. Hourly: hours over 40 in a Monday–Sunday week are overtime at
-            1.5× (the federal rule for hourly staff who get overtime; Texas adds none). Salary: 1/12 of the yearly amount per month, 1/26 per pay period. Missed clock-outs count 0 hours until they're
+            1.5× (the federal rule for hourly staff who get overtime; Texas adds none). Salary: 1/12 of the yearly amount per month, 1/26 per pay period. Per day: a provider&rsquo;s day with 3 or more
+            patients seen on the schedule (like the provider report), or anyone else&rsquo;s day on the time clock. Per CCM: care calls the person completed, counted like the Reports page. Missed clock-outs count 0 hours until they're
             fixed on Workforce → Timesheets. &ldquo;On track for&rdquo; assumes the scheduled shifts are worked, less a 30-minute lunch on shifts over 6 hours. Confirm the overtime rules with your accountant.
           </p>
         </>
@@ -151,11 +160,21 @@ function PayRow({ r, live, rangeName, td, onEdit }: { r: Row; live: boolean; ran
       <td className={td}>{money(r.soFar.regularCents)}</td>
       <td className={td}>{money(r.soFar.overtimeCents)}</td>
       <td className={td}>{r.soFar.salaryCents ? money(r.soFar.salaryCents) : "—"}</td>
+      <td className={cn(td, "whitespace-nowrap")}>{unitPay(r.soFar) ?? "—"}</td>
       <td className={cn(td, "font-semibold")}>{money(r.soFar.totalCents)}</td>
       {live && <td className={td}>{money(p.totalCents)}</td>}
     </tr>
   );
 }
+
+const AMOUNT_LABEL: Record<PayType, string> = { hourly: "Per hour", salary: "Per year", per_day: "Per day worked", per_ccm: "Per CCM completed" };
+const AMOUNT_EXAMPLE: Record<PayType, string> = { hourly: "e.g. 18.50", salary: "e.g. 62000", per_day: "e.g. 500", per_ccm: "e.g. 10" };
+const AMOUNT_HINT: Record<PayType, string | null> = {
+  hourly: null,
+  salary: null,
+  per_day: "Providers: each day with 3 or more patients seen on the schedule (like the provider report). Anyone else: each day on the time clock.",
+  per_ccm: "Each care call this person completed (CCM, BHI or APCM), counted like the Reports page.",
+};
 
 function RateDialog({ who, defaultStart, onClose }: { who: { userId: number; name: string }; defaultStart: string; onClose: () => void }) {
   const utils = trpc.useUtils();
@@ -178,16 +197,17 @@ function RateDialog({ who, defaultStart, onClose }: { who: { userId: number; nam
           <DialogDescription>Only you can see pay rates. A raise is a new rate from its start date; earlier pay keeps the old rate.</DialogDescription>
         </DialogHeader>
         <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (valid) save.mutate({ userId: who.userId, payType, amountCents: cents, overtime, startDate, note: note || null }); }}>
-          <div className="flex gap-2" role="radiogroup" aria-label="Pay type">
-            {(["hourly", "salary"] as const).map((p) => (
-              <label key={p} className={cn("flex flex-1 cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm", payType === p ? "border-slate-900 dark:border-slate-100" : "border-slate-200 dark:border-slate-700")}>
-                <input type="radio" name="payType" checked={payType === p} onChange={() => setPayType(p)} /> {p === "hourly" ? "Hourly" : "Salary (per year)"}
+          <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Pay type">
+            {PAY_TYPES.map((p) => (
+              <label key={p} className={cn("flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm", payType === p ? "border-slate-900 dark:border-slate-100" : "border-slate-200 dark:border-slate-700")}>
+                <input type="radio" name="payType" checked={payType === p} onChange={() => setPayType(p)} /> {PAY_TYPE_LABELS[p]}
               </label>
             ))}
           </div>
           <label className="block text-sm">
-            <span className="text-slate-600 dark:text-slate-300">{payType === "hourly" ? "Per hour" : "Per year"}</span>
-            <input className={cn(inputCls, "mt-1")} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={payType === "hourly" ? "e.g. 18.50" : "e.g. 62000"} autoFocus />
+            <span className="text-slate-600 dark:text-slate-300">{AMOUNT_LABEL[payType]}</span>
+            <input className={cn(inputCls, "mt-1")} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={AMOUNT_EXAMPLE[payType]} autoFocus />
+            {AMOUNT_HINT[payType] && <span className="mt-1 block text-xs text-slate-500">{AMOUNT_HINT[payType]}</span>}
           </label>
           {payType === "hourly" && (
             <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
@@ -231,8 +251,8 @@ function AddPerson({ existing, onPick, onClose }: { existing: Set<number>; onPic
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Add a salaried person</DialogTitle>
-          <DialogDescription>Everyone on the time clock is already listed. Pick someone off the clock (for example a salaried manager) to give them a yearly salary.</DialogDescription>
+          <DialogTitle>Add a person</DialogTitle>
+          <DialogDescription>Everyone on the time clock is already listed. Pick someone off the clock (for example a salaried manager, or a provider paid by the day) to give them a pay rate.</DialogDescription>
         </DialogHeader>
         {q.isLoading ? <Loading /> : people.length ? (
           <ul className="max-h-80 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200 text-sm dark:divide-slate-800 dark:border-slate-700">

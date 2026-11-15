@@ -47,6 +47,30 @@ describe("payroll estimate", () => {
     expect(rateLabel({ payType: "salary", amountCents: 6_200_000 })).toBe("$62,000/yr");
   });
 
+  it("pays a day rate for each day worked (a provider's schedule days, else time-clock days), from the rate's start", () => {
+    const day: PayRateInput = { payType: "per_day", amountCents: 50_000, overtime: false, startDate: "2026-10-01" };
+    // Made-up provider: 9 schedule days in the period (one day off), no time clock.
+    const worked = new Set(["2026-10-19", "2026-10-20", "2026-10-21", "2026-10-22", "2026-10-23", "2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29"]);
+    expect(estimatePay({ from: "2026-10-19", to: "2026-11-01", dayMinutes: new Map(), rates: [day], basis: "period", workedDays: worked }))
+      .toMatchObject({ paidDays: 9, dayPayCents: 450_000, totalCents: 450_000, unpricedDays: 0 });
+    // No schedule days given: days on the time clock count instead.
+    expect(estimatePay({ from: "2026-11-01", to: "2026-11-30", dayMinutes: days([["2026-11-02", 8], ["2026-11-03", 4]]), rates: [day], basis: "month" }))
+      .toMatchObject({ paidDays: 2, dayPayCents: 100_000, regularCents: 0 });
+    // Days before the rate starts aren't paid, and are flagged.
+    expect(estimatePay({ from: "2026-10-19", to: "2026-11-01", dayMinutes: new Map(), rates: [{ ...day, startDate: "2026-10-26" }], basis: "period", workedDays: worked }))
+      .toMatchObject({ paidDays: 4, unpricedDays: 5 });
+  });
+
+  it("pays per CCM completed, on the days they were completed", () => {
+    const ccm: PayRateInput = { payType: "per_ccm", amountCents: 1_000, overtime: false, startDate: "2026-10-07" };
+    const calls = new Map([["2026-10-06", 3], ["2026-10-07", 5], ["2026-10-31", 4], ["2026-11-01", 6]]);
+    expect(estimatePay({ from: "2026-10-01", to: "2026-10-31", dayMinutes: new Map(), rates: [ccm], basis: "month", ccmsPerDay: calls }))
+      .toMatchObject({ ccms: 9, ccmPayCents: 9_000, totalCents: 9_000, unpricedDays: 1 });
+    expect(rateLabel({ payType: "per_day", amountCents: 50_000 })).toBe("$500/day");
+    expect(rateLabel({ payType: "per_ccm", amountCents: 1_000 })).toBe("$10/CCM");
+    expect(rateLabel({ payType: "per_ccm", amountCents: 1_250 })).toBe("$12.50/CCM");
+  });
+
   it("keeps pay rates to the owner (other admins and staff are refused before anything is read)", async () => {
     const ctxFor = (role: string, realRole?: string): TrpcContext => ({
       user: { id: 97, openId: "pay-test", email: "pay@example.com", name: "Pay Test", loginMethod: "manus", role, realRole, createdAt: new Date(), updatedAt: new Date(), lastSignedIn: new Date() } as NonNullable<TrpcContext["user"]>,
