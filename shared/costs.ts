@@ -46,6 +46,61 @@ export interface MoneyMonth {
   inProgress: boolean;
 }
 
+/**
+ * Split an amount across keys in proportion to their weights, in whole cents that add back up exactly
+ * (largest remainders get the leftover cents). No weight at all: it all goes to `fallback`.
+ */
+export function splitCents<K>(totalCents: number, weights: Map<K, number>, fallback: K): Map<K, number> {
+  const out = new Map<K, number>();
+  if (!totalCents) return out;
+  const entries = Array.from(weights.entries()).filter(([, w]) => w > 0);
+  const sum = entries.reduce((s, [, w]) => s + w, 0);
+  if (!sum) return new Map([[fallback, totalCents]]);
+  const raw = entries.map(([k, w]) => ({ k, exact: (totalCents * w) / sum }));
+  let given = 0;
+  for (const r of raw) { const c = Math.floor(r.exact); out.set(r.k, c); given += c; }
+  for (const r of raw.sort((a, b) => (b.exact - Math.floor(b.exact)) - (a.exact - Math.floor(a.exact)))) {
+    if (given >= totalCents) break;
+    out.set(r.k, out.get(r.k)! + 1);
+    given++;
+  }
+  return out;
+}
+
+/** Add one split into a running total. */
+export function addSplit<K>(into: Map<K, number>, part: Map<K, number>) {
+  for (const [k, v] of Array.from(part.entries())) into.set(k, (into.get(k) ?? 0) + v);
+}
+
+const words = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+/** What tells a clinic apart in someone else's text: its name after "MyPCP Dr - ", and its street ("Provincial Blvd"). */
+export function clinicKeywords(c: { name: string; address?: string | null }): string[] {
+  const keys = new Set<string>();
+  const suffix = c.name.split(/\s+-\s+/).slice(1).join(" ").trim();
+  if (suffix) keys.add(words(suffix));
+  const street = (c.address ?? "").split(",")[0]!.replace(/^\s*\d+\s*/, "").replace(/\b(ste|suite|unit|#)\b.*$/i, "").trim();
+  if (street) keys.add(words(street));
+  return Array.from(keys).filter((k) => k.length >= 4);
+}
+
+/**
+ * Which clinic a ZocDoc location (or any text naming a place) means: the clinic whose name or street appears in
+ * it, preferring the longest match ("Highland Knolls, Katy" is Highland Knolls, not Katy). Null if none or a tie.
+ */
+export function matchClinic<T extends { id: number; name: string; address?: string | null }>(text: string | null | undefined, clinics: T[]): T | null {
+  if (!text) return null;
+  const t = ` ${words(text)} `;
+  let best: { c: T; len: number } | null = null, tie = false;
+  for (const c of clinics) {
+    for (const k of clinicKeywords(c)) {
+      if (!t.includes(` ${k} `)) continue;
+      if (!best || k.length > best.len) { best = { c, len: k.length }; tie = false; }
+      else if (k.length === best.len && best.c.id !== c.id) tie = true;
+    }
+  }
+  return best && !tie ? best.c : null;
+}
+
 export function moneyMonth(m: { month: string; insuranceCents: number; payrollCents: number; costsCents: number; zocdocCents: number; inProgress: boolean }): MoneyMonth {
   const outCents = m.payrollCents + m.costsCents + m.zocdocCents;
   return { ...m, outCents, leftCents: m.insuranceCents - outCents };

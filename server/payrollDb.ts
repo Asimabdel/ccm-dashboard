@@ -4,7 +4,8 @@
 // on the schedule. Rates are only ever read and written through the Master Billing router.
 import { and, asc, eq, gt, gte, inArray, lt, lte } from "drizzle-orm";
 import { getDb } from "./db";
-import { appointments, ccmTasks, clinics, jobRoles, payRates, providers, shifts, staffProfiles, users } from "../drizzle/schema";
+import { appointments, ccmTasks, clinics, jobRoles, patients, payRates, providers, shifts, staffProfiles, users } from "../drizzle/schema";
+import { addSplit, splitCents } from "../shared/costs";
 import { getTimesheet } from "./workforceDb";
 import { paySettings } from "./payPeriodsDb";
 import { audit, WorkspaceError, type WorkspaceActor } from "./workspaceDb";
@@ -20,55 +21,94 @@ import { WORKED_DAY_MIN, dayKind } from "../shared/providerReport";
 const CCM_COMPLETED = ["completed", "ready_for_billing", "billed"] as const;
 
 /**
- * Days worked by providers paid per day, keyed by their user account: past days with 3+ patients seen on the
- * schedule (the provider report's rule; a person seen twice in a day counts once), plus days from today on
- * with 3+ visits still booked (for "on track for").
+ * Days worked by providers (user accounts linked to a provider), keyed by user: past days with 3+ patients seen
+ * on the schedule (the provider report's rule; a person seen twice in a day counts once), plus days from today
+ * on with 3+ visits still booked (for "on track for"), and the clinic each day was worked at (most visits).
  */
 async function providerWorkDays(userIds: number[], from: string, to: string, today: string) {
-  const out = new Map<number, { worked: Set<string>; ahead: Set<string> }>();
+  const out = new Map<number, { worked: Set<string>; ahead: Set<string>; clinicOf: Map<string, number | null> }>();
   if (!userIds.length) return out;
   const d = await db();
   const links = await d.select({ id: providers.id, userId: providers.userId }).from(providers).where(inArray(providers.userId, userIds));
   if (!links.length) return out;
+  // Every linked provider gets an entry, even with no visits in the range.
+  for (const l of links) out.set(l.userId!, { worked: new Set<string>(), ahead: new Set<string>(), clinicOf: new Map<string, number | null>() });
   const userOf = new Map(links.map((l) => [l.id, l.userId!]));
-  const visits = await d.select({ providerId: appointments.providerId, patientId: appointments.patientId, name: appointments.patientName, dob: appointments.dateOfBirth, status: appointments.status, date: appointments.date })
+  const visits = await d.select({ providerId: appointments.providerId, clinicId: appointments.clinicId, patientId: appointments.patientId, name: appointments.patientName, dob: appointments.dateOfBirth, status: appointments.status, date: appointments.date })
     .from(appointments).where(and(inArray(appointments.providerId, links.map((l) => l.id)), gte(appointments.date, from), lte(appointments.date, to)));
-  const cells = new Map<string, { userId: number; date: string; seen: Set<string>; booked: number; stillScheduled: number }>();
+  const cells = new Map<string, { userId: number; date: string; seen: Set<string>; booked: number; stillScheduled: number; clinics: Map<number | null, number> }>();
   for (const v of visits) {
     const userId = v.providerId ? userOf.get(v.providerId) : undefined;
     if (!userId || v.status === "cancelled") continue;
     const k = `${userId}|${v.date}`;
-    const c = cells.get(k) ?? { userId, date: v.date, seen: new Set<string>(), booked: 0, stillScheduled: 0 };
+    const c = cells.get(k) ?? { userId, date: v.date, seen: new Set<string>(), booked: 0, stillScheduled: 0, clinics: new Map<number | null, number>() };
     cells.set(k, c);
     c.booked++;
+    c.clinics.set(v.clinicId ?? null, (c.clinics.get(v.clinicId ?? null) ?? 0) + 1);
     if ((SEEN_STATUSES as string[]).includes(v.status)) c.seen.add(v.patientId ? `p:${v.patientId}` : `n:${nameKey(v.name)}|${v.dob ? new Date(v.dob).toISOString().slice(0, 10) : ""}`);
     else if (v.status === "scheduled" && v.date < today) c.stillScheduled++;
   }
   for (const c of Array.from(cells.values())) {
-    const days = out.get(c.userId) ?? { worked: new Set<string>(), ahead: new Set<string>() };
+    const days = out.get(c.userId) ?? { worked: new Set<string>(), ahead: new Set<string>(), clinicOf: new Map<string, number | null>() };
     out.set(c.userId, days);
     if (dayKind({ date: c.date, seen: c.seen.size, stillScheduled: c.stillScheduled }, today) === "worked") days.worked.add(c.date);
     else if (c.date >= today && c.booked >= WORKED_DAY_MIN) days.ahead.add(c.date);
+    days.clinicOf.set(c.date, Array.from(c.clinics.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null);
   }
   return out;
 }
 
-/** Care calls each person completed per (clinic-local) day, for people paid per CCM. */
+/** Care calls each person completed per (clinic-local) day, and each call's patient's clinic, for people paid per CCM. */
 async function ccmsByDay(userIds: number[], from: string, to: string) {
-  const out = new Map<number, Map<string, number>>();
-  if (!userIds.length) return out;
+  const perDay = new Map<number, Map<string, number>>();
+  const calls = new Map<number, { day: string; clinicId: number | null }[]>();
+  if (!userIds.length) return { perDay, calls };
   const d = await db();
   // A day of slack each side of the UTC range; days are then read in clinic time.
-  const rows = await d.select({ userId: ccmTasks.completedByStaffId, at: ccmTasks.completedAt }).from(ccmTasks)
+  const rows = await d.select({ userId: ccmTasks.completedByStaffId, at: ccmTasks.completedAt, clinicId: patients.clinicId }).from(ccmTasks)
+    .leftJoin(patients, eq(patients.id, ccmTasks.patientId))
     .where(and(inArray(ccmTasks.completedByStaffId, userIds), inArray(ccmTasks.status, [...CCM_COMPLETED]),
       gte(ccmTasks.completedAt, new Date(`${addDays(from, -1)}T00:00:00Z`)), lt(ccmTasks.completedAt, new Date(`${addDays(to, 2)}T00:00:00Z`))));
   for (const r of rows) {
     if (!r.userId || !r.at) continue;
     const day = localDateStr(new Date(r.at));
-    const m = out.get(r.userId) ?? new Map<string, number>();
-    out.set(r.userId, m);
+    const m = perDay.get(r.userId) ?? new Map<string, number>();
+    perDay.set(r.userId, m);
     m.set(day, (m.get(day) ?? 0) + 1);
+    calls.set(r.userId, [...(calls.get(r.userId) ?? []), { day, clinicId: r.clinicId ?? null }]);
   }
+  return { perDay, calls };
+}
+
+type ClinicKey = number | null;
+const tally = (into: Map<ClinicKey, number>, k: ClinicKey, n: number) => into.set(k, (into.get(k) ?? 0) + n);
+
+/**
+ * Where a person's pay belongs, by clinic (null = not tied to a clinic): hourly pay by the clinic of each
+ * clock-in (else their home clinic); a provider's salary and day pay by the clinic of each day worked on the
+ * schedule; anyone else's salary to their home clinic; per-CCM pay by each patient's clinic.
+ */
+export function payByClinic(opts: {
+  pay: { regularCents: number; overtimeCents: number; salaryCents: number; dayPayCents: number; ccmPayCents: number };
+  from: string; to: string; homeClinicId: number | null;
+  punches: { workDate: string; minutes: number; clinicId: number | null }[];
+  providerDays?: { worked: Set<string>; clinicOf: Map<string, ClinicKey> } | null;
+  ccmCalls?: { day: string; clinicId: ClinicKey }[] | null;
+}): Map<ClinicKey, number> {
+  const inRange = (day: string) => day >= opts.from && day <= opts.to;
+  const home = opts.homeClinicId ?? null;
+  const minutes = new Map<ClinicKey, number>();
+  for (const p of opts.punches) if (inRange(p.workDate) && p.minutes > 0) tally(minutes, p.clinicId ?? home, p.minutes);
+  const provDays = new Map<ClinicKey, number>();
+  if (opts.providerDays) for (const day of Array.from(opts.providerDays.worked)) if (inRange(day)) tally(provDays, opts.providerDays.clinicOf.get(day) ?? home, 1);
+  const ccm = new Map<ClinicKey, number>();
+  for (const c of opts.ccmCalls ?? []) if (inRange(c.day)) tally(ccm, c.clinicId ?? home, 1);
+  const homeOnly = new Map<ClinicKey, number>(home != null ? [[home, 1]] : []);
+  const out = new Map<ClinicKey, number>();
+  addSplit(out, splitCents(opts.pay.regularCents + opts.pay.overtimeCents, minutes, home));
+  addSplit(out, splitCents(opts.pay.salaryCents, opts.providerDays ? (provDays.size ? provDays : homeOnly) : home != null ? homeOnly : minutes, home));
+  addSplit(out, splitCents(opts.pay.dayPayCents, opts.providerDays ? provDays : minutes, home));
+  addSplit(out, splitCents(opts.pay.ccmPayCents, ccm, home));
   return out;
 }
 
@@ -116,7 +156,8 @@ export async function payroll(actor: WorkspaceActor, input: PayrollInput, opts: 
   const ratesBy = new Map<number, (typeof rateRows)[number][]>();
   for (const r of rateRows) ratesBy.set(r.userId, [...(ratesBy.get(r.userId) ?? []), r]);
   const paidBy = (t: PayType) => Array.from(ratesBy.entries()).filter(([, rs]) => rs.some((r) => r.payType === t)).map(([id]) => id);
-  const [provDays, ccmDays] = await Promise.all([providerWorkDays(paidBy("per_day"), from, to, today), ccmsByDay(paidBy("per_ccm"), from, to)]);
+  // Providers' days (for day pay, and to place their pay by clinic) and completed CCMs (for per-CCM pay).
+  const [provDays, ccm] = await Promise.all([providerWorkDays(Array.from(ratesBy.keys()), from, to, today), ccmsByDay(paidBy("per_ccm"), from, to)]);
 
   // People: everyone the timesheet shows, plus anyone with a pay rate (e.g. salaried staff off the clock).
   const fromSheet = new Map(sheet.people.filter((p) => p.usesTimeClock || p.totalMinutes > 0).map((p) => [p.userId, p]));
@@ -127,15 +168,19 @@ export async function payroll(actor: WorkspaceActor, input: PayrollInput, opts: 
       .where(inArray(users.id, extraIds))
     : [];
 
+  const homeRows = await d.select({ userId: staffProfiles.userId, homeClinicId: staffProfiles.homeClinicId }).from(staffProfiles)
+    .where(inArray(staffProfiles.userId, [...Array.from(fromSheet.keys()), ...extraIds, 0]));
+  const homeOf = new Map(homeRows.map((h) => [h.userId, h.homeClinicId ?? null]));
+
   const rows = [...Array.from(fromSheet.values()).map((p) => ({ userId: p.userId, name: p.name, jobRoleName: p.jobRoleName, homeClinicName: p.homeClinicName, punches: p.punches })),
-    ...extra.map((p) => ({ userId: p.userId, name: p.name ?? "Unknown", jobRoleName: p.jobRoleName, homeClinicName: p.homeClinicName, punches: [] as { workDate: string; minutes: number; clockOutAt: Date | null }[] }))]
+    ...extra.map((p) => ({ userId: p.userId, name: p.name ?? "Unknown", jobRoleName: p.jobRoleName, homeClinicName: p.homeClinicName, punches: [] as { workDate: string; minutes: number; clockOutAt: Date | null; clinicId: number | null }[] }))]
     .map((p) => {
       const rates: PayRateInput[] = (ratesBy.get(p.userId) ?? []).map((r) => ({ payType: r.payType as PayType, amountCents: r.amountCents, overtime: r.overtime, startDate: r.startDate }));
       const worked = new Map<string, number>();
       for (const x of p.punches) worked.set(x.workDate, (worked.get(x.workDate) ?? 0) + x.minutes);
-      // Providers paid per day: their days come from the schedule, not the time clock.
+      // Providers: their days come from the schedule, not the time clock.
       const prov = provDays.get(p.userId);
-      const ccmsPerDay = ccmDays.get(p.userId);
+      const ccmsPerDay = ccm.perDay.get(p.userId);
       const soFar = estimatePay({ from, to: workedTo, dayMinutes: worked, rates, basis, workedDays: prov?.worked, ccmsPerDay });
       let projected: ReturnType<typeof estimatePay> | null = null;
       if (to > today) {
@@ -147,12 +192,16 @@ export async function payroll(actor: WorkspaceActor, input: PayrollInput, opts: 
         projected = estimatePay({ from, to, dayMinutes: withShifts, rates, basis, workedDays: prov ? new Set([...Array.from(prov.worked), ...Array.from(prov.ahead)]) : undefined, ccmsPerDay });
       }
       const current = rates.length ? rates.filter((r) => r.startDate <= workedTo).at(-1) ?? rates[0]! : null;
+      const split = payByClinic({ pay: soFar, from, to: workedTo, homeClinicId: homeOf.get(p.userId) ?? null, punches: p.punches, providerDays: prov ?? null, ccmCalls: ccm.calls.get(p.userId) ?? null });
       return {
         userId: p.userId, name: p.name, jobRoleName: p.jobRoleName, homeClinicName: p.homeClinicName,
+        isProvider: !!prov,
         rate: current ? { ...current, label: rateLabel(current) } : null,
         rateChanges: rates.filter((r) => r.startDate > from && r.startDate <= to).length,
         soFar, projected,
-        daysWorked: prov ? soFar.paidDays : new Set(p.punches.filter((x) => x.workDate >= from && x.workDate <= workedTo && x.minutes > 0).map((x) => x.workDate)).size,
+        /** Pay so far by clinic (null = not tied to a clinic). */
+        clinicSplit: Array.from(split.entries()).map(([clinicId, cents]) => ({ clinicId, cents })),
+        daysWorked: prov ? Array.from(prov.worked).filter((x) => x >= from && x <= workedTo).length : new Set(p.punches.filter((x) => x.workDate >= from && x.workDate <= workedTo && x.minutes > 0).map((x) => x.workDate)).size,
         missedClockOuts: p.punches.filter((x) => x.workDate >= from && x.workDate <= workedTo && !x.clockOutAt && x.workDate < today).length,
       };
     })

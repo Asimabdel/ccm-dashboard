@@ -117,32 +117,98 @@ export function CostsTab() {
             ) : <p className="px-4 py-6 text-sm text-slate-500">No costs yet. Add each clinic&rsquo;s rent to start.</p>}
           </Panel>
 
-          {d.byClinic.length > 0 && (
-            <Panel title="By clinic" subtitle={`${shortMonth(d.months[0]!)} – ${shortMonth(d.months.at(-1)!)}: each clinic's insurance payments next to its own costs (payroll and ZocDoc aren't split by clinic).`} bodyClassName="p-0">
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[640px] text-sm">
-                  <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
-                    <tr><th className="px-3 py-2 text-left font-medium">Clinic</th><th className={th}>Costs per month now</th><th className={th}>Insurance paid</th><th className={th}>Costs</th><th className={th}>Costs as % of insurance</th></tr>
-                  </thead>
-                  <tbody>
-                    {d.byClinic.map((c) => (
-                      <tr key={c.key} className="border-t border-slate-100 dark:border-slate-700/60">
-                        <td className="px-3 py-2 font-medium text-slate-800 dark:text-slate-100">{c.name}</td>
-                        <td className={td}>{c.monthlyNowCents ? money(c.monthlyNowCents) : "—"}</td>
-                        <td className={td}>{money(c.insuranceCents)}</td>
-                        <td className={td}>{money(c.costsCents)}</td>
-                        <td className={td}>{c.costsCents ? pct(c.costsCents, c.insuranceCents) : "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Panel>
-          )}
+          <ClinicCosts d={d} />
         </>
       )}
       {edit && d && <CostDialog cost={edit === "new" ? null : edit} clinics={d.clinics} thisMonth={d.today.slice(0, 7)} onClose={() => setEdit(null)} />}
     </div>
+  );
+}
+
+type ClinicRow = Report["clinicMonths"][number]["clinics"][number];
+const KEYS = ["insuranceCents", "staffPayCents", "providerPayCents", "costsCents", "zocdocCents"] as const;
+const outOf = (c: Pick<ClinicRow, "staffPayCents" | "providerPayCents" | "costsCents" | "zocdocCents">) => c.staffPayCents + c.providerPayCents + c.costsCents + c.zocdocCents;
+
+/** Each clinic's money in vs. its own costs: staff and provider pay, rent and other bills, and ZocDoc, for a month or all months. */
+function ClinicCosts({ d }: { d: Report }) {
+  const done = d.clinicMonths.filter((m) => !m.inProgress);
+  const [pick, setPick] = useState<string>(done.at(-1)?.month ?? d.clinicMonths.at(-1)?.month ?? "all");
+  const chosen = pick === "all" ? d.clinicMonths : d.clinicMonths.filter((m) => m.month === pick);
+  const byKey = new Map<string, ClinicRow>();
+  for (const m of chosen) for (const c of m.clinics) {
+    const t = byKey.get(c.key) ?? { ...c, insuranceCents: 0, staffPayCents: 0, providerPayCents: 0, costsCents: 0, zocdocCents: 0 };
+    for (const k of KEYS) t[k] += c[k];
+    byKey.set(c.key, t);
+  }
+  const rows = Array.from(byKey.values()).filter((c) => KEYS.some((k) => c[k] !== 0));
+  const total = rows.reduce((t, c) => { for (const k of KEYS) t[k] += c[k]; return t; }, { insuranceCents: 0, staffPayCents: 0, providerPayCents: 0, costsCents: 0, zocdocCents: 0 });
+  const label = pick === "all" ? `${shortMonth(d.months[0]!)} – ${shortMonth(d.months.at(-1)!)}` : monthName(pick);
+  const inProgress = chosen.some((m) => m.inProgress);
+  const csv = () => downloadCsv(`cost-per-clinic-${pick}.csv`, [
+    ["Clinic", "Insurance paid", "Staff pay", "Provider pay", "Rent and other costs", "ZocDoc", "Total cost", "Left over"],
+    ...[...rows, { key: "total", name: "Total", ...total }].map((c) => [c.name, ...KEYS.map((k) => (c[k] / 100).toFixed(2)), (outOf(c) / 100).toFixed(2), ((c.insuranceCents - outOf(c)) / 100).toFixed(2)]),
+  ]);
+  const th = "px-3 py-2 text-right font-medium";
+  const td = "px-3 py-2 text-right tabular-nums";
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-slate-700 dark:text-slate-200">Cost per clinic for</span>
+        <select aria-label="Month" className={cn(inputCls, "w-auto py-1 pr-8 text-sm")} value={pick} onChange={(e) => setPick(e.target.value)}>
+          {d.clinicMonths.slice().reverse().map((m) => <option key={m.month} value={m.month}>{monthName(m.month)}{m.inProgress ? " (so far)" : ""}</option>)}
+          <option value="all">All months</option>
+        </select>
+        <Btn size="sm" variant="secondary" className="ml-auto" onClick={csv}><Download size={13} /> CSV</Btn>
+      </div>
+      <Panel title="Cost per clinic" bodyClassName="p-0"
+        subtitle={`${label}${inProgress ? " (in progress: money in and pay so far)" : ""}. Staff pay goes to the clinic they clocked in at; provider pay to the clinic where they saw patients each day; per-CCM pay to each patient's clinic.`}>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[980px] text-sm">
+            <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
+              <tr>
+                <th className="px-3 py-2 text-left font-medium">Clinic</th><th className={th}>Insurance paid</th><th className={th}>Staff pay</th><th className={th}>Provider pay</th>
+                <th className={th}>Rent &amp; costs</th><th className={th}>ZocDoc</th><th className={th}>Total cost</th><th className={th}>Left over</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((c) => {
+                const out = outOf(c), left = c.insuranceCents - out;
+                return (
+                  <tr key={c.key} className="border-t border-slate-100 dark:border-slate-700/60">
+                    <td className="px-3 py-2 font-medium text-slate-800 dark:text-slate-100">{c.name}
+                      {c.key === "" && <span className="block text-[11px] font-normal text-slate-500">remote or no clinic on record</span>}</td>
+                    <td className={td}>{money(c.insuranceCents)}</td>
+                    <td className={td}>{money(c.staffPayCents)}</td>
+                    <td className={td}>{money(c.providerPayCents)}</td>
+                    <td className={td}>{money(c.costsCents)}</td>
+                    <td className={td}>{money(c.zocdocCents)}</td>
+                    <td className={cn(td, "font-semibold")}>{money(out)}<span className="block text-[11px] font-normal text-slate-500">{c.insuranceCents > 0 ? `${pct(out, c.insuranceCents)} of money in` : ""}</span></td>
+                    <td className={cn(td, "font-semibold", left < 0 ? "text-rose-700 dark:text-rose-300" : "text-emerald-700 dark:text-emerald-300")}>{money(left)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot className="border-t-2 border-slate-200 font-semibold dark:border-slate-700">
+              <tr>
+                <td className="px-3 py-2">Total</td>
+                {KEYS.map((k) => <td key={k} className={td}>{money(total[k])}</td>)}
+                <td className={td}>{money(outOf(total))}</td><td className={td}>{money(total.insuranceCents - outOf(total))}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </Panel>
+      {d.zocdocLocations.length > 0 && (
+        <details className="text-xs text-slate-500">
+          <summary className="cursor-pointer">How ZocDoc locations were matched to clinics</summary>
+          <ul className="mt-1 space-y-0.5">
+            {d.zocdocLocations.map((l) => (
+              <li key={l.location ?? ""}>{l.location || "(no location)"} → <span className={l.clinicName ? "" : "text-amber-700 dark:text-amber-300"}>{l.clinicName ?? "not matched (shown as not tied to a clinic)"}</span> · {money(l.cents)}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </>
   );
 }
 

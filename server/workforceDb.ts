@@ -1002,7 +1002,7 @@ export async function getTimesheet(from: string, to: string) {
             const s = shiftForPunch(p, shiftRows.filter((x) => x.userId === person.userId));
             return {
               id: p.id, workDate: p.workDate, clockInAt: p.clockInAt, clockOutAt: p.clockOutAt, minutes: punchMinutes(p),
-              minutesLate: p.minutesLate, note: p.note, edited: !!p.editedByUserId, clinicName, lunch: p.outReason === "lunch",
+              minutesLate: p.minutesLate, note: p.note, edited: !!p.editedByUserId, clinicId: p.clinicId, clinicName, lunch: p.outReason === "lunch",
               auto: p.outReason === "auto", missingClockOut: !p.clockOutAt && p.workDate < today,
               shift: s ? { startTime: s.startTime, endTime: s.endTime } : null,
               // Where they clocked in / out, when it wasn't at their clinic (e.g. "away from Katy (2.3 km)").
