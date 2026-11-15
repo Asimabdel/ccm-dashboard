@@ -8,6 +8,8 @@ describe("notification kinds", () => {
     expect(notificationKind("task", "New task for your team")).toBe("team_tasks");
     expect(notificationKind("task", "12 patients qualify for care programs")).toBe("program_approvals");
     expect(notificationKind("task", "1 patient qualify for care programs")).toBe("program_approvals");
+    expect(notificationKind("task", "Website booking waiting 15+ min: Pat Example")).toBe("website_bookings");
+    expect(notificationKind("task", "Website bookings today: 6 requests")).toBe("website_bookings");
     expect(notificationKind("task", "Document to sign")).toBe("documents");
     expect(notificationKind("task", "Document signed by everyone")).toBe("documents");
     expect(notificationKind("task", "Your signature was used")).toBe("documents");

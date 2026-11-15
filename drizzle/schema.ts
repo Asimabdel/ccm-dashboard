@@ -1225,6 +1225,8 @@ export const bookingRequests = mysqlTable("bookingRequests", {
   taskId: int("taskId"),
   assignedUserId: int("assignedUserId").references(() => users.id),
   firstContactAt: datetime("firstContactAt"),
+  /** When the "waited 15 minutes for a call" alert went out (it goes once). */
+  waitAlertAt: datetime("waitAlertAt"),
   handledByUserId: int("handledByUserId").references(() => users.id),
   handledAt: datetime("handledAt"),
   note: text("note"),

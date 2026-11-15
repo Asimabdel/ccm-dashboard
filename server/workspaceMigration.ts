@@ -1512,6 +1512,8 @@ const INTAKE_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: "patientTests", column: "rebookTaskId", ddl: "`rebookTaskId` int NULL AFTER `fileId`" },
   // Added 2026-11-11: Master Billing matches payment files' rendering providers by NPI.
   { table: "providers", column: "npi", ddl: "`npi` varchar(10) NULL AFTER `aliases`" },
+  // Added 2026-11-14: website bookings — when the "waited 15 minutes for a call" alert went out.
+  { table: "bookingRequests", column: "waitAlertAt", ddl: "`waitAlertAt` datetime NULL AFTER `firstContactAt`" },
 ];
 async function upgradeIntake(db: Db): Promise<string[]> {
   const applied: string[] = [];
@@ -1652,6 +1654,12 @@ export async function runWorkspaceMigration(): Promise<string[]> {
     await db.execute(sql`UPDATE chatMembers mb JOIN chatConversations c ON c.id = mb.conversationId SET mb.lastReadAt = NULL
       WHERE c.kind IN ('everyone', 'clinic', 'team') AND mb.lastReadAt = mb.createdAt`);
     applied.push("chatMembers read positions reset");
+  }
+  // Once, with the website-booking wait alert (2026-11-14): requests already waiting don't all alert at once
+  // the first time the check runs (the page still shows how long each has waited).
+  if (upgraded.includes("bookingRequests.waitAlertAt added")) {
+    await db.execute(sql`UPDATE bookingRequests SET waitAlertAt = receivedAt WHERE status IN ('new', 'no_answer')`);
+    applied.push("waiting website bookings marked as already flagged");
   }
   // Once, with announcement-only conversations (2026-10-04, the practice's choice): Everyone becomes
   // announcements (admins / office managers post); an admin can switch it back.

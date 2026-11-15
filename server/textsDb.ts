@@ -17,7 +17,7 @@ import { serverCredentials, tokenFor } from "./faxSendDb";
 import { openSecret, sealSecret } from "./secretBox";
 import { formatPhone, normalizePhone } from "../shared/phone";
 import {
-  AUTO_REPLY_EVERY_HOURS, DEFAULT_TEXTING, MAX_TEXT_LENGTH, autoReplyText, isAfterHours, isStartText, isStopText, textStatusFrom,
+  AUTO_REPLY_EVERY_HOURS, DEFAULT_TEXTING, MAX_TEXT_LENGTH, autoReplyText, bookingConfirmText, isAfterHours, isStartText, isStopText, textStatusFrom,
   type TextFilter, type TextingSettings,
 } from "../shared/texts";
 import { can, nameKey } from "../shared/workspace";
@@ -30,6 +30,8 @@ async function db() {
 
 // Local development can point at a stand-in RingCentral (never on AWS).
 const API = !process.env.AWS_LAMBDA_FUNCTION_NAME && process.env.RINGCENTRAL_API_BASE ? process.env.RINGCENTRAL_API_BASE.replace(/\/$/, "") : "https://platform.ringcentral.com";
+/** The practice's main line (the website's "call us" number): never texted. */
+const PRACTICE_MAIN_NUMBER = "3467078978";
 const SETTINGS_KEY = "texting";
 const CURSOR_KEY = "texting_sync";
 const insertId = (res: unknown) => Number((res as [{ insertId: number }])[0]?.insertId);
@@ -234,6 +236,39 @@ async function ensureThread(phone: string, known?: Person | null, book?: Map<str
   }).onDuplicateKeyUpdate({ set: { phone: sql`phone` } });
   const [made] = await d.select().from(textThreads).where(eq(textThreads.phone, phone)).limit(1);
   return made!;
+}
+
+/**
+ * "We got your request" to someone who just asked for an appointment on the website (2026-11-14, the
+ * owner's choice). One short text with no details of the visit, kept in the conversation with that number.
+ * Nothing goes while patient texting is off, to a number that texted STOP, to a patient who said No to
+ * texts on a consent form, or to the practice's own numbers.
+ */
+export async function sendBookingConfirmation(b: { phone: string; spanish: boolean; subjectKey: string | null; patientId: number | null; patientName: string | null }): Promise<{ sent: boolean; reason?: string }> {
+  const s = await textingSettings();
+  if (!s.enabled || !s.number) return { sent: false, reason: "texting is off" };
+  const phone = normalizePhone(b.phone);
+  if (!phone) return { sent: false, reason: "not a usable number" };
+  if (phone === s.number || phone === PRACTICE_MAIN_NUMBER) return { sent: false, reason: "the practice's own number" };
+  if (b.subjectKey) {
+    const { latestConsentAnswer } = await import("./intakeDb");
+    const said = await latestConsentAnswer(b.subjectKey, "communications").catch(() => null);
+    if (said?.answer === "no") return { sent: false, reason: "said no to texts" };
+  }
+  const t = await ensureThread(phone, b.subjectKey && b.patientName ? { key: b.subjectKey, patientId: b.patientId, name: b.patientName } : null);
+  if (t.optedOutAt) return { sent: false, reason: "texted STOP" };
+  const d = await db();
+  const text = bookingConfirmText(b.spanish);
+  const now = new Date();
+  try {
+    const r = await sendRaw(s, phone, text);
+    await d.insert(textMessages).values({ threadId: t.id, direction: "out", body: text, status: textStatusFrom(r.messageStatus, "out"), rcMessageId: String(r.id), autoReply: true, at: now });
+  } catch (e) {
+    await d.insert(textMessages).values({ threadId: t.id, direction: "out", body: text, status: "failed", autoReply: true, error: (e as Error).message.slice(0, 255), at: now });
+    return { sent: false, reason: "the text didn't go" };
+  }
+  await d.update(textThreads).set({ lastMessageAt: now }).where(eq(textThreads.id, t.id));
+  return { sent: true };
 }
 
 // ---------------------------------------------------------------------------

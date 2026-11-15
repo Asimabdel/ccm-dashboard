@@ -11,7 +11,7 @@ import { chartHref } from "@/components/chart/ChartLookup";
 import { SendFormsDialog, type SendPreset } from "@/components/intake/SendFormsDialog";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
-import { BOOKING_STATUS_LABELS, type BookingStatus } from "@shared/booking";
+import { BOOKING_STATUS_LABELS, WAIT_ALERT_MIN, officeMinutesBetween, type BookingStatus } from "@shared/booking";
 
 type Filter = "open" | "scheduled" | "closed" | "earlier" | "all";
 const TABS: { k: Filter; label: string; icon: React.ElementType }[] = [
@@ -82,8 +82,9 @@ export default function WebsiteBookingsPage() {
       {ws.caps && !ws.caps.emailTriage && <ErrorNote message="You don't have access to website bookings." />}
       {s && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-          <Stat label="Waiting for a call" value={s.waiting} tone={s.waiting ? "warn" : undefined} />
-          <Stat label="Requests (30 days)" value={s.received30} />
+          <Stat label="Waiting for a call" value={s.waiting} tone={s.waiting ? "warn" : undefined} sub={s.overdue ? `${s.overdue} not called after ${WAIT_ALERT_MIN}+ min` : undefined} />
+          <Stat label="Requests (30 days)" value={s.received30}
+            sub={`Today: ${s.today.received} in · ${s.today.called} called · ${s.today.scheduled} scheduled${s.today.notCalled ? ` · ${s.today.notCalled} not called yet` : ""}`} />
           <Stat label="Scheduled (30 days)" value={s.scheduled30} sub={s.received30 ? `${Math.round((s.scheduled30 / s.received30) * 100)}% of requests` : undefined} />
           <Stat label="Typical time to first call" value={s.medianFirstCallMin != null ? mins(s.medianFirstCallMin) : "—"} sub="Median, last 30 days" />
         </div>
@@ -107,6 +108,8 @@ export default function WebsiteBookingsPage() {
             {rows.map((b) => {
               const open = b.status === "new" || b.status === "no_answer";
               const waitingMin = Math.round((Date.now() - new Date(b.receivedAt).getTime()) / 60000);
+              // Office time only (Mon–Fri 9–5), the same rule as the bell alert: nobody has called yet.
+              const officeWait = b.status === "new" && !b.firstContactAt ? officeMinutesBetween(new Date(b.receivedAt), new Date()) : 0;
               return (
                 <li key={b.id} className={cn("px-4 py-3 text-sm", deepLink === b.id && "bg-amber-50/70 dark:bg-amber-900/20")}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -114,6 +117,7 @@ export default function WebsiteBookingsPage() {
                       <p className="flex flex-wrap items-center gap-2">
                         <span className="font-semibold text-slate-900 dark:text-slate-50">{b.name}</span>
                         <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", STATUS_CLS[b.status])}>{BOOKING_STATUS_LABELS[b.status]}{b.status === "no_answer" && b.attempts > 1 ? ` ×${b.attempts}` : ""}</span>
+                        {officeWait >= WAIT_ALERT_MIN && <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-800 dark:bg-red-900/40 dark:text-red-200" title="Office time since the request came in (evenings and weekends don't count)">Not called for {mins(officeWait)}</span>}
                         {b.spanish && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-800 dark:bg-sky-900/40 dark:text-sky-200">Español</span>}
                         {b.subjectKey
                           ? <Link href={chartHref(b.subjectKey)} className="text-xs font-semibold text-emerald-700 hover:underline dark:text-emerald-300">Existing patient: {b.patientName}</Link>

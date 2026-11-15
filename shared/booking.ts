@@ -14,6 +14,48 @@ export const BOOKING_STATUS_LABELS: Record<BookingStatus, string> = {
 /** Statuses that still need someone to call. */
 export const OPEN_BOOKING: BookingStatus[] = ["new", "no_answer"];
 
+/** Office hours for calling people back (Houston time): Monday–Friday, 9 AM–5 PM. */
+export const OFFICE_OPEN_MIN = 9 * 60;
+export const OFFICE_CLOSE_MIN = 17 * 60;
+/** A website request nobody has called after this many minutes of office time is flagged (2026-11-14). */
+export const WAIT_ALERT_MIN = 15;
+/** Every bell notification about website bookings starts with this (it is how the bell sorts them). */
+export const BOOKING_NOTICE_PREFIX = "Website booking";
+
+/** Houston wall-clock time as a plain Date (its own fields are the Houston date and time). */
+function houstonWall(d: Date): Date {
+  const p = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric", hourCycle: "h23" }).formatToParts(d);
+  const g = (t: string) => Number(p.find((x) => x.type === t)?.value ?? 0);
+  return new Date(g("year"), g("month") - 1, g("day"), g("hour") % 24, g("minute"), g("second"));
+}
+
+/** Is the office open at this moment? */
+export function officeOpenAt(now: Date): boolean {
+  const w = houstonWall(now), m = w.getHours() * 60 + w.getMinutes();
+  return w.getDay() !== 0 && w.getDay() !== 6 && m >= OFFICE_OPEN_MIN && m < OFFICE_CLOSE_MIN;
+}
+
+/**
+ * Minutes of office time between two moments. Evenings and weekends don't count: a request sent on
+ * Saturday starts waiting on Monday at 9, so "waited 15 minutes" always means 15 minutes someone could have called.
+ */
+export function officeMinutesBetween(from: Date, to: Date): number {
+  const a = houstonWall(from).getTime(), b = houstonWall(to).getTime();
+  if (!(b > a)) return 0;
+  let total = 0;
+  const first = new Date(a);
+  for (let i = 0; i < 400; i++) {
+    const day = new Date(first.getFullYear(), first.getMonth(), first.getDate() + i);
+    if (day.getTime() > b) break;
+    if (day.getDay() === 0 || day.getDay() === 6) continue;
+    const open = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, OFFICE_OPEN_MIN).getTime();
+    const close = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, OFFICE_CLOSE_MIN).getTime();
+    const s = Math.max(a, open), e = Math.min(b, close);
+    if (e > s) total += e - s;
+  }
+  return Math.floor(total / 60_000);
+}
+
 const EN_MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 const ES_MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 

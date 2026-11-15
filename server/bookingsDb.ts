@@ -4,7 +4,7 @@
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { bookingRequests, clinics, users, workTaskActivities, workTasks } from "../drizzle/schema";
-import { BOOKING_STATUS_LABELS, OPEN_BOOKING, clinicForLocation, parseBookingEmail, parsePreferred, type BookingStatus } from "../shared/booking";
+import { BOOKING_STATUS_LABELS, OPEN_BOOKING, WAIT_ALERT_MIN, clinicForLocation, officeMinutesBetween, parseBookingEmail, parsePreferred, type BookingStatus } from "../shared/booking";
 import { normalizePhone } from "../shared/phone";
 import { nameKey } from "../shared/workspace";
 import { localDateStr } from "../shared/workforce";
@@ -76,7 +76,15 @@ export async function ingestBooking(b: IncomingBooking) {
     priority: "high", category: "patient_call", dueDate: localDateStr(), sourceType: "website_booking", sourceRef: String(id),
   });
   await d.update(bookingRequests).set({ taskId: task.id }).where(eq(bookingRequests.id, id));
-  console.log(`[website-booking] ${JSON.stringify({ id, matched: !!who, clinic: !!clinicId })}`); // no patient details in logs
+  // "We got your request" by text: only while patient texting is on, and it never holds up the booking.
+  let texted = false;
+  try {
+    const { sendBookingConfirmation } = await import("./textsDb");
+    texted = (await sendBookingConfirmation({ phone, spanish: pref.spanish, subjectKey: who?.key ?? null, patientId: who?.patientId ?? null, patientName: who?.name ?? null })).sent;
+  } catch {
+    console.warn("[website-booking] confirmation text failed");
+  }
+  console.log(`[website-booking] ${JSON.stringify({ id, matched: !!who, clinic: !!clinicId, texted })}`); // no patient details in logs
   return { ok: true as const, id };
 }
 
@@ -109,8 +117,19 @@ export async function bookingStats(actor: WorkspaceActor) {
   // Spam and tests don't count.
   const web = rows.filter((r) => r.source === "website" && r.status !== "spam");
   const mins = web.filter((r) => r.firstContactAt).map((r) => (r.firstContactAt!.getTime() - r.receivedAt.getTime()) / 60000).sort((a, b) => a - b);
+  const now = new Date();
+  const today = localDateStr(now);
+  const todays = web.filter((r) => localDateStr(r.receivedAt) === today);
   return {
     waiting: web.filter((r) => OPEN_BOOKING.includes(r.status as BookingStatus)).length,
+    /** Not called yet after 15+ minutes of office time (the same rule as the bell alert). */
+    overdue: web.filter((r) => r.status === "new" && !r.firstContactAt && officeMinutesBetween(r.receivedAt, now) >= WAIT_ALERT_MIN).length,
+    today: {
+      received: todays.length,
+      called: todays.filter((r) => r.firstContactAt).length,
+      scheduled: todays.filter((r) => r.status === "scheduled").length,
+      notCalled: todays.filter((r) => r.status === "new" && !r.firstContactAt).length,
+    },
     received30: web.length,
     scheduled30: web.filter((r) => r.status === "scheduled").length,
     medianFirstCallMin: mins.length ? Math.round(mins[Math.floor(mins.length / 2)]!) : null,

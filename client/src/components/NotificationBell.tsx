@@ -22,6 +22,7 @@ const OPENS: Partial<Record<NotificationKind, string>> = {
   team_tasks: "/my-work",
   program_approvals: "/program-approvals",
   documents: "/documents",
+  website_bookings: "/bookings",
 };
 
 /** The top-bar bell: newest notifications, mark all read, clear all, and which kinds to get. */

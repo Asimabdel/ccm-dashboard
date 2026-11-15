@@ -32,7 +32,8 @@ import { PLANS, checkInsurance, patientLine } from "../shared/insurance";
 import { isConversation, isMadeOrTaken, isQuickHangup, orderMetrics, progressOf, usualPerDay, weekdaysLeftInMonth } from "../shared/metrics";
 import { isFaxEmail, makePersonMatcher, matchFaxPatient, parseFaxMeta, parseFaxReading } from "../shared/fax";
 import { chartLine, patientInfo, patientOf, sectionType } from "../shared/fhir";
-import { clinicForLocation, parseBookingEmail, parsePreferred } from "../shared/booking";
+import { clinicForLocation, officeMinutesBetween, officeOpenAt, parseBookingEmail, parsePreferred } from "../shared/booking";
+import { dailyCountText } from "./bookingAlerts";
 import { pcpIsOurs, splitName, summarizeCoverage } from "../shared/eligibility";
 import { cleanFields, missingFor, signerOf, usDate } from "../shared/documents";
 import { MEDICAL_INTAKE, PUBLIC_SLUG_RE, agreementIn, answerText, choiceIn, cleanAnswers, cleanChoices, dobFromParts, inviteText, langFromPreferred, missingInSection, needsAuthority, stableStringify, textBlocks } from "../shared/intake";
@@ -685,6 +686,36 @@ describe("website bookings", () => {
     expect(parsePreferred("mar, 29 sept · 2:30 PM", sep27)).toEqual({ date: "2026-09-29", time: "2:30 PM", spanish: true });
     expect(parsePreferred("Fri, Jan 8 · 9:00 AM", sep27).date).toBe("2027-01-08"); // no year: the next one
     expect(parsePreferred("", sep27)).toEqual({ date: null, time: null, spanish: false });
+  });
+  it("reads the new booking screen's preferred time (a day and a part of the day, or first available)", () => {
+    expect(parsePreferred("Mon, Nov 16 · Morning (9–11 AM)", new Date("2026-11-14T20:00:00Z"))).toEqual({ date: "2026-11-16", time: null, spanish: false });
+    expect(parsePreferred("lun, 16 nov · Morning (9–11 AM)", new Date("2026-11-14T20:00:00Z"))).toEqual({ date: "2026-11-16", time: null, spanish: true });
+    expect(parsePreferred("First available", new Date("2026-11-14T20:00:00Z"))).toEqual({ date: null, time: null, spanish: false });
+    expect(parsePreferred("First available · en español (sáb)", new Date("2026-11-14T20:00:00Z")).spanish).toBe(true);
+  });
+  it("counts only office time while a website request waits for its call", () => {
+    const fri450 = new Date("2026-11-13T22:50:00Z"); // Friday 4:50 PM in Houston
+    expect(officeMinutesBetween(fri450, new Date("2026-11-13T22:58:00Z"))).toBe(8);
+    expect(officeMinutesBetween(fri450, new Date("2026-11-14T18:00:00Z"))).toBe(10); // Saturday noon: only Friday's last 10 minutes
+    expect(officeMinutesBetween(fri450, new Date("2026-11-16T15:05:00Z"))).toBe(15); // Monday 9:05 AM
+    const sat = new Date("2026-11-14T16:00:00Z"); // Saturday 10 AM
+    expect(officeMinutesBetween(sat, new Date("2026-11-16T15:14:00Z"))).toBe(14); // Monday 9:14
+    expect(officeMinutesBetween(sat, new Date("2026-11-16T15:15:00Z"))).toBe(15);
+    expect(officeMinutesBetween(new Date("2026-11-16T16:00:00Z"), new Date("2026-11-16T16:20:00Z"))).toBe(20);
+    expect(officeMinutesBetween(new Date("2026-11-16T16:20:00Z"), new Date("2026-11-16T16:00:00Z"))).toBe(0);
+    expect(officeMinutesBetween(new Date("2026-07-06T13:30:00Z"), new Date("2026-07-06T14:10:00Z"))).toBe(10); // summer time: 8:30 → 9:10 AM
+    expect(officeOpenAt(new Date("2026-11-16T15:00:00Z"))).toBe(true); // Monday 9:00 AM
+    expect(officeOpenAt(new Date("2026-11-16T23:00:00Z"))).toBe(false); // Monday 5:00 PM
+    expect(officeOpenAt(sat)).toBe(false);
+  });
+  it("words the end-of-day count, and stays quiet on a day with nothing to say", () => {
+    expect(dailyCountText({ received: 0, called: 0, scheduled: 0, notCalled: 0, olderWaiting: 0, medianWaitMin: null })).toBeNull();
+    expect(dailyCountText({ received: 6, called: 5, scheduled: 4, notCalled: 1, olderWaiting: 0, medianWaitMin: 12 }))
+      .toEqual({ title: "Website bookings today: 6 requests", content: "5 called, 4 scheduled, 1 not called yet. Typical wait for the first call: 12 minutes of office time." });
+    expect(dailyCountText({ received: 1, called: 1, scheduled: 1, notCalled: 0, olderWaiting: 2, medianWaitMin: 75 }))
+      .toEqual({ title: "Website bookings today: 1 request", content: "1 called, 1 scheduled. Typical wait for the first call: 1 h 15 min of office time. 2 earlier requests are still waiting for a call." });
+    expect(dailyCountText({ received: 0, called: 0, scheduled: 0, notCalled: 0, olderWaiting: 1, medianWaitMin: null })?.content)
+      .toBe("No new requests came in today. 1 earlier request is still waiting for a call.");
   });
   it("maps website locations to MyPCP clinics", () => {
     const clinics = [{ id: 1, name: "Katy" }, { id: 2, name: "Cypress" }, { id: 3, name: "Highland Knolls" }, { id: 4, name: "Westheimer" }];

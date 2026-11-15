@@ -40,6 +40,16 @@ export const DEFAULT_TEXTING: TextingSettings = {
   },
 };
 
+/**
+ * The automatic "we got your request" text after a website booking (2026-11-14). No details of the visit,
+ * plain characters only (so it stays a short text), and how to stop.
+ */
+export function bookingConfirmText(spanish: boolean): string {
+  return spanish
+    ? "MyPCP Dr: recibimos su solicitud de cita. Le llamaremos del (346) 707-8978 en horario de oficina (lunes a viernes, 9 a 5) para confirmar la hora. Si es una emergencia, llame al 911. Responda STOP para no recibir mensajes."
+    : "MyPCP Dr: we got your appointment request. We will call you from (346) 707-8978 during office hours (Mon-Fri, 9-5) to confirm the time. If this is an emergency, call 911. Reply STOP to opt out.";
+}
+
 /** One auto-reply per number at most this often. */
 export const AUTO_REPLY_EVERY_HOURS = 12;
 

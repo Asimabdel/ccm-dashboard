@@ -202,7 +202,12 @@ export const handler = async (event: any, context: any) => {
     const { runWorkforceAlerts } = await import("../workforceAlerts");
     const r = await runWorkforceAlerts();
     if (r.reminders || r.alerts || r.shoutout) console.log("[workforce-alerts]", JSON.stringify(r));
-    return r;
+    // Same schedule: website bookings nobody has called after 15 office minutes, and the end-of-day count.
+    const { runBookingAlerts } = await import("../bookingAlerts");
+    const bookingAlerts = await runBookingAlerts().catch((e: Error) => ({ error: e.message }));
+    if ("error" in bookingAlerts) console.error("[booking-alerts] failed:", bookingAlerts.error);
+    else if (bookingAlerts.flagged || bookingAlerts.dailyCount) console.log("[booking-alerts]", JSON.stringify(bookingAlerts)); // counts only
+    return { ...r, bookingAlerts };
   }
   // Patient texts: bring in new texts from RingCentral and send after-hours replies (every minute, IAM-only).
   if (event && event.__job === "sms-sync" && !event.requestContext && !event.version) {

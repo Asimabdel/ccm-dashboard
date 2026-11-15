@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 import { can } from "../shared/workspace";
-import { DEFAULT_TEXTING, autoReplyText, isAfterHours, isStartText, isStopText, textSegments, textStatusFrom } from "../shared/texts";
+import { DEFAULT_TEXTING, autoReplyText, bookingConfirmText, isAfterHours, isStartText, isStopText, textSegments, textStatusFrom } from "../shared/texts";
 
 function callerFor(role: string) {
   const user = { id: 94, openId: "texts-test", email: "texts@example.com", name: "Texts Test", loginMethod: "manus", role, createdAt: new Date(), updatedAt: new Date(), lastSignedIn: new Date() };
@@ -51,6 +51,17 @@ describe("texting rules", () => {
     expect(autoReplyText(a, null)).toBe(`${a.en}\n\n${a.es}`);
   });
 
+  it("confirms a website booking by text without any details of the visit, in plain characters, with how to stop", () => {
+    for (const t of [bookingConfirmText(false), bookingConfirmText(true)]) {
+      expect(t).toMatch(/^MyPCP Dr: /);
+      expect(t).toContain("(346) 707-8978");
+      expect(t).toContain("911");
+      expect(t).toContain("STOP");
+      expect(/^[ -~]+$/.test(t)).toBe(true);
+      expect(textSegments(t)).toBeLessThanOrEqual(2);
+    }
+    expect(bookingConfirmText(true)).toContain("solicitud de cita");
+  });
   it("recognizes the carriers' STOP / START words, not ordinary replies", () => {
     for (const w of ["STOP", "stop.", " Unsubscribe ", "CANCEL"]) expect(isStopText(w)).toBe(true);
     for (const w of ["Please stop by tomorrow", "yes", "Can I cancel my 2pm?"]) expect(isStopText(w)).toBe(false);

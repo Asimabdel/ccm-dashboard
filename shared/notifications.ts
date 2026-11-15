@@ -10,6 +10,7 @@ export const NOTIFICATION_KINDS = {
   time_off: { label: "Time off", hint: "Time-off requests and answers." },
   shifts: { label: "Shifts and schedules", hint: "Call-outs, shift pickups and swaps, schedule changes." },
   time_clock: { label: "Time clock and attendance", hint: "Clock-in reminders, late / no-show / missed-punch alerts, punch fixes." },
+  website_bookings: { label: "Website bookings", hint: "A website appointment request has waited 15 minutes for a call, and the end-of-day count." },
   care_updates: { label: "Refills and care updates", hint: "Refill requests and decisions, care-management updates." },
   patient_safety: { label: "Urgent patient alerts", hint: "Urgent symptoms and escalations. Always on." },
 } as const;
@@ -29,6 +30,7 @@ export function notificationKind(type: string, title: string): NotificationKind 
     return "shifts";
   }
   if (type === "task") {
+    if (title.startsWith("Website booking")) return "website_bookings";
     if (title === "New task for your team") return "team_tasks";
     if (/qualif(y|ies) for care programs$/.test(title)) return "program_approvals";
     if (/^Document |^Your .+ was used$|^Your stored signature /.test(title)) return "documents";
