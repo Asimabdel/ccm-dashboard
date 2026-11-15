@@ -13,7 +13,8 @@
  */
 import { createDB } from "mysql-memory-server";
 
-const PORT = 3307;
+// Another session may already be using 3307: set DEV_DB_PORT to run a second, separate copy.
+const PORT = Number(process.env.DEV_DB_PORT) || 3307;
 
 async function main() {
   const db = await createDB({

@@ -44,6 +44,8 @@ import { TEXT_FILTERS, type TextFilter } from "../../shared/texts";
 import * as outreach from "../outreachDb";
 import * as faxOut from "../faxSendDb";
 import * as daily from "../dailyReportDb";
+import * as navMenu from "../navMenuDb";
+import * as navCounts from "../navCounts";
 import { INJECTION_KIND_LIST, type InjectionKind } from "../../shared/dailyReport";
 import { LIST_SORTS, OUTREACH_STATUS_LIST } from "../../shared/outreach";
 
@@ -178,6 +180,19 @@ export const workspaceRouter = router({
     const actor = await actorFor(ctx, caps.tasks ? "tasks" : "playbooksView");
     const clinics = await ws.listClinics(actor);
     return { caps, clinics, limitedToClinics: actor.clinicIds !== null, noClinicAccess: actor.clinicIds !== null && actor.clinicIds.length === 0, programApprover, ccmAssigner, bhiAssigner, apcmAccess, masterBilling };
+  }),
+
+  /** The side menu: this person's starred pages and folded sections, and how much is waiting on each page. */
+  nav: router({
+    prefs: protectedProcedure.query(({ ctx }) => navMenu.getNavPrefs(ctx.user.id)),
+    savePrefs: protectedProcedure
+      .input(z.object({ shortcuts: z.array(z.string().max(80)).max(40), folded: z.array(z.string().max(80)).max(40) }))
+      .mutation(({ ctx, input }) => navMenu.setNavPrefs(ctx.user.id, input)),
+    /** Path → how many things are waiting there for this person (numbers only; pages with nothing are left out). */
+    counts: protectedProcedure.query(async ({ ctx }): Promise<Record<string, number>> => {
+      if (!can(ctx.user.role, "tasks")) return {};
+      return navCounts.navCounts(await taskActor(ctx));
+    }),
   }),
 
   home: protectedProcedure.input(z.object({ clinicId })).query(async ({ ctx, input }) => {

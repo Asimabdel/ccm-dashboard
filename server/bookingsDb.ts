@@ -136,6 +136,15 @@ export async function bookingStats(actor: WorkspaceActor) {
   };
 }
 
+/** The side-menu bubble: the page's "Waiting for a call" number (same rule as `bookingStats().waiting`), as one count. */
+export async function waitingBookingCount(actor: WorkspaceActor) {
+  const d = await db();
+  const since = new Date(Date.now() - 30 * 86_400_000);
+  const [row] = await d.select({ n: sql<number>`count(*)` }).from(bookingRequests)
+    .where(and(gte(bookingRequests.receivedAt, since), clinicScope(actor), eq(bookingRequests.source, "website"), inArray(bookingRequests.status, OPEN_BOOKING)));
+  return Number(row?.n ?? 0);
+}
+
 /** Staff record how the call went. Scheduled / didn't book / spam close the task; no answer keeps it open. */
 export async function setBookingStatus(actor: WorkspaceActor, input: { id: number; status: Exclude<BookingStatus, "new" | "earlier">; note?: string | null }) {
   const d = await db();

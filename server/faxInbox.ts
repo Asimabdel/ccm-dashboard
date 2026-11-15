@@ -273,6 +273,20 @@ export async function listFaxes(filter: FaxFilter, clinicIds: number[] | null = 
     }));
 }
 
+/**
+ * The side-menu bubble: how many faxes still need a patient picked (what the inbox's first tab lists).
+ * Clinic-limited staff only reach faxes already tied to a patient at their clinic(s), as in `listFaxes`.
+ */
+export async function faxesWaitingCount(clinicIds: number[] | null = null) {
+  const d = await db();
+  const since = new Date(Date.now() - 60 * 86_400_000);
+  const rows = await d.select({ subjectKey: faxes.subjectKey, patientId: faxes.patientId }).from(faxes)
+    .where(and(gte(faxes.receivedAt, since), inArray(faxes.status, ["new", "needs_patient"]))).limit(500);
+  if (!clinicIds) return rows.length;
+  const clinicOf = await clinicOfSubjects(rows.map(faxKey));
+  return rows.filter((f) => { const k = faxKey(f); return !!k && inClinics(clinicIds, clinicOf.get(k)); }).length;
+}
+
 /** The fax PDF for viewing, straight from the mailbox (not stored in MyPCP). */
 export async function faxFile(actor: WorkspaceActor, faxId: number) {
   await assertFaxInScope(actor, faxId);

@@ -392,6 +392,12 @@ export async function subjectForms(actor: WorkspaceActor, subjectKey: string) {
 const packetScope = (actor: WorkspaceActor) =>
   actor.clinicIds ? or(actor.clinicIds.length ? inArray(intakePackets.clinicId, actor.clinicIds) : sql`1 = 0`, eq(intakePackets.createdByUserId, actor.id)) : undefined;
 
+/** The side-menu bubble: finished forms that are ready to file (same rule as `packetStats().toFile`), as one count. */
+export async function packetsToFileCount(actor: WorkspaceActor) {
+  const [row] = await (await db()).select({ n: sql<number>`count(*)` }).from(intakePackets).where(and(eq(intakePackets.status, "completed"), packetScope(actor)));
+  return Math.min(Number(row?.n ?? 0), 500);
+}
+
 export async function packetStats(actor: WorkspaceActor) {
   const d = await db();
   const since = new Date(Date.now() - 30 * 86_400_000);

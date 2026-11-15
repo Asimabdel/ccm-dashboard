@@ -85,6 +85,14 @@ const fieldsOf = (doc: DocRow) => cleanFields(doc.fields ?? [], pagesOf(doc));
 
 export type DocView = "to_sign" | "in_progress" | "completed" | "templates";
 
+/** The side-menu bubble: documents waiting for this person's signature (what the "To sign" tab lists), as one count. */
+export async function toSignCount(userId: number) {
+  const [row] = await (await db()).select({ n: sql<number>`count(distinct ${documents.id})` }).from(documentSigners)
+    .innerJoin(documents, eq(documents.id, documentSigners.documentId))
+    .where(and(eq(documentSigners.userId, userId), eq(documentSigners.status, "pending"), eq(documents.status, "signing")));
+  return Number(row?.n ?? 0);
+}
+
 export async function listDocuments(a: WorkspaceActor, view: DocView, q?: string | null) {
   const d = await db();
   const words = (q ?? "").replace(/[%_\\]/g, " ").trim().split(/\s+/).filter((w) => w.length >= 2).slice(0, 4);

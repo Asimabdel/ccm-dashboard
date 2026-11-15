@@ -3,9 +3,11 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import {
-  LogOut, Menu, ChevronDown, Check, Clock, Search, Sun, Moon, PanelLeftClose, PanelLeftOpen, X, Building2, KeyRound, MessagesSquare,
+  LogOut, Menu, ChevronDown, Check, Clock, Search, Sun, Moon, PanelLeftClose, PanelLeftOpen, X, Building2, KeyRound, MessagesSquare, Star,
 } from "lucide-react";
-import { APCM, MASTER_BILLING, MESSAGES, NAV_GROUPS, PROGRAM_APPROVALS, ROLES, ROLE_HOME, STAFF_ASSIGNMENT, type Role } from "@/lib/nav";
+import { APCM, MASTER_BILLING, MESSAGES, NAV_GROUPS, PROGRAM_APPROVALS, ROLES, ROLE_HOME, STAFF_ASSIGNMENT, type NavItem, type Role } from "@/lib/nav";
+import { useNavCounts, useNavPrefs } from "@/components/workspace/useNavMenu";
+import { NAV_SHORTCUTS_SECTION } from "@shared/navMenu";
 import { useUnreadMessages } from "@/components/messages/useUnreadMessages";
 import { useUnreadTexts } from "@/components/texts/useUnreadTexts";
 import { ClockBanner } from "@/components/workforce/ClockBanner";
@@ -112,6 +114,9 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
   // Internal messages: unread count (top bar + sidebar) and the browser pop-up.
   // The Messages badge: team messages plus unread patient texts (for people who handle texts).
   const unreadMessages = useUnreadMessages(!!user && can(user.role, "messages")) + useUnreadTexts(!!user && can(user.role, "texts"));
+  // The side menu, per person: starred pages, folded sections, and how much is waiting on each page.
+  const navPrefs = useNavPrefs(user?.id);
+  const navCounts = useNavCounts(!!user);
   const setRole = trpc.auth.setRole.useMutation({
     onSuccess: async () => {
       await refresh();
@@ -137,14 +142,16 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
     const el = navRef.current;
     if (!el) return;
     el.scrollTop = navScrollTop;
-    const active = el.querySelector<HTMLElement>('[aria-current="page"]');
-    if (active) {
-      const a = active.getBoundingClientRect();
-      const n = el.getBoundingClientRect();
-      if (a.top < n.top || a.bottom > n.bottom) {
-        active.scrollIntoView({ block: "center" });
-        saveNavScroll(el.scrollTop);
-      }
+    // A starred page is in the menu twice (My shortcuts + its own section): either one in sight is enough.
+    const actives = Array.from(el.querySelectorAll<HTMLElement>('[aria-current="page"]'));
+    const n = el.getBoundingClientRect();
+    const inSight = (x: HTMLElement) => {
+      const a = x.getBoundingClientRect();
+      return a.top >= n.top && a.bottom <= n.bottom;
+    };
+    if (actives.length && !actives.some(inSight)) {
+      actives[0].scrollIntoView({ block: "center" });
+      saveNavScroll(el.scrollTop);
     }
   }, [location, !!user, collapsed, isMobile, mobileOpen, programApprover, ccmAssigner, apcmAccess, masterBilling]);
 
@@ -189,6 +196,103 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
 
   const isActive = (path: string) => location === path || (path !== "/" && location.startsWith(path + "/"));
 
+  // How many things are waiting on a page (the number bubble next to it).
+  const waitingOn = (path: string): number =>
+    path === MESSAGES.path ? unreadMessages : path === PROGRAM_APPROVALS.path ? waitingApprovals : navCounts[path] ?? 0;
+  const bubbleText = (n: number, max = 99) => (n > max ? `${max}+` : String(n));
+  const bubble = "rounded-full bg-brand px-1.5 text-[11px] font-bold tabular-nums tracking-normal text-white";
+
+  // My shortcuts: the pages this person starred, as they are named in their own menu.
+  const itemByPath = new Map<string, NavItem>();
+  for (const g of groups) for (const item of g.items) if (!itemByPath.has(item.path)) itemByPath.set(item.path, item);
+  const shortcutItems = navPrefs.shortcuts.flatMap((p) => itemByPath.get(p) ?? []);
+  const shortcutsInSight = !navPrefs.folded.includes(NAV_SHORTCUTS_SECTION);
+
+  const renderItem = (item: NavItem, inShortcuts: boolean) => {
+    const Icon = item.icon;
+    const active = isActive(item.path);
+    const waiting = waitingOn(item.path);
+    const starred = inShortcuts || navPrefs.shortcuts.includes(item.path);
+    return (
+      <div
+        key={item.path}
+        className={cn("group/nav relative flex items-center rounded-lg transition-colors", active ? "bg-white/[0.08]" : "hover:bg-white/[0.05]")}
+      >
+        {active && <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r bg-brand" />}
+        <button
+          onClick={() => setLocation(item.path)}
+          title={item.label}
+          aria-current={active ? "page" : undefined}
+          className={cn(
+            "relative flex-1 min-w-0 flex items-center gap-3 rounded-lg text-sm text-left transition-colors",
+            rail ? "justify-center h-10" : "px-3 py-2",
+            active ? "text-white font-medium" : "text-slate-400 group-hover/nav:text-slate-100",
+          )}
+        >
+          <Icon size={17} className={cn("shrink-0", active && "text-white")} />
+          {!rail && <span className="truncate">{item.label}</span>}
+          {waiting > 0 && (
+            <span className={cn(bubble, rail ? "absolute right-1 top-1" : "ml-auto")} aria-label={`${waiting} waiting`}>
+              {bubbleText(waiting, item.path === PROGRAM_APPROVALS.path ? 999 : 99)}
+            </span>
+          )}
+        </button>
+        {!rail && (
+          <button
+            onClick={() => navPrefs.toggleShortcut(item.path)}
+            aria-pressed={starred}
+            aria-label={starred ? `Remove ${item.label} from My shortcuts` : `Add ${item.label} to My shortcuts`}
+            title={starred ? "Remove from My shortcuts" : "Add to My shortcuts"}
+            className={cn(
+              "shrink-0 h-8 flex items-center justify-center overflow-hidden rounded-md transition-all duration-150 hover:text-amber-300",
+              starred ? "text-amber-400/80" : "text-slate-500",
+              // Slides in when pointing at the row, so it takes no room from the page name otherwise.
+              // Always there on phones, where there is no pointing.
+              isMobile
+                ? "w-6 -ml-2.5 mr-0.5 opacity-80"
+                : "w-0 opacity-0 group-hover/nav:w-6 group-hover/nav:-ml-2.5 group-hover/nav:mr-0.5 group-hover/nav:opacity-100 focus-visible:w-6 focus-visible:-ml-2.5 focus-visible:mr-0.5 focus-visible:opacity-100",
+            )}
+          >
+            <Star size={14} fill={starred ? "currentColor" : "none"} />
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  // One menu section: a heading that folds it shut (the choice is remembered for this person) and its pages.
+  // A folded section still shows the page you are on, and its heading adds up what is waiting inside.
+  const renderSection = (label: string, items: NavItem[], isShortcuts: boolean) => {
+    const folded = !rail && navPrefs.folded.includes(label);
+    // The page you are on stays in sight, unless My shortcuts already shows it.
+    const keepInSight = (i: NavItem) => isActive(i.path) && (isShortcuts || !shortcutsInSight || !navPrefs.shortcuts.includes(i.path));
+    const shown = folded ? items.filter(keepInSight) : items;
+    const hiddenWaiting = folded ? items.reduce((sum, i) => sum + (keepInSight(i) ? 0 : waitingOn(i.path)), 0) : 0;
+    return (
+      <div key={isShortcuts ? "#shortcuts" : label}>
+        {!rail && (
+          <button
+            onClick={() => navPrefs.toggleFold(label)}
+            aria-expanded={!folded}
+            title={folded ? `Show ${label}` : `Hide ${label}`}
+            className="w-full flex items-center gap-1.5 h-6 pl-3 pr-2 mb-1 rounded-md text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500 hover:text-slate-300 transition-colors"
+          >
+            <span className="truncate">{label}</span>
+            {hiddenWaiting > 0 && <span className={cn(bubble, "ml-auto")}>{bubbleText(hiddenWaiting, 999)}</span>}
+            <ChevronDown size={13} className={cn("shrink-0 transition-transform", hiddenWaiting > 0 ? "" : "ml-auto", folded && "-rotate-90")} />
+          </button>
+        )}
+        {rail && <div className="mx-3 mb-2 h-px bg-white/5" />}
+        {shown.length > 0 && <div className="space-y-0.5">{shown.map((item) => renderItem(item, isShortcuts))}</div>}
+        {isShortcuts && !folded && items.length === 0 && (
+          <p className="px-3 text-xs leading-snug text-slate-500">
+            {isMobile ? "Tap the" : "Point at a page and click its"} <Star size={11} className="inline -mt-0.5" /> {isMobile ? "next to a page to keep it here." : "to keep it here."}
+          </p>
+        )}
+      </div>
+    );
+  };
+
   const sidebar = (
     <aside
       className={cn(
@@ -214,41 +318,9 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
       </div>
 
       <nav ref={navRef} onScroll={(e) => saveNavScroll(e.currentTarget.scrollTop)} className="flex-1 overflow-y-auto px-3 py-4 space-y-5 [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.14)_transparent]">
-        {groups.map((g) => (
-          <div key={g.label}>
-            {!rail && <p className="px-3 mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">{g.label}</p>}
-            {rail && <div className="mx-3 mb-2 h-px bg-white/5" />}
-            <div className="space-y-0.5">
-              {g.items.map((item) => {
-                const Icon = item.icon;
-                const active = isActive(item.path);
-                return (
-                  <button
-                    key={item.path}
-                    onClick={() => setLocation(item.path)}
-                    title={item.label}
-                    aria-current={active ? "page" : undefined}
-                    className={cn(
-                      "w-full flex items-center gap-3 rounded-lg text-sm transition-colors relative",
-                      rail ? "justify-center h-10" : "px-3 py-2",
-                      active ? "bg-white/[0.08] text-white font-medium" : "text-slate-400 hover:bg-white/[0.05] hover:text-slate-100",
-                    )}
-                  >
-                    {active && <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r bg-brand" />}
-                    <Icon size={17} className={cn("shrink-0", active && "text-white")} />
-                    {!rail && <span className="truncate">{item.label}</span>}
-                    {item.path === MESSAGES.path && unreadMessages > 0 && (
-                      <span className={cn("rounded-full bg-brand px-1.5 text-[11px] font-bold tabular-nums text-white", rail ? "absolute right-1 top-1" : "ml-auto")}>{unreadMessages > 99 ? "99+" : unreadMessages}</span>
-                    )}
-                    {item.path === PROGRAM_APPROVALS.path && waitingApprovals > 0 && (
-                      <span className={cn("rounded-full bg-brand px-1.5 text-[11px] font-bold tabular-nums text-white", rail ? "absolute right-1 top-1" : "ml-auto")}>{waitingApprovals > 999 ? "999+" : waitingApprovals}</span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ))}
+        {/* The person's starred pages. The narrow (icons only) menu shows them only once some are starred. */}
+        {(!rail || shortcutItems.length > 0) && renderSection(NAV_SHORTCUTS_SECTION, shortcutItems, true)}
+        {groups.map((g) => renderSection(g.label, g.items, false))}
       </nav>
 
       <div className="p-3 border-t border-white/5 space-y-1">

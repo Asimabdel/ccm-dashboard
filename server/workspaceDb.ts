@@ -533,6 +533,14 @@ export async function listTasks(actor: WorkspaceActor, f: TaskFilters) {
   });
 }
 
+/** The side-menu bubble on My Work: this person's open tasks (the same list as the "mine" view), as one count. */
+export async function myOpenTaskCount(actor: WorkspaceActor) {
+  const [row] = await (await db()).select({ n: sql<number>`count(*)` }).from(workTasks)
+    .leftJoin(patients, eq(workTasks.patientId, patients.id))
+    .where(taskWhere(actor, { view: "mine" }));
+  return Number(row?.n ?? 0);
+}
+
 export async function taskCounts(actor: WorkspaceActor, clinicId?: number | null) {
   const d = await db();
   const count = async (view: TaskView) =>

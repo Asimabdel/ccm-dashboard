@@ -708,6 +708,20 @@ export async function listEmails(filter: "needs_patient" | "all", clinicIds: num
   }));
 }
 
+/**
+ * The side-menu bubble: how many patient emails still need a patient picked (what the page lists first).
+ * Clinic-limited staff only reach emails already tied to a patient at their clinic(s), as in `listEmails`.
+ */
+export async function emailsWaitingCount(clinicIds: number[] | null = null) {
+  const d = await db();
+  const since = new Date(Date.now() - 30 * 86_400_000);
+  const rows = await d.select({ subjectKey: emailMessages.subjectKey, patientId: emailMessages.patientId }).from(emailMessages)
+    .where(and(gte(emailMessages.receivedAt, since), eq(emailMessages.status, "needs_patient"))).limit(1000);
+  if (!clinicIds) return rows.length;
+  const clinicOf = await clinicOfSubjects(rows.map(emailKey));
+  return rows.filter((m) => { const k = emailKey(m); return !!k && inClinics(clinicIds, clinicOf.get(k)); }).length;
+}
+
 export { searchSubjects };
 
 /** Staff picked the patient: remember the address, then create (or re-route) the task. Earlier emails get no task. */
