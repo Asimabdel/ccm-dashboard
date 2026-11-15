@@ -11,6 +11,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { UploadDialog } from "@/components/masterBilling/UploadDialog";
 import { ClaimDrawer } from "@/components/masterBilling/ClaimDrawer";
 import { PayrollTab } from "@/components/masterBilling/PayrollTab";
+import { CostsTab } from "@/components/masterBilling/CostsTab";
 import { ZocdocTab } from "@/components/masterBilling/ZocdocTab";
 import { STATUS_CLASS, StatusBadge } from "@/components/masterBilling/StatusBadge";
 import { downloadCsv, niceName } from "@/lib/masterBillingFiles";
@@ -37,13 +38,13 @@ interface Filters {
   closeMatch?: boolean | null;
   subjectKey?: string | null;
 }
-type Tab = "summary" | "breakdown" | "claims" | "denials" | "deductible" | "zocdoc" | "payroll" | "uploads";
+type Tab = "summary" | "breakdown" | "claims" | "denials" | "deductible" | "zocdoc" | "payroll" | "costs" | "uploads";
 const TABS: { key: Tab; label: string }[] = [
   { key: "summary", label: "Summary" }, { key: "breakdown", label: "Breakdown" }, { key: "claims", label: "Claims" }, { key: "denials", label: "Denials" },
-  { key: "deductible", label: "High deductible" }, { key: "zocdoc", label: "ZocDoc" }, { key: "payroll", label: "Payroll" }, { key: "uploads", label: "Uploads" },
+  { key: "deductible", label: "High deductible" }, { key: "zocdoc", label: "ZocDoc" }, { key: "payroll", label: "Payroll" }, { key: "costs", label: "Costs" }, { key: "uploads", label: "Uploads" },
 ];
 /** Tabs with their own date controls (the page's filters bar is hidden on them). */
-const OWN_FILTERS: Tab[] = ["uploads", "payroll", "zocdoc"];
+const OWN_FILTERS: Tab[] = ["uploads", "payroll", "zocdoc", "costs"];
 
 type Preset = "month" | "lastMonth" | "3m" | "ytd" | "12m" | "all";
 const PRESETS: { key: Preset; label: string }[] = [
@@ -167,6 +168,7 @@ export default function MasterBillingPage() {
       {tab === "deductible" && <HighDeductible f={f} onDrill={drill} />}
       {tab === "zocdoc" && <ZocdocTab />}
       {tab === "payroll" && <PayrollTab />}
+      {tab === "costs" && <CostsTab />}
       {tab === "uploads" && <Uploads onUpload={() => setUpload(true)} />}
 
       <UploadDialog open={upload} onOpenChange={setUpload} />

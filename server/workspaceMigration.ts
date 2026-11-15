@@ -33,6 +33,8 @@ const ENUM_ADDITIONS: { table: string; column: string; values: string[] }[] = [
   { table: "auditLogs", column: "action", values: ["view_payroll", "set_pay_rate"] },
   // Added 2026-11-13: ZocDoc in Master Billing (owner only).
   { table: "auditLogs", column: "action", values: ["view_zocdoc", "import_zocdoc"] },
+  // Added 2026-11-15: Costs in Master Billing (owner only).
+  { table: "auditLogs", column: "action", values: ["view_costs", "set_cost"] },
 ];
 
 export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
@@ -1353,6 +1355,21 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     INDEX \`zocdocBookings_date_idx\` (\`appointmentDate\`),
     INDEX \`zocdocBookings_subject_idx\` (\`subjectKey\`),
     CONSTRAINT \`zocdocBookings_lastImportId_fk\` FOREIGN KEY (\`lastImportId\`) REFERENCES \`zocdocImports\`(\`id\`))` },
+  // Costs in Master Billing (owner only, added 2026-11-15): monthly bills such as each clinic's rent.
+  { label: "practiceCosts", sql: `CREATE TABLE IF NOT EXISTS \`practiceCosts\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`name\` varchar(120) NOT NULL,
+    \`category\` varchar(20) NOT NULL,
+    \`clinicId\` int,
+    \`amountCents\` int NOT NULL,
+    \`startMonth\` varchar(7) NOT NULL,
+    \`endMonth\` varchar(7),
+    \`note\` varchar(255),
+    \`createdByUserId\` int,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT \`practiceCosts_clinicId_fk\` FOREIGN KEY (\`clinicId\`) REFERENCES \`clinics\`(\`id\`),
+    CONSTRAINT \`practiceCosts_createdByUserId_fk\` FOREIGN KEY (\`createdByUserId\`) REFERENCES \`users\`(\`id\`))` },
 ];
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;

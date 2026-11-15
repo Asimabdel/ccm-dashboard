@@ -8,6 +8,7 @@ import { BREAKDOWN_DIM_KEYS, type BreakdownDim } from "../../shared/masterBillin
 import { isValidDateStr } from "../../shared/workforce";
 import { ZOCDOC_PATIENT_FILTERS } from "../../shared/zocdoc";
 import { PAY_TYPES } from "../../shared/payroll";
+import { COST_CATEGORIES } from "../../shared/costs";
 import * as mb from "../masterBillingDb";
 import { hasMasterBilling } from "../masterBillingAccess";
 import { WorkspaceError, type WorkspaceActor } from "../workspaceDb";
@@ -170,6 +171,26 @@ export const masterBillingRouter = router({
     const actor = await owner(ctx);
     const { removePayRate } = await import("../payrollDb");
     return run(() => removePayRate(actor, input.id));
+  }),
+
+  /** Costs: monthly bills (rent per clinic) and money in vs. money out by month. */
+  costsReport: protectedProcedure.query(async ({ ctx }) => {
+    const actor = await owner(ctx);
+    const { costsReport } = await import("../costsDb");
+    return run(() => costsReport(actor));
+  }),
+  saveCost: protectedProcedure.input(z.object({
+    id: z.number().int().positive().nullish(), name: z.string().min(1).max(120), category: z.enum(COST_CATEGORIES), clinicId: z.number().int().positive().nullable(),
+    amountCents: z.number().int().min(1).max(100_000_000), startMonth: z.string().regex(/^\d{4}-\d{2}$/), endMonth: z.string().regex(/^\d{4}-\d{2}$/).nullable(), note: z.string().max(255).nullish(),
+  })).mutation(async ({ ctx, input }) => {
+    const actor = await owner(ctx);
+    const { saveCost } = await import("../costsDb");
+    return run(() => saveCost(actor, input));
+  }),
+  removeCost: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    const actor = await owner(ctx);
+    const { removeCost } = await import("../costsDb");
+    return run(() => removeCost(actor, input.id));
   }),
 
   /** ZocDoc: an uploaded "Appointment report" file starts here (one row per file). */

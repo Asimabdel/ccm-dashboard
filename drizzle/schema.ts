@@ -483,6 +483,9 @@ export const auditLogs = mysqlTable("auditLogs", {
     // ZocDoc in Master Billing (owner only), added 2026-11-13
     "view_zocdoc",
     "import_zocdoc",
+    // Costs in Master Billing (owner only), added 2026-11-15
+    "view_costs",
+    "set_cost",
   ]).notNull(),
   entityType: varchar("entityType", { length: 50 }),
   entityId: int("entityId"),
@@ -2417,6 +2420,29 @@ export const payRates = mysqlTable("payRates", {
 }, (t) => ({
   userIdx: index("payRates_user_idx").on(t.userId, t.startDate),
 }));
+
+/**
+ * Costs in Master Billing (owner only, 2026-11-15): the practice's monthly bills, such as each clinic's rent.
+ * A cost counts every month from startMonth through endMonth (or on, when there's no end). A change in
+ * amount is a new row from its month, with the old row ended the month before.
+ */
+export const practiceCosts = mysqlTable("practiceCosts", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 120 }).notNull(),
+  /** rent | utilities | software | insurance | equipment | other */
+  category: varchar("category", { length: 20 }).notNull(),
+  /** The clinic it belongs to; null = the whole practice. */
+  clinicId: int("clinicId").references(() => clinics.id),
+  /** Per month, in cents. */
+  amountCents: int("amountCents").notNull(),
+  /** "YYYY-MM" */
+  startMonth: varchar("startMonth", { length: 7 }).notNull(),
+  endMonth: varchar("endMonth", { length: 7 }),
+  note: varchar("note", { length: 255 }),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
 
 /**
  * ZocDoc in Master Billing (owner only, 2026-11-13): each uploaded ZocDoc "Appointment report" file.

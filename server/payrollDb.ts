@@ -90,7 +90,7 @@ function addMonth(m: string, n = 1): string {
 export type PayrollInput = { view: "month"; month: string } | { view: "period"; start: string };
 
 /** Estimated pay for everyone on the time clock (and anyone with a pay rate) for a month or pay period. */
-export async function payroll(actor: WorkspaceActor, input: PayrollInput) {
+export async function payroll(actor: WorkspaceActor, input: PayrollInput, opts: { audit?: boolean } = {}) {
   const d = await db();
   const today = localDateStr();
   const settings = await paySettings();
@@ -161,7 +161,7 @@ export async function payroll(actor: WorkspaceActor, input: PayrollInput) {
   const sum = (f: (r: (typeof rows)[number]) => number) => rows.reduce((s, r) => s + f(r), 0);
   const months: string[] = [];
   for (let m = today.slice(0, 7); m >= FIRST_MONTH; m = addMonth(m, -1)) months.push(m);
-  await audit(actor, "view_payroll", { entityType: "payroll", description: `Payroll ${input.view === "month" ? input.month : `pay period ${from}`}` });
+  if (opts.audit !== false) await audit(actor, "view_payroll", { entityType: "payroll", description: `Payroll ${input.view === "month" ? input.month : `pay period ${from}`}` });
   return {
     view: input.view, from, to, today, inProgress: to >= today, basis,
     months, periods: recentPayPeriods(today, settings.anchor, 8),
