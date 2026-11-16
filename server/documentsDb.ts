@@ -7,14 +7,16 @@
 // the form flattened, and a certificate page (who signed what, when, from where, document fingerprints).
 import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
-import { PDFCheckBox, PDFDocument, PDFDropdown, PDFRef, PDFSignature, PDFTextField, StandardFonts, degrees, rgb, type PDFFont, type PDFPage } from "pdf-lib";
+import { BlendMode, PDFCheckBox, PDFDocument, PDFDropdown, PDFRef, PDFSignature, PDFTextField, StandardFonts, degrees, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import { getDb } from "./db";
 import {
   clinics, documentEvents, documentSignatures, documentSigners, documents, patients, providerSignatureDelegates, providerSignatures, userSignatures, users, workTaskActivities, workTasks,
 } from "../drizzle/schema";
 import {
-  APPROVAL_LABELS, APPROVAL_METHODS, cleanFields, missingFor, signerOf, usDate, type ApprovalMethod, type Assignee, type DocField, type DocPage, type DocStatus, type PrefillKey,
+  APPROVAL_LABELS, APPROVAL_METHODS, INK_HEX, cleanFields, inkOf, isMarkup, markPen, missingFor, signerOf, usDate, type ApprovalMethod, type Assignee, type DocField, type DocPage, type DocStatus,
+  type InkColor, type PrefillKey,
 } from "../shared/documents";
+import { LOGO_PNG_BASE64 } from "../shared/logoPng";
 import { localDateStr } from "../shared/workforce";
 import { MAX_PDF_BYTES, getBytes, onS3, putBytes, readTarget, uploadTarget } from "./docStore";
 import { WorkspaceError, audit, createTask, loadScheduleSubjects, notifyTask, subjectCare, type WorkspaceActor } from "./workspaceDb";
@@ -238,7 +240,8 @@ function readFormFields(pdf: PDFDocument): DocField[] {
 export async function saveAsTemplate(a: WorkspaceActor, id: number, title: string) {
   const doc = await docOr404(a, id);
   if (!doc.fileKey || !pagesOf(doc).length) throw new WorkspaceError("Upload the PDF first.");
-  const fields = fieldsOf(doc).map((f) => ({ ...f, value: null, assignee: "preparer" as Assignee }));
+  // Marks drawn on the page (white-out, stamps, ticks…) are part of the layout, so they stay as they are.
+  const fields = fieldsOf(doc).map((f) => (isMarkup(f.type) ? f : { ...f, value: null, assignee: "preparer" as Assignee }));
   const res = await (await db()).insert(documents).values({
     title: title.trim().slice(0, 255) || doc.title, isTemplate: true, status: "draft", fileKey: doc.fileKey, fileName: doc.fileName, fileSize: doc.fileSize, fileSha256: doc.fileSha256,
     pages: doc.pages, fields, createdByUserId: a.id, updatedByUserId: a.id,
@@ -677,6 +680,50 @@ function safeText(font: PDFFont, s: string) {
   try { font.encodeText(s); return s; } catch { return s.replace(/[^\x20-\x7E\xA0-\xFF]/g, "?"); }
 }
 
+const inkRgb = (c: InkColor) => { const n = parseInt(INK_HEX[c].slice(1), 16); return rgb(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255); };
+
+/** A mark the preparer drew on the page: white-out, highlight, tick / cross / circle, line, stamp, logo. */
+function drawMarkup(page: PDFPage, f: DocField, bold: PDFFont, logo: PDFImage | null) {
+  const { x, y, w, h } = f;
+  if (f.type === "whiteout") { page.drawRectangle({ x, y, width: w, height: h, color: rgb(1, 1, 1) }); return; }
+  if (f.type === "highlight") { page.drawRectangle({ x, y, width: w, height: h, color: rgb(1, 0.92, 0.23), opacity: 0.45, blendMode: BlendMode.Multiply }); return; }
+  if (f.type === "logo") {
+    if (!logo) return;
+    const s = Math.min(w / logo.width, h / logo.height);
+    page.drawImage(logo, { x: x + (w - logo.width * s) / 2, y: y + (h - logo.height * s) / 2, width: logo.width * s, height: logo.height * s });
+    return;
+  }
+  const color = inkRgb(inkOf(f.color, f.type === "stamp" ? "red" : "black"));
+  if (f.type === "line") {
+    page.drawLine({ start: { x, y: y + h / 2 }, end: { x: x + w, y: y + h / 2 }, thickness: Math.max(0.75, Math.min(3, h / 5)), color });
+    return;
+  }
+  if (f.type === "mark") {
+    const t = markPen(f);
+    if (f.value === "circle") { page.drawEllipse({ x: x + w / 2, y: y + h / 2, xScale: Math.max(1, w / 2 - t), yScale: Math.max(1, h / 2 - t), borderColor: color, borderWidth: t }); return; }
+    if (f.value === "x") {
+      const pad = Math.min(w, h) * 0.15;
+      page.drawLine({ start: { x: x + pad, y: y + pad }, end: { x: x + w - pad, y: y + h - pad }, thickness: t, color });
+      page.drawLine({ start: { x: x + pad, y: y + h - pad }, end: { x: x + w - pad, y: y + pad }, thickness: t, color });
+      return;
+    }
+    // A tick: short stroke down, long stroke up.
+    page.drawLine({ start: { x: x + w * 0.12, y: y + h * 0.5 }, end: { x: x + w * 0.4, y: y + h * 0.18 }, thickness: t, color });
+    page.drawLine({ start: { x: x + w * 0.4, y: y + h * 0.18 }, end: { x: x + w * 0.9, y: y + h * 0.86 }, thickness: t, color });
+    return;
+  }
+  if (f.type === "stamp") {
+    const text = safeText(bold, (f.value ?? "").toUpperCase());
+    if (!text.trim()) return;
+    const border = Math.max(1, Math.min(2, h * 0.07));
+    page.drawRectangle({ x: x + border / 2, y: y + border / 2, width: w - border, height: h - border, borderColor: color, borderWidth: border });
+    let size = Math.max(5, h * 0.5);
+    const wide = bold.widthOfTextAtSize(text, size);
+    if (wide > w - 8) size = Math.max(4, size * ((w - 8) / wide));
+    page.drawText(text, { x: x + (w - bold.widthOfTextAtSize(text, size)) / 2, y: y + (h - size * 0.72) / 2, size, font: bold, color });
+  }
+}
+
 function drawValue(page: PDFPage, f: DocField, font: PDFFont, sigImages: Map<string, Awaited<ReturnType<PDFDocument["embedPng"]>>>) {
   const rot = page.getRotation().angle;
   if (f.type === "checkbox") {
@@ -730,9 +777,14 @@ async function finalize(id: number, a: WorkspaceActor) {
   const sigImages = new Map<string, Awaited<ReturnType<PDFDocument["embedPng"]>>>();
   for (const s of sigRows) sigImages.set(`sig:${s.id}`, await pdf.embedPng(Buffer.from(s.png, "base64")));
   const pages = pdf.getPages();
-  for (const f of fields) {
+  const logo = fields.some((f) => f.type === "logo") ? await pdf.embedPng(Buffer.from(LOGO_PNG_BASE64, "base64")) : null;
+  // White-out goes down first, then highlight, then everything else, so words typed over a covered spot still show.
+  const layer = (f: DocField) => (f.type === "whiteout" ? 0 : f.type === "highlight" ? 1 : 2);
+  for (const f of [...fields].sort((x, z) => layer(x) - layer(z))) {
     const page = pages[f.page];
-    if (page) drawValue(page, f, font, sigImages);
+    if (!page) continue;
+    if (isMarkup(f.type)) drawMarkup(page, f, bold, logo);
+    else drawValue(page, f, font, sigImages);
   }
   await addCertificate(pdf, doc, fields, sigRows, font, bold);
   pdf.setTitle(doc.title);
@@ -774,6 +826,13 @@ async function addCertificate(pdf: PDFDocument, doc: DocRow, fields: DocField[],
   line(`Document ID: MyPCP-DOC-${doc.id} · Original file: ${doc.fileName ?? "PDF"} (${pdf.getPageCount() - 1} pages)`);
   line(`Original PDF fingerprint (SHA-256): ${doc.fileSha256 ?? ""}`, { size: 7.5 });
   line(`Prepared by: ${people.get(doc.createdByUserId)} · Completed: ${fmt(new Date())}`);
+  // Anything drawn over the original pages is said plainly, so a reader knows the page was marked up.
+  const marks = new Map<string, number>();
+  for (const f of fields) if (isMarkup(f.type)) marks.set(f.type, (marks.get(f.type) ?? 0) + 1);
+  if (marks.size) {
+    const names: Record<string, string> = { whiteout: "white-out", highlight: "highlight", mark: "tick / cross / circle", line: "line", stamp: "stamp", logo: "logo" };
+    line(`Marks added to the pages by the preparer before signing: ${Array.from(marks).map(([t, n]) => `${n} ${names[t] ?? t}`).join(", ")}.`);
+  }
   y -= 8;
   line("Signatures", { size: 12, b: true });
   for (const s of sigRows.sort((x, z) => x.signedAt.getTime() - z.signedAt.getTime())) {

@@ -1,45 +1,35 @@
 // The Documents editor. Three modes:
-//  • edit: the person preparing it places boxes on the PDF (text, date, checkbox, signature, initials),
-//    fills in their own, picks who else signs, then finishes it or sends it for signature.
-//  • sign: a teammate it was sent to fills in and signs their highlighted boxes.
+//  • edit: the person preparing it places boxes on the PDF (text, date, checkbox, signature, initials) and
+//    marks it up (white-out, highlight, ticks, lines, stamps), fills in their own boxes, picks who else
+//    signs, then finishes it or sends it for signature. Boxes can be copied, repeated on every page,
+//    nudged, lined up and undone.
+//  • sign: a teammate it was sent to fills in and signs their highlighted boxes ("Next box" walks them through).
 //  • view: read-only (the signed PDF once it's complete).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "wouter";
 import { toast } from "sonner";
-import {
-  ArrowLeft, CalendarDays, CheckCircle2, Download, FileStack, Loader2, Minus, Plus, Send, Signature, SquareCheck, TextCursorInput, Trash2, Type, UserRound, X, XCircle,
-} from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, Download, FileStack, Loader2, Minus, Plus, Redo2, Send, Trash2, Undo2 } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { Btn, ErrorNote, Loading, inputCls } from "@/components/workspace/ui";
 import { SignatureDialog } from "@/components/documents/SignatureDialog";
+import { FieldBox } from "@/components/documents/FieldBox";
+import { FillDialog } from "@/components/documents/FillDialog";
+import { Pages } from "@/components/documents/PdfPages";
+import { FieldPanel, MultiPanel, PatientPanel, SignersPanel, ToolPalette, ViewSummary } from "@/components/documents/editorPanels";
+import { PALETTE, useTouchScreen, type Doc, type SigMap, type ToolChoice } from "@/components/documents/editorShared";
 import { openPdf, type PageViewport, type PdfDoc } from "@/lib/pdf";
 import { downloadPdf } from "@/lib/pdfDownload";
-import { trpc, type RouterOutputs } from "@/lib/trpc";
+import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { DOC_STATUS_LABELS, FIELD_DEFAULT_SIZE, isFilled, isMarkup, missingFor, signerOf, type Assignee, type DocField } from "@shared/documents";
 import {
-  DOC_STATUS_LABELS, FIELD_DEFAULT_SIZE, FIELD_LABELS, PREFILL_KEYS, PREFILL_LABELS, missingFor, signerOf, usDate,
-  type Assignee, type DocField, type FieldType, type PrefillKey,
-} from "@shared/documents";
+  alignFields, duplicateFields, emptyHistory, fillOrder, keepOnPage, newFieldId, nudgeFields, redo, remember, repeatOnPages, snapMove, undo, type AlignHow, type History,
+} from "@shared/docEdit";
 
-type Doc = RouterOutputs["workspace"]["documents"]["get"];
-type SigMap = Record<string, { png: string; name: string | null }>;
-
-const TOOLS: { type: FieldType; icon: React.ElementType }[] = [
-  { type: "text", icon: Type }, { type: "date", icon: CalendarDays }, { type: "checkbox", icon: SquareCheck },
-  { type: "signature", icon: Signature }, { type: "initials", icon: TextCursorInput },
-];
-// One color per person filling boxes: you (teal), then each signer.
-const PALETTE = [
-  { border: "border-teal-600", bg: "bg-teal-500/10", text: "text-teal-800", dot: "bg-teal-600" },
-  { border: "border-violet-600", bg: "bg-violet-500/10", text: "text-violet-800", dot: "bg-violet-600" },
-  { border: "border-amber-600", bg: "bg-amber-500/10", text: "text-amber-800", dot: "bg-amber-600" },
-  { border: "border-sky-600", bg: "bg-sky-500/10", text: "text-sky-800", dot: "bg-sky-600" },
-  { border: "border-rose-600", bg: "bg-rose-500/10", text: "text-rose-800", dot: "bg-rose-600" },
-];
-/** Ink on the (always white) PDF page, whatever the app's theme. */
-const INK = "#0f172a";
-const newId = () => `f${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+const MAX_BOXES = 600;
+/** Marks that are usually added several at a time (ticking boxes, covering lines): the tool stays in hand until Esc. */
+const STICKY_TOOLS = ["mark", "whiteout", "highlight", "line"];
 
 export default function DocumentEditorPage() {
   const { user } = useAuth({ redirectOnUnauthenticated: true });
@@ -55,29 +45,42 @@ export default function DocumentEditorPage() {
   );
 }
 
+const todayStr = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+
 function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
   const { user } = useAuth();
   const [, navigate] = useLocation();
   const utils = trpc.useUtils();
   const mode = doc.mode;
+  const pages = doc.pages;
   const showFinal = doc.status === "completed" && doc.hasFinal;
   const [fields, setFields] = useState<DocField[]>(doc.fields);
+  const fieldsRef = useRef(fields);
   const [title, setTitle] = useState(doc.title);
   const [message, setMessage] = useState(doc.message ?? "");
   const [sigs, setSigs] = useState<SigMap>(doc.signatures);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [tool, setTool] = useState<FieldType | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [tool, setTool] = useState<ToolChoice | null>(null);
   const [newAssignee, setNewAssignee] = useState<Assignee>("preparer");
   const [zoom, setZoom] = useState(1);
   const [dirty, setDirty] = useState(false);
   const [signing, setSigning] = useState<DocField | null>(null);
+  const [filling, setFilling] = useState<string | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
+  const [guides, setGuides] = useState<{ page: number; x: number | null; y: number | null } | null>(null);
+  // The signature / initials made a moment ago: the next box of that kind is signed with one tap.
+  const [lastSig, setLastSig] = useState<{ signature?: string; initials?: string }>({});
+  const touch = useTouchScreen();
 
   const me: Assignee = `signer:${doc.myUserId}`;
   const signerIds = doc.signers.map((s) => s.userId);
   const colorOf = (a: Assignee) => { const s = signerOf(a); const i = s ? signerIds.indexOf(s) + 1 : 0; return PALETTE[Math.max(0, i) % PALETTE.length]!; };
   const nameOf = (a: Assignee) => { const s = signerOf(a); return s ? doc.signers.find((x) => x.userId === s)?.name ?? "Signer" : "You"; };
-  /** Can the person looking at this fill that box right now? */
-  const canFill = useCallback((f: DocField) => (mode === "edit" && f.assignee === "preparer") || (mode === "sign" && f.assignee === me), [mode, me]);
+  /** Can the person looking at this fill that box right now? (Marks are never filled in.) */
+  const canFill = useCallback((f: DocField) => !isMarkup(f.type) && ((mode === "edit" && f.assignee === "preparer") || (mode === "sign" && f.assignee === me)), [mode, me]);
+
+  /** Put new boxes in place without an undo step (they came from the server, or a signature was made). */
+  const replaceFields = (v: DocField[]) => { fieldsRef.current = v; setFields(v); };
 
   // --- the PDF ---
   const fileM = trpc.workspace.documents.file.useMutation();
@@ -103,7 +106,7 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
     if (mode !== "edit" || !dirty) return;
     const h = window.setTimeout(() => {
       setDirty(false);
-      save.mutate({ id: doc.id, title, fields: fields as unknown as Record<string, unknown>[], message }, { onError: (e) => { toast.error(e.message); setDirty(true); } });
+      save.mutate({ id: doc.id, title, fields: fieldsRef.current as unknown as Record<string, unknown>[], message }, { onError: (e) => { toast.error(e.message); setDirty(true); } });
     }, 900);
     return () => window.clearTimeout(h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -111,34 +114,152 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
   const flush = async () => {
     if (mode !== "edit") return;
     setDirty(false);
-    await save.mutateAsync({ id: doc.id, title, fields: fields as unknown as Record<string, unknown>[], message });
+    await save.mutateAsync({ id: doc.id, title, fields: fieldsRef.current as unknown as Record<string, unknown>[], message });
   };
-  const update = (fid: string, patch: Partial<DocField>) => { setFields((fs) => fs.map((f) => (f.id === fid ? { ...f, ...patch } : f))); setDirty(true); };
-  const remove = (fid: string) => { setFields((fs) => fs.filter((f) => f.id !== fid)); setSelected(null); setDirty(true); };
 
-  // Delete / Escape shortcuts while editing.
+  // --- changing the boxes, with undo / redo ---
+  const hist = useRef<History<DocField[]>>(emptyHistory());
+  const lastTag = useRef<{ tag: string; at: number } | null>(null);
+  const [, bump] = useState(0);
+  /** Every change to the boxes while preparing goes through here so it can be undone. Quick changes of the same kind (a drag, typing) count as one step. */
+  const change = (next: DocField[] | ((fs: DocField[]) => DocField[]), tag?: string) => {
+    const before = fieldsRef.current;
+    const value = typeof next === "function" ? next(before) : next;
+    if (value === before) return;
+    const now = Date.now();
+    if (!(tag && lastTag.current?.tag === tag && now - lastTag.current.at < 1000)) { hist.current = remember(hist.current, before); bump((n) => n + 1); }
+    lastTag.current = tag ? { tag, at: now } : null;
+    replaceFields(value);
+    setDirty(true);
+  };
+  const applyHistory = (r: { h: History<DocField[]>; value: DocField[] } | null) => {
+    if (!r) return;
+    hist.current = r.h;
+    lastTag.current = null;
+    // Signing isn't something to undo: a box that is signed now stays signed.
+    const now = fieldsRef.current;
+    const value = r.value.map((f) => { if (f.type !== "signature" && f.type !== "initials") return f; const cur = now.find((x) => x.id === f.id); return cur ? { ...f, value: cur.value ?? null } : f; });
+    replaceFields(value);
+    setSelected((s) => s.filter((id) => value.some((f) => f.id === id)));
+    setDirty(true);
+    bump((n) => n + 1);
+  };
+  const doUndo = () => applyHistory(undo(hist.current, fieldsRef.current));
+  const doRedo = () => applyHistory(redo(hist.current, fieldsRef.current));
+
+  const update = (fid: string, patch: Partial<DocField>, tag?: string) => change((fs) => fs.map((f) => (f.id === fid ? { ...f, ...patch } : f)), tag);
+  const removeSelected = () => {
+    if (!selected.length) return;
+    change((fs) => fs.filter((f) => !selected.includes(f.id)));
+    setSelected([]);
+  };
+  /** A value typed / ticked in a box: undoable while preparing; a signer's own answers are just kept. */
+  const fillValue = (fid: string, v: string) => {
+    if (mode === "edit") update(fid, { value: v }, `value:${fid}`);
+    else replaceFields(fieldsRef.current.map((x) => (x.id === fid ? { ...x, value: v } : x)));
+  };
+
+  // --- copy, paste, every page ---
+  const clipboard = useRef<DocField[]>([]);
+  const hoverPage = useRef<number | null>(null);
+  const addCopies = (copies: DocField[]) => {
+    const room = MAX_BOXES - fieldsRef.current.length;
+    if (!copies.length || room <= 0) return [];
+    const added = copies.slice(0, room);
+    change((fs) => [...fs, ...added]);
+    setSelected(added.map((c) => c.id));
+    return added;
+  };
+  const copySelected = () => { addCopies(duplicateFields(fieldsRef.current, selected, pages)); };
+  const paste = () => {
+    const src = clipboard.current;
+    const onPage = hoverPage.current;
+    // Pasted again and again, each copy steps a little further (the copies become what is pasted next).
+    const added = addCopies(duplicateFields(src, src.map((f) => f.id), pages, onPage != null && src.every((f) => f.page !== onPage) ? { page: onPage, dx: 0, dy: 0 } : {}));
+    if (added.length) clipboard.current = added;
+  };
+  const everyPage = (id: string) => {
+    const copies = repeatOnPages(fieldsRef.current, id, pages).slice(0, Math.max(0, MAX_BOXES - fieldsRef.current.length));
+    if (!copies.length) { toast.info("It's already on every page."); return; }
+    change((fs) => [...fs, ...copies]);
+    toast.success(`Added to ${copies.length} more page${copies.length === 1 ? "" : "s"}. (Undo takes them all back.)`);
+  };
+
+  // Keyboard while preparing: Esc, Delete, undo / redo, copy / paste / duplicate, select all, arrow keys.
   useEffect(() => {
     if (mode !== "edit") return;
     const onKey = (e: KeyboardEvent) => {
-      const typing = /INPUT|TEXTAREA|SELECT/.test((e.target as HTMLElement)?.tagName ?? "");
-      if (e.key === "Escape") { setTool(null); setSelected(null); }
-      if (!typing && selected && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); remove(selected); }
+      const el = e.target as HTMLElement | null;
+      const typing = /INPUT|TEXTAREA|SELECT/.test(el?.tagName ?? "") || !!el?.isContentEditable;
+      if (signing || filling) return;
+      if (e.key === "Escape") { setTool(null); setSelected([]); return; }
+      if (typing) return;
+      const cmd = e.ctrlKey || e.metaKey;
+      const k = e.key.toLowerCase();
+      if (cmd && k === "z") { e.preventDefault(); if (e.shiftKey) doRedo(); else doUndo(); return; }
+      if (cmd && k === "y") { e.preventDefault(); doRedo(); return; }
+      if (cmd && k === "c") { if (selected.length) clipboard.current = fieldsRef.current.filter((f) => selected.includes(f.id)); return; }
+      if (cmd && k === "v") { if (clipboard.current.length) { e.preventDefault(); paste(); } return; }
+      if (cmd && k === "d") { if (selected.length) { e.preventDefault(); copySelected(); } return; }
+      if (cmd && k === "a") { e.preventDefault(); setSelected(fieldsRef.current.map((f) => f.id)); return; }
+      if (!selected.length || cmd) return;
+      if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); removeSelected(); return; }
+      const step = e.shiftKey ? 10 : 1;
+      const d = e.key === "ArrowLeft" ? [-step, 0] : e.key === "ArrowRight" ? [step, 0] : e.key === "ArrowUp" ? [0, -step] : e.key === "ArrowDown" ? [0, step] : null;
+      if (d) { e.preventDefault(); change((fs) => nudgeFields(fs, selected, d[0]!, d[1]!, pages), `nudge:${selected.join(",")}`); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, selected]);
+  }, [mode, selected, signing, filling]);
 
-  const place = (page: number, vp: PageViewport, px: number, py: number) => {
-    if (!tool) return;
-    const size = FIELD_DEFAULT_SIZE[tool];
-    const [x, top] = vp.convertToPdfPoint(px, py) as [number, number];
-    const f: DocField = { id: newId(), type: tool, page, x, y: top - size.h, w: size.w, h: size.h, assignee: newAssignee, required: tool === "signature" || tool === "initials", value: tool === "date" && newAssignee === "preparer" ? todayStr() : null };
-    setFields((fs) => [...fs, f]);
-    setSelected(f.id);
-    setTool(null);
-    setDirty(true);
+  /** A tool was used on a page: a click adds a box of the usual size, a drag sets its size. */
+  const place = (page: number, vp: PageViewport, x0: number, y0: number, x1: number, y1: number) => {
+    if (!tool || fieldsRef.current.length >= MAX_BOXES) return;
+    const def = FIELD_DEFAULT_SIZE[tool.type];
+    const dragged = Math.abs(x1 - x0) + Math.abs(y1 - y0) > 6;
+    const min = tool.type === "line" ? 4 : 8;
+    const w = dragged ? Math.max(min, Math.abs(x1 - x0) / vp.scale) : def.w;
+    const h = dragged && tool.type !== "line" ? Math.max(min, Math.abs(y1 - y0) / vp.scale) : def.h;
+    let [x, top] = vp.convertToPdfPoint(Math.min(x0, x1), Math.min(y0, y1)) as [number, number];
+    // A tick, cross or circle lands centered on the click (to tick a printed box); a line sits where it was drawn.
+    if (!dragged && tool.type === "mark") { x -= w / 2; top += h / 2; }
+    if (tool.type === "line") top += h / 2 - (dragged ? Math.abs(y1 - y0) / vp.scale / 2 : 0);
+    const assignee: Assignee = isMarkup(tool.type) ? "preparer" : newAssignee;
+    const f: DocField = keepOnPage({
+      id: newFieldId(), type: tool.type, page, x, y: top - h, w, h, assignee, required: tool.type === "signature" || tool.type === "initials",
+      value: tool.type === "mark" ? tool.value ?? "check" : tool.type === "stamp" ? "COPY" : tool.type === "date" && assignee === "preparer" ? todayStr() : null,
+    }, pages[page]);
+    change((fs) => [...fs, f]);
+    if (STICKY_TOOLS.includes(tool.type)) setSelected([]);
+    else { setSelected([f.id]); setTool(null); }
   };
+
+  // --- picking and dragging boxes ---
+  const select = (fid: string, add: boolean) => {
+    if (mode !== "edit") return;
+    // A plain click on one of several picked boxes keeps them all picked, so they can be dragged together.
+    setSelected((s) => (add ? (s.includes(fid) ? s.filter((x) => x !== fid) : [...s, fid]) : s.includes(fid) && s.length > 1 ? s : [fid]));
+  };
+  const dragStart = useRef<DocField[] | null>(null);
+  const onMoveStart = () => { dragStart.current = fieldsRef.current; lastTag.current = null; };
+  const onMove = (f: DocField, patch: Partial<DocField>, how: "move" | "resize", scale: number) => {
+    if (how === "resize") { change((fs) => fs.map((x) => (x.id === f.id ? { ...x, ...patch } : x)), "drag"); return; }
+    const start = dragStart.current ?? fieldsRef.current;
+    const s0 = start.find((x) => x.id === f.id);
+    if (!s0) return;
+    const group = selected.includes(f.id) && selected.length > 1 ? selected : [f.id];
+    let x = patch.x ?? s0.x, y = patch.y ?? s0.y;
+    if (group.length === 1) {
+      // One box: pull it onto the edges of the boxes near it and show the guide lines.
+      const snap = snapMove(s0, x, y, fieldsRef.current, 5 / scale);
+      x = snap.x; y = snap.y;
+      setGuides(snap.guideX != null || snap.guideY != null ? { page: s0.page, x: snap.guideX, y: snap.guideY } : null);
+    }
+    const dx = x - s0.x, dy = y - s0.y;
+    change((fs) => fs.map((o) => { if (!group.includes(o.id)) return o; const st = start.find((z) => z.id === o.id) ?? o; return keepOnPage({ ...o, x: st.x + dx, y: st.y + dy }, pages[o.page]); }), "drag");
+  };
+  const onMoveEnd = () => { dragStart.current = null; lastTag.current = null; setGuides(null); };
 
   // --- signing a box ---
   const mySig = trpc.workspace.documents.mySignature.useQuery();
@@ -149,7 +270,7 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
     await flush();
     const r = await signField.mutateAsync({ id: doc.id, fieldId: f.id, onBehalfOf: o });
     setSigs((s) => ({ ...s, [r.value]: { png: r.png, name: r.name } }));
-    setFields((fs) => fs.map((x) => (x.id === f.id ? { ...x, value: r.value } : x)));
+    replaceFields(fieldsRef.current.map((x) => (x.id === f.id ? { ...x, value: r.value } : x)));
     setSigning(null);
     toast.success(`${r.name}'s ${f.type === "initials" ? "initials" : "signature"} applied. They've been notified.`);
   };
@@ -157,9 +278,31 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
     if (mode === "edit") await flush();
     const r = await signField.mutateAsync({ id: doc.id, fieldId: f.id, png, saveAsMine });
     setSigs((s) => ({ ...s, [r.value]: { png: r.png, name: user?.name ?? null } }));
-    setFields((fs) => fs.map((x) => (x.id === f.id ? { ...x, value: r.value } : x)));
+    replaceFields(fieldsRef.current.map((x) => (x.id === f.id ? { ...x, value: r.value } : x)));
+    setLastSig((s) => ({ ...s, [f.type === "initials" ? "initials" : "signature"]: png }));
     if (saveAsMine) void utils.workspace.documents.mySignature.invalidate();
     setSigning(null);
+  };
+  /** Sign this box: with the signature made a moment ago (one tap), or by opening the signature window. */
+  const startSign = (f: DocField) => {
+    // Only for someone signing their part: while preparing, the signature window also offers a provider's signature.
+    const again = mode === "sign" ? lastSig[f.type === "initials" ? "initials" : "signature"] : undefined;
+    if (again) void doSign(f, again, false).catch((e) => toast.error((e as Error).message));
+    else setSigning(f);
+  };
+
+  // --- "Next box": walk the person through what they still have to fill in ---
+  const todo = fillOrder(fields).filter((f) => canFill(f) && f.required && !isFilled(f));
+  const goTo = (f: DocField) => {
+    setFlash(f.id);
+    window.setTimeout(() => setFlash((x) => (x === f.id ? null : x)), 2400);
+    const el = document.getElementById(`box-${f.id}`);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (f.type === "signature" || f.type === "initials") window.setTimeout(() => startSign(f), 450);
+    else if (f.type !== "checkbox") {
+      if (touch) window.setTimeout(() => setFilling(f.id), 450);
+      else window.setTimeout(() => (el?.querySelector("input, textarea") as HTMLElement | null)?.focus({ preventScroll: true }), 450);
+    }
   };
 
   // --- actions ---
@@ -179,7 +322,7 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
     } catch (e) { toast.error((e as Error).message); }
   };
   const doFinishSigning = async () => {
-    const values = Object.fromEntries(fields.filter((f) => f.assignee === me && f.type !== "signature" && f.type !== "initials").map((f) => [f.id, f.value ?? ""]));
+    const values = Object.fromEntries(fieldsRef.current.filter((f) => f.assignee === me && f.type !== "signature" && f.type !== "initials").map((f) => [f.id, f.value ?? ""]));
     try {
       const r = await finishSigning.mutateAsync({ id: doc.id, values });
       toast.success(r.status === "completed" ? "Signed. Everyone's done: the signed PDF is ready." : "Signed. Waiting on the other signers.");
@@ -192,8 +335,10 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
   };
 
   const myMissing = mode === "sign" ? missingFor(fields, me) : mode === "edit" ? missingFor(fields, "preparer") : [];
-  const sel = fields.find((f) => f.id === selected) ?? null;
-  const pageCount = pdf?.numPages ?? doc.pages.length;
+  const sel = selected.length === 1 ? fields.find((f) => f.id === selected[0]) ?? null : null;
+  const fillingField = filling ? fields.find((f) => f.id === filling) ?? null : null;
+  const pageCount = pdf?.numPages ?? pages.length;
+  const stepBtn = "px-2 py-1.5 disabled:opacity-30";
 
   return (
     <div className="-mx-2 sm:mx-0">
@@ -207,6 +352,12 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
           : <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">{DOC_STATUS_LABELS[doc.status]}</span>}
         {mode === "edit" && <span className="text-xs text-slate-500">{save.isPending ? "Saving…" : dirty ? "Unsaved" : "Saved"}</span>}
         <div className="ms-auto flex flex-wrap items-center gap-1.5">
+          {mode === "edit" && (
+            <div className="flex items-center rounded-lg border border-slate-200 dark:border-slate-700">
+              <button type="button" className={stepBtn} disabled={!hist.current.past.length} onClick={doUndo} title="Undo (Ctrl+Z)" aria-label="Undo"><Undo2 size={14} /></button>
+              <button type="button" className={stepBtn} disabled={!hist.current.future.length} onClick={doRedo} title="Redo (Ctrl+Y)" aria-label="Redo"><Redo2 size={14} /></button>
+            </div>
+          )}
           <div className="flex items-center rounded-lg border border-slate-200 dark:border-slate-700">
             <button type="button" className="px-2 py-1.5" onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.25).toFixed(2)))} aria-label="Zoom out"><Minus size={14} /></button>
             <span className="w-11 text-center text-xs tabular-nums">{Math.round(zoom * 100)}%</span>
@@ -243,42 +394,26 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
           <aside className="w-full shrink-0 space-y-3 text-sm lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)] lg:w-72 lg:overflow-y-auto">
             {mode === "edit" ? (
               <>
-                <section className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Add a box</p>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {TOOLS.map((t) => (
-                      <button key={t.type} type="button" onClick={() => setTool(tool === t.type ? null : t.type)}
-                        className={cn("flex flex-col items-center gap-1 rounded-lg border px-1 py-2 text-[11px] font-semibold", tool === t.type ? "border-brand bg-brand/10 text-slate-900" : "border-slate-200 text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:text-slate-300")}>
-                        <t.icon size={16} /> {FIELD_LABELS[t.type]}
-                      </button>
-                    ))}
-                  </div>
-                  {tool && <p className="mt-2 text-xs text-brand">Click on the page where the {FIELD_LABELS[tool].toLowerCase()} box goes. (Esc to stop)</p>}
-                  {!doc.isTemplate && (
-                    <label className="mt-2 block text-xs text-slate-500">New boxes are for
-                      <select className={cn(inputCls, "mt-1 h-8 text-xs")} value={newAssignee} onChange={(e) => setNewAssignee(e.target.value as Assignee)}>
-                        <option value="preparer">Me (I fill it now)</option>
-                        {doc.signers.map((s) => <option key={s.userId} value={`signer:${s.userId}`}>{s.name ?? "Signer"} (signs later)</option>)}
-                      </select>
-                    </label>
-                  )}
-                </section>
+                <ToolPalette tool={tool} onTool={(t) => { setTool(t); if (t) setSelected([]); }} isTemplate={doc.isTemplate} signers={doc.signers} newAssignee={newAssignee} onNewAssignee={setNewAssignee} />
 
-                {sel && (
-                  <FieldPanel f={sel} doc={doc} onChange={(p) => update(sel.id, p)} onDelete={() => remove(sel.id)} isTemplate={doc.isTemplate} />
-                )}
+                {selected.length > 1 ? (
+                  <MultiPanel count={selected.length} onAlign={(how: AlignHow) => change((fs) => alignFields(fs, selected, how, pages))} onCopy={copySelected} onDelete={removeSelected} />
+                ) : sel ? (
+                  <FieldPanel f={sel} doc={doc} isTemplate={doc.isTemplate} pageCount={pages.length}
+                    onChange={(p) => update(sel.id, p, `panel:${sel.id}:${Object.keys(p).join(",")}`)} onDelete={removeSelected} onCopy={copySelected} onEveryPage={() => everyPage(sel.id)} />
+                ) : null}
 
                 {!doc.isTemplate && (
                   <SignersPanel doc={doc} fields={fields} colorOf={colorOf} onChanged={(ids) => {
                     // Boxes of someone removed go back to you (like the server does).
-                    setFields((fs) => fs.map((f) => { const s = signerOf(f.assignee); return s && !ids.includes(s) ? { ...f, assignee: "preparer", value: null } : f; }));
+                    replaceFields(fieldsRef.current.map((f) => { const s = signerOf(f.assignee); return s && !ids.includes(s) ? { ...f, assignee: "preparer", value: null } : f; }));
                     if (signerOf(newAssignee) && !ids.includes(signerOf(newAssignee)!)) setNewAssignee("preparer");
                     refetch();
                   }} />
                 )}
 
                 {!doc.isTemplate && (
-                  <PatientPanel doc={doc} onLinked={() => refetch()} onPrefilled={(fs) => { setFields(fs); }} flush={flush} />
+                  <PatientPanel doc={doc} onLinked={() => refetch()} onPrefilled={(fs) => replaceFields(fs)} flush={flush} />
                 )}
 
                 {!doc.isTemplate && doc.signers.length > 0 && (
@@ -288,7 +423,12 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
                   </section>
                 )}
 
-                {myMissing.length > 0 && <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">{myMissing.length} required box{myMissing.length === 1 ? "" : "es"} of yours still empty.</p>}
+                {myMissing.length > 0 && (
+                  <p className="flex items-center justify-between gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                    <span>{myMissing.length} required box{myMissing.length === 1 ? "" : "es"} of yours still empty.</span>
+                    {todo[0] && <button type="button" className="shrink-0 font-bold underline" onClick={() => goTo(todo[0]!)}>Show me</button>}
+                  </p>
+                )}
                 <button type="button" className="flex items-center gap-1 text-xs font-semibold text-red-600 hover:underline" disabled={cancel.isPending}
                   onClick={async () => { if (!window.confirm(doc.isTemplate ? "Delete this template?" : "Cancel this document?")) return; try { await cancel.mutateAsync({ id: doc.id }); navigate("/documents"); } catch (e) { toast.error((e as Error).message); } }}>
                   <Trash2 size={12} /> {doc.isTemplate ? "Delete template" : "Cancel document"}
@@ -297,10 +437,15 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
             ) : (
               <section className="rounded-xl border border-violet-200 bg-violet-50 p-3 dark:border-violet-900 dark:bg-violet-950/40">
                 <p className="font-semibold">Your part</p>
-                <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">{doc.creator ?? "A teammate"} sent you this to fill in and sign. Your boxes are highlighted.</p>
+                <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">{doc.creator ?? "A teammate"} sent you this to fill in and sign. Your boxes are highlighted. "Next box" takes you to each one.</p>
                 {doc.message && <p className="mt-2 rounded-md bg-white/70 p-2 text-xs italic dark:bg-slate-900/40">"{doc.message}"</p>}
                 <p className="mt-2 text-xs">{myMissing.length ? `${myMissing.length} required box${myMissing.length === 1 ? "" : "es"} left.` : "All your required boxes are done."}</p>
-                <Btn className="mt-3 w-full" disabled={busy} onClick={doFinishSigning}>{finishSigning.isPending && <Loader2 size={13} className="animate-spin" />} Finish signing</Btn>
+                {(lastSig.signature || lastSig.initials) && (
+                  <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">One tap now signs a box with the signature you just made. <button type="button" className="font-semibold underline" onClick={() => setLastSig({})}>Sign differently</button></p>
+                )}
+                {todo[0]
+                  ? <Btn className="mt-3 w-full" onClick={() => goTo(todo[0]!)}>Next box <ArrowRight size={14} /></Btn>
+                  : <Btn className="mt-3 w-full" disabled={busy} onClick={doFinishSigning}>{finishSigning.isPending && <Loader2 size={13} className="animate-spin" />} Finish signing</Btn>}
               </section>
             )}
           </aside>
@@ -313,19 +458,37 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
           {pdfErr && <ErrorNote message={`The PDF couldn't be shown: ${pdfErr}`} />}
           {doc.hasFile && !pdf && !pdfErr && <Loading label="Opening the PDF…" />}
           {pdf && (
-            <Pages pdf={pdf} count={pageCount} zoom={zoom} crosshair={!!tool}
-              onPageClick={(page, vp, x, y) => { if (tool) place(page, vp, x, y); else setSelected(null); }}
-              overlay={(page, vp) => showFinal ? null : fields.filter((f) => f.page === page).map((f) => (
-                <FieldBox key={f.id} f={f} vp={vp} color={colorOf(f.assignee)} who={nameOf(f.assignee)} editable={mode === "edit"}
-                  fillable={canFill(f)} selected={selected === f.id} sig={f.value ? sigs[f.value] ?? null : null}
-                  onSelect={() => mode === "edit" && setSelected(f.id)} onMove={(p) => update(f.id, p)}
-                  onValue={(v) => { if (mode === "edit") update(f.id, { value: v }); else setFields((fs) => fs.map((x) => (x.id === f.id ? { ...x, value: v } : x))); }}
-                  onSign={() => setSigning(f)} />
-              ))} />
+            <Pages pdf={pdf} count={pageCount} zoom={zoom} drawing={mode === "edit" && !!tool}
+              onPageClick={() => setSelected([])} onDraw={place} onHover={(p) => { hoverPage.current = p; }}
+              overlay={(page, vp) => showFinal ? null : (
+                <>
+                  {fields.filter((f) => f.page === page).map((f) => (
+                    <FieldBox key={f.id} f={f} vp={vp} color={colorOf(f.assignee)} who={nameOf(f.assignee)} editable={mode === "edit"} inert={!!tool}
+                      fillable={canFill(f)} selected={selected.includes(f.id)} resizable={selected.length === 1 && selected[0] === f.id} flash={flash === f.id}
+                      tapToFill={touch} sig={f.value ? sigs[f.value] ?? null : null}
+                      onSelect={(add) => select(f.id, add)} onMoveStart={onMoveStart} onMove={(p, how, scale) => onMove(f, p, how, scale)} onMoveEnd={onMoveEnd}
+                      onValue={(v) => fillValue(f.id, v)} onSign={() => startSign(f)} onTapFill={() => setFilling(f.id)} />
+                  ))}
+                  {guides && guides.page === page && guides.x != null && <div className="pointer-events-none absolute inset-y-0 w-px bg-fuchsia-500" style={{ left: (vp.convertToViewportPoint(guides.x, 0) as number[])[0] }} />}
+                  {guides && guides.page === page && guides.y != null && <div className="pointer-events-none absolute inset-x-0 h-px bg-fuchsia-500" style={{ top: (vp.convertToViewportPoint(0, guides.y) as number[])[1] }} />}
+                </>
+              )} />
+          )}
+          {/* Signing: a bar that stays in view and walks through the boxes that are left. */}
+          {mode === "sign" && pdf && (
+            <div className="sticky bottom-3 z-20 mt-2 flex justify-center px-2">
+              <div className="flex w-full max-w-md items-center justify-between gap-3 rounded-2xl border border-violet-300 bg-white/95 p-2 ps-4 shadow-lg backdrop-blur dark:border-violet-800 dark:bg-slate-900/95">
+                <p className="text-sm font-semibold">{todo.length ? `${todo.length} box${todo.length === 1 ? "" : "es"} left for you` : "All your boxes are done"}</p>
+                {todo[0]
+                  ? <Btn onClick={() => goTo(todo[0]!)}>Next box <ArrowRight size={14} /></Btn>
+                  : <Btn disabled={busy} onClick={doFinishSigning}>{finishSigning.isPending ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />} Finish signing</Btn>}
+              </div>
+            </div>
           )}
         </div>
       </div>
 
+      <FillDialog field={fillingField} onClose={() => setFilling(null)} onSave={(v) => { if (fillingField) fillValue(fillingField.id, v); }} />
       <SignatureDialog open={!!signing} kind={signing?.type === "initials" ? "initials" : "signature"}
         saved={(signing?.type === "initials" ? mySig.data?.initialsPng : mySig.data?.signaturePng) ?? null}
         defaultName={user?.name ?? ""} onClose={() => setSigning(null)}
@@ -337,291 +500,3 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
     </div>
   );
 }
-
-const todayStr = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
-
-// ---------------------------------------------------------------------------
-// Pages (pdf.js canvases) with a layer for the boxes
-// ---------------------------------------------------------------------------
-
-function Pages({ pdf, count, zoom, crosshair, onPageClick, overlay }: {
-  pdf: PdfDoc; count: number; zoom: number; crosshair: boolean;
-  onPageClick: (page: number, vp: PageViewport, x: number, y: number) => void;
-  overlay: (page: number, vp: PageViewport) => React.ReactNode;
-}) {
-  const box = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
-  useEffect(() => {
-    const el = box.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
-    ro.observe(el);
-    setWidth(el.clientWidth);
-    return () => ro.disconnect();
-  }, []);
-  const pageWidth = Math.max(280, Math.min(width - 8, 900) * zoom);
-  return (
-    <div ref={box} className="overflow-x-auto rounded-xl bg-slate-100 p-2 dark:bg-slate-900/60">
-      {width > 0 && Array.from({ length: count }, (_, i) => (
-        <PdfPage key={i} pdf={pdf} index={i} width={pageWidth} crosshair={crosshair} onClick={onPageClick} overlay={overlay} />
-      ))}
-    </div>
-  );
-}
-
-function PdfPage({ pdf, index, width, crosshair, onClick, overlay }: {
-  pdf: PdfDoc; index: number; width: number; crosshair: boolean;
-  onClick: (page: number, vp: PageViewport, x: number, y: number) => void;
-  overlay: (page: number, vp: PageViewport) => React.ReactNode;
-}) {
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const [vp, setVp] = useState<PageViewport | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    let task: { cancel: () => void; promise: Promise<unknown> } | null = null;
-    (async () => {
-      const page = await pdf.getPage(index + 1);
-      const base = page.getViewport({ scale: 1 });
-      const viewport = page.getViewport({ scale: width / base.width });
-      const c = canvas.current;
-      if (!c || cancelled) return;
-      const ratio = Math.min(2, window.devicePixelRatio || 1);
-      c.width = Math.floor(viewport.width * ratio);
-      c.height = Math.floor(viewport.height * ratio);
-      c.style.width = `${viewport.width}px`;
-      c.style.height = `${viewport.height}px`;
-      const ctx = c.getContext("2d")!;
-      task = page.render({ canvasContext: ctx, viewport, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : undefined }) as unknown as typeof task;
-      try { await task!.promise; } catch { return; }
-      if (!cancelled) setVp(viewport);
-    })();
-    return () => { cancelled = true; task?.cancel(); };
-  }, [pdf, index, width]);
-  return (
-    <div className="relative mx-auto mb-3 shadow-sm" style={{ background: "#fff", width: vp?.width ?? width, height: vp?.height, minHeight: vp ? undefined : width * 1.29 }}
-      onClick={(e) => {
-        if (!vp || e.target !== e.currentTarget && !(e.target as HTMLElement).dataset.page) return;
-        const r = e.currentTarget.getBoundingClientRect();
-        onClick(index, vp, e.clientX - r.left, e.clientY - r.top);
-      }}>
-      <canvas ref={canvas} data-page="1" className={cn("block", crosshair && "cursor-crosshair")} />
-      <div className="pointer-events-none absolute right-2 top-2 rounded bg-slate-900/60 px-1.5 text-[10px] font-semibold text-white">{index + 1}</div>
-      {vp && overlay(index, vp)}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// One box on the page
-// ---------------------------------------------------------------------------
-
-function FieldBox({ f, vp, color, who, editable, fillable, selected, sig, onSelect, onMove, onValue, onSign }: {
-  f: DocField; vp: PageViewport; color: (typeof PALETTE)[number]; who: string; editable: boolean; fillable: boolean; selected: boolean;
-  sig: { png: string } | null; onSelect: () => void; onMove: (p: Partial<DocField>) => void; onValue: (v: string) => void; onSign: () => void;
-}) {
-  const [x1, y1, x2, y2] = vp.convertToViewportRectangle([f.x, f.y, f.x + f.w, f.y + f.h]);
-  const left = Math.min(x1, x2), top = Math.min(y1, y2), width = Math.abs(x2 - x1), height = Math.abs(y2 - y1);
-  const scale = vp.scale;
-  const drag = useRef<{ mode: "move" | "resize"; sx: number; sy: number; f: DocField } | null>(null);
-  const down = (e: React.PointerEvent, m: "move" | "resize") => {
-    if (!editable) return;
-    e.stopPropagation();
-    onSelect();
-    drag.current = { mode: m, sx: e.clientX, sy: e.clientY, f };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-  };
-  const move = (e: React.PointerEvent) => {
-    const d = drag.current;
-    if (!d) return;
-    const dx = (e.clientX - d.sx) / scale, dy = (e.clientY - d.sy) / scale;
-    if (d.mode === "move") onMove({ x: d.f.x + dx, y: d.f.y - dy });
-    else {
-      const w = Math.max(8, d.f.w + dx), h = Math.max(8, d.f.h + dy);
-      onMove({ w, h, y: d.f.y + d.f.h - h });
-    }
-  };
-  const up = () => { drag.current = null; };
-  const fontPx = (f.fontSize ?? Math.max(6, Math.min(11, f.h * 0.72))) * scale;
-  const filled = f.type === "checkbox" ? f.value === "x" : !!f.value;
-
-  let content: React.ReactNode;
-  if (f.type === "signature" || f.type === "initials") {
-    content = sig ? <img src={sig.png} alt="" className="h-full w-full object-contain object-left" draggable={false} />
-      : fillable ? (
-        <button type="button" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onSign(); }}
-          className={cn("flex h-full w-full items-center justify-center gap-1 rounded-sm text-[11px] font-bold", color.text)}>
-          <Signature size={Math.min(14, height * 0.6)} /> {f.type === "initials" ? "Initial" : "Sign"}
-        </button>
-      ) : <span className={cn("truncate px-1 text-[10px] font-semibold", color.text)}>{who}: {f.type}</span>;
-  } else if (f.type === "checkbox") {
-    content = (
-      <button type="button" disabled={!fillable} onPointerDown={(e) => fillable && e.stopPropagation()} onClick={(e) => { e.stopPropagation(); if (fillable) onValue(f.value === "x" ? "" : "x"); }}
-        className="grid h-full w-full place-items-center">
-        {f.value === "x" && <X className="h-full w-full" style={{ color: INK }} strokeWidth={3} />}
-      </button>
-    );
-  } else if (fillable) {
-    const common = {
-      value: f.type === "date" ? f.value ?? "" : f.value ?? "",
-      onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => onValue(e.target.value),
-      onPointerDown: (e: React.PointerEvent) => e.stopPropagation(),
-      placeholder: f.label ?? "",
-      style: { fontSize: fontPx },
-      className: "h-full w-full px-0.5 outline-none",
-    };
-    content = f.type === "date" ? <input type="date" {...common} />
-      : f.h * scale > 34 ? <textarea {...common} className={cn(common.className, "resize-none leading-tight")} /> : <input type="text" {...common} />;
-  } else {
-    content = f.value
-      ? <span className="block truncate px-0.5" style={{ fontSize: fontPx, color: INK }}>{f.type === "date" ? usDate(f.value) : f.value}</span>
-      : <span className={cn("truncate px-1 text-[10px] font-semibold", color.text)}>{who}{f.label ? `: ${f.label}` : ""}</span>;
-  }
-  const showFrame = editable || fillable || !filled;
-  return (
-    <div role="group" aria-label={`${f.label ?? f.type} (${who})`}
-      onPointerDown={(e) => down(e, "move")} onPointerMove={move} onPointerUp={up} onPointerCancel={up}
-      onClick={(e) => { e.stopPropagation(); onSelect(); }}
-      className={cn("pdf-field absolute flex items-center overflow-hidden rounded-sm", showFrame && cn("border", color.border, color.bg),
-        fillable && !filled && "border-2 border-dashed", selected && "ring-2 ring-brand ring-offset-1", editable && "cursor-move")}
-      style={{ left, top, width, height }}>
-      {content}
-      {f.required && !filled && (fillable || editable) && <span className="pointer-events-none absolute -right-1 -top-1 text-xs font-bold text-red-600">*</span>}
-      {editable && selected && (
-        <span onPointerDown={(e) => down(e, "resize")} onPointerMove={move} onPointerUp={up}
-          className="absolute bottom-0 right-0 size-3 translate-x-1/2 translate-y-1/2 cursor-nwse-resize rounded-full border-2 border-white bg-brand" />
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Side panels
-// ---------------------------------------------------------------------------
-
-function FieldPanel({ f, doc, onChange, onDelete, isTemplate }: { f: DocField; doc: Doc; onChange: (p: Partial<DocField>) => void; onDelete: () => void; isTemplate: boolean }) {
-  return (
-    <section className="space-y-2 rounded-xl border border-brand/40 bg-white p-3 dark:bg-slate-800">
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{FIELD_LABELS[f.type]} box · page {f.page + 1}</p>
-        <button type="button" onClick={onDelete} className="text-red-600" title="Delete box"><Trash2 size={14} /></button>
-      </div>
-      {!isTemplate && (
-        <label className="block text-xs text-slate-500">Who fills this box
-          <select className={cn(inputCls, "mt-1 h-8 text-xs")} value={f.assignee} onChange={(e) => onChange({ assignee: e.target.value as Assignee, value: e.target.value === "preparer" ? f.value : null })}>
-            <option value="preparer">Me</option>
-            {doc.signers.map((s) => <option key={s.userId} value={`signer:${s.userId}`}>{s.name ?? "Signer"}</option>)}
-          </select>
-        </label>
-      )}
-      <label className="block text-xs text-slate-500">Label (shown to whoever fills it)
-        <input className={cn(inputCls, "mt-1 h-8 text-xs")} value={f.label ?? ""} maxLength={120} onChange={(e) => onChange({ label: e.target.value })} />
-      </label>
-      {(f.type === "text" || f.type === "date") && (
-        <label className="block text-xs text-slate-500">Fill in automatically with
-          <select className={cn(inputCls, "mt-1 h-8 text-xs")} value={f.prefill ?? ""} onChange={(e) => onChange({ prefill: (e.target.value || null) as PrefillKey | null })}>
-            <option value="">Nothing</option>
-            {PREFILL_KEYS.filter((k) => (f.type === "date" ? k === "today" || k === "patient_dob" : k !== "today")).map((k) => <option key={k} value={k}>{PREFILL_LABELS[k]}</option>)}
-          </select>
-        </label>
-      )}
-      {f.type === "text" && (
-        <label className="block text-xs text-slate-500">Text size (points; blank = fit the box)
-          <input type="number" min={5} max={36} className={cn(inputCls, "mt-1 h-8 text-xs")} value={f.fontSize ?? ""} onChange={(e) => onChange({ fontSize: e.target.value ? Number(e.target.value) : null })} />
-        </label>
-      )}
-      <label className="flex items-center gap-2 text-xs">
-        <input type="checkbox" className="size-4 accent-teal-700" checked={!!f.required} onChange={(e) => onChange({ required: e.target.checked })} /> Required
-      </label>
-      <p className="text-[11px] text-slate-400">Drag to move · drag the corner dot to resize · Delete key removes it.</p>
-    </section>
-  );
-}
-
-function SignersPanel({ doc, fields, colorOf, onChanged }: { doc: Doc; fields: DocField[]; colorOf: (a: Assignee) => (typeof PALETTE)[number]; onChanged: (ids: number[]) => void }) {
-  const choices = trpc.workspace.documents.signers.useQuery();
-  const setSigners = trpc.workspace.documents.setSigners.useMutation({ onError: (e) => toast.error(e.message) });
-  const ids = doc.signers.map((s) => s.userId);
-  const change = async (next: number[]) => { await setSigners.mutateAsync({ id: doc.id, userIds: next }); onChanged(next); };
-  const available = (choices.data ?? []).filter((u) => !ids.includes(u.id));
-  return (
-    <section className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
-      <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Who else signs</p>
-      <p className="mb-2 text-[11px] text-slate-500">Add a provider or teammate, then give them boxes ("New boxes are for…" or "Who fills this box").</p>
-      <ul className="space-y-1">
-        {doc.signers.map((s) => {
-          const n = fields.filter((f) => signerOf(f.assignee) === s.userId).length;
-          return (
-            <li key={s.userId} className="flex items-center justify-between gap-2">
-              <span className="flex min-w-0 items-center gap-1.5"><span className={cn("size-2.5 shrink-0 rounded-full", colorOf(`signer:${s.userId}`).dot)} /><span className="truncate">{s.name}</span><span className="text-[11px] text-slate-400">({n} box{n === 1 ? "" : "es"})</span></span>
-              <button type="button" className="text-slate-400 hover:text-red-600" onClick={() => void change(ids.filter((x) => x !== s.userId))} title="Remove"><XCircle size={14} /></button>
-            </li>
-          );
-        })}
-      </ul>
-      <select className={cn(inputCls, "mt-2 h-8 text-xs")} value="" disabled={setSigners.isPending} onChange={(e) => e.target.value && void change([...ids, Number(e.target.value)])}>
-        <option value="">+ Add a signer…</option>
-        {available.map((u) => <option key={u.id} value={u.id}>{u.name}{u.role === "provider" ? " (provider)" : ""}</option>)}
-      </select>
-    </section>
-  );
-}
-
-function PatientPanel({ doc, onLinked, onPrefilled, flush }: { doc: Doc; onLinked: () => void; onPrefilled: (fields: DocField[]) => void; flush: () => Promise<void> }) {
-  const [q, setQ] = useState("");
-  const search = trpc.workspace.documents.searchPatients.useQuery({ q: q.trim() }, { enabled: q.trim().length >= 2 });
-  const save = trpc.workspace.documents.save.useMutation({ onError: (e) => toast.error(e.message) });
-  const prefill = trpc.workspace.documents.prefill.useMutation({ onError: (e) => toast.error(e.message) });
-  const hasPrefill = doc.fields.some((f) => f.prefill);
-  const link = async (key: string | null) => { await flush(); await save.mutateAsync({ id: doc.id, subjectKey: key }); setQ(""); onLinked(); };
-  return (
-    <section className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
-      <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Patient (optional)</p>
-      {doc.patientName ? (
-        <div className="space-y-2">
-          <p className="flex items-center justify-between gap-2"><span className="flex items-center gap-1.5"><UserRound size={13} /> <b>{doc.patientName}</b></span>
-            <button type="button" className="text-xs text-slate-500 hover:underline" onClick={() => void link(null)}>Remove</button></p>
-          {hasPrefill && (
-            <Btn size="sm" variant="secondary" className="w-full" disabled={prefill.isPending} onClick={async () => { await flush(); const r = await prefill.mutateAsync({ id: doc.id }); onPrefilled(r.fields); toast.success("Filled in the patient's details."); }}>
-              Fill in the patient's details
-            </Btn>
-          )}
-        </div>
-      ) : (
-        <>
-          <input className={cn(inputCls, "h-8 text-xs")} placeholder="Search patients by name" value={q} onChange={(e) => setQ(e.target.value)} />
-          <ul className="mt-1 max-h-40 space-y-0.5 overflow-y-auto">
-            {(search.data ?? []).map((s) => (
-              <li key={s.key}><button type="button" className="w-full rounded px-1.5 py-1 text-left text-xs hover:bg-slate-50 dark:hover:bg-slate-700" onClick={() => void link(s.key)}>
-                <b>{s.name}</b> <span className="text-slate-500">{s.dob ? `DOB ${s.dob}` : ""}</span>
-              </button></li>
-            ))}
-          </ul>
-        </>
-      )}
-    </section>
-  );
-}
-
-function ViewSummary({ doc }: { doc: Doc }) {
-  const signedBy = doc.signers.filter((s) => s.status === "signed");
-  return (
-    <div className="mb-3 rounded-xl border border-slate-200 bg-white p-3 text-sm dark:border-slate-700 dark:bg-slate-800">
-      {doc.status === "completed" ? (
-        <p className="flex items-center gap-2 font-semibold text-emerald-700 dark:text-emerald-300"><CheckCircle2 size={16} /> Completed {doc.completedAt ? new Date(doc.completedAt).toLocaleString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}. Below is the signed PDF (with its certificate page).</p>
-      ) : doc.status === "signing" ? (
-        <p>Out for signature: {doc.signers.map((s) => `${s.name}${s.status === "signed" ? " ✓" : ""}`).join(", ")}. {signedBy.length}/{doc.signers.length} signed.</p>
-      ) : <p>{DOC_STATUS_LABELS[doc.status]}.</p>}
-      {doc.patientName && <p className="mt-1 text-xs text-slate-500">Patient: {doc.patientName}</p>}
-      <details className="mt-2 text-xs">
-        <summary className="cursor-pointer font-semibold text-slate-600 dark:text-slate-300">History</summary>
-        <ol className="mt-1 space-y-0.5">
-          {doc.events.filter((e) => e.type !== "viewed").map((e, i) => (
-            <li key={i} className="flex gap-2"><span className="w-32 shrink-0 text-slate-500">{new Date(e.at).toLocaleString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
-              <span>{e.type.replace(/_/g, " ")}{e.name ? ` · ${e.name}` : ""}{e.detail ? ` · ${e.detail}` : ""}</span></li>
-          ))}
-        </ol>
-      </details>
-    </div>
-  );
-}
-

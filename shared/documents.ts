@@ -2,13 +2,43 @@
 // initials), fill in your part, send it to teammates to sign, and get a flattened, signed PDF with a
 // certificate page. Shared by the server (validation, PDF building) and the editor.
 
-export const FIELD_TYPES = ["text", "date", "checkbox", "signature", "initials"] as const;
+export const FIELD_TYPES = ["text", "date", "checkbox", "signature", "initials", "whiteout", "highlight", "mark", "line", "stamp", "logo"] as const;
 export type FieldType = (typeof FIELD_TYPES)[number];
-export const FIELD_LABELS: Record<FieldType, string> = { text: "Text", date: "Date", checkbox: "Checkbox", signature: "Signature", initials: "Initials" };
+export const FIELD_LABELS: Record<FieldType, string> = {
+  text: "Text", date: "Date", checkbox: "Checkbox", signature: "Signature", initials: "Initials",
+  whiteout: "White-out", highlight: "Highlight", mark: "Mark", line: "Line", stamp: "Stamp", logo: "Logo",
+};
+
+/** Boxes somebody fills in or signs. */
+export const FILL_TYPES: readonly FieldType[] = ["text", "date", "checkbox", "signature", "initials"];
+/**
+ * Marks the person preparing the document draws on the page (cover text, highlight, tick, cross out, stamp).
+ * Nobody fills them in, they are never "required", and they print exactly as placed.
+ */
+export const MARKUP_TYPES: readonly FieldType[] = ["whiteout", "highlight", "mark", "line", "stamp", "logo"];
+export const isMarkup = (t: FieldType) => MARKUP_TYPES.includes(t);
+
+/** A "mark" is a tick, a cross or a circle (its `value`). */
+export const MARK_STYLES = ["check", "x", "circle"] as const;
+export type MarkStyle = (typeof MARK_STYLES)[number];
+export const MARK_LABELS: Record<MarkStyle, string> = { check: "Check ✓", x: "X ✗", circle: "Circle ○" };
+
+/** How thick a tick, cross or circle is drawn, in points (the editor and the signed PDF use the same). */
+export const markPen = (f: { w: number; h: number }) => Math.max(1, Math.min(2.5, Math.min(f.w, f.h) * 0.1));
+
+/** Ink for marks, lines and stamps. */
+export const INK_COLORS = ["black", "red", "blue"] as const;
+export type InkColor = (typeof INK_COLORS)[number];
+export const INK_HEX: Record<InkColor, string> = { black: "#0f172a", red: "#c81e1e", blue: "#1d4ed8" };
+export const inkOf = (c: string | null | undefined, fallback: InkColor = "black"): InkColor => (INK_COLORS.includes(c as InkColor) ? (c as InkColor) : fallback);
+/** Ready-made stamp wording (any short text can be typed instead). */
+export const STAMP_PRESETS = ["COPY", "FAXED", "RECEIVED", "APPROVED", "VOID", "DRAFT", "CONFIDENTIAL"] as const;
+export const STAMP_MAX = 40;
 
 /** Size of a new box, in PDF points (1/72 inch). */
 export const FIELD_DEFAULT_SIZE: Record<FieldType, { w: number; h: number }> = {
   text: { w: 180, h: 20 }, date: { w: 90, h: 20 }, checkbox: { w: 14, h: 14 }, signature: { w: 170, h: 38 }, initials: { w: 56, h: 28 },
+  whiteout: { w: 140, h: 16 }, highlight: { w: 140, h: 14 }, mark: { w: 16, h: 16 }, line: { w: 140, h: 8 }, stamp: { w: 110, h: 28 }, logo: { w: 54, h: 54 },
 };
 
 /** Things MyPCP can fill in for you when a document is started for a patient. */
@@ -42,11 +72,16 @@ export interface DocField {
   label?: string;
   required?: boolean;
   fontSize?: number | null;
-  /** text: the words · date: YYYY-MM-DD · checkbox: "x" or "" · signature/initials: "sig:<documentSignatures.id>" */
+  /**
+   * text: the words · date: YYYY-MM-DD · checkbox: "x" or "" · signature/initials: "sig:<documentSignatures.id>"
+   * · mark: "check" | "x" | "circle" · stamp: its wording · white-out / highlight / line / logo: nothing
+   */
   value?: string | null;
   prefill?: PrefillKey | null;
   /** The PDF's own form field this box came from (fillable PDFs). */
   acroName?: string | null;
+  /** Ink for a mark, line or stamp (black when not set; stamps default to red). */
+  color?: InkColor | null;
 }
 
 export interface DocPage { w: number; h: number; rotate: number }
@@ -71,19 +106,25 @@ export function cleanFields(raw: unknown, pages: DocPage[]): DocField[] {
     if (x == null || y == null || w == null || h == null) continue;
     const id = typeof f.id === "string" && /^[A-Za-z0-9_-]{1,40}$/.test(f.id) && !ids.has(f.id) ? f.id : `f${out.length}_${Math.random().toString(36).slice(2, 8)}`;
     ids.add(id);
-    const assignee = f.assignee === "preparer" || (typeof f.assignee === "string" && /^signer:\d+$/.test(f.assignee)) ? (f.assignee as Assignee) : "preparer";
+    const markup = isMarkup(type);
+    // A mark on the page always belongs to the person preparing the document.
+    const assignee = !markup && (f.assignee === "preparer" || (typeof f.assignee === "string" && /^signer:\d+$/.test(f.assignee))) ? (f.assignee as Assignee) : "preparer";
     let value = typeof f.value === "string" ? f.value.slice(0, 2000) : null;
     if (type === "checkbox") value = value ? "x" : "";
     if (type === "date" && value && !/^\d{4}-\d{2}-\d{2}$/.test(value)) value = null;
     if ((type === "signature" || type === "initials") && value && !/^sig:\d+$/.test(value)) value = null;
+    if (type === "mark") value = MARK_STYLES.includes(value as MarkStyle) ? value : "check";
+    if (type === "stamp") value = (value ?? "").replace(/[\r\n<>]/g, " ").trim().slice(0, STAMP_MAX) || STAMP_PRESETS[0];
+    if (type === "whiteout" || type === "highlight" || type === "line" || type === "logo") value = null;
     out.push({
       id, type, page, x, y, w, h, assignee,
       label: typeof f.label === "string" ? f.label.slice(0, 120) : undefined,
-      required: !!f.required,
+      required: !markup && !!f.required,
       fontSize: num(f.fontSize, 5, 36),
       value,
-      prefill: PREFILL_KEYS.includes(f.prefill as PrefillKey) ? (f.prefill as PrefillKey) : null,
+      prefill: !markup && PREFILL_KEYS.includes(f.prefill as PrefillKey) ? (f.prefill as PrefillKey) : null,
       acroName: typeof f.acroName === "string" ? f.acroName.slice(0, 200) : null,
+      color: INK_COLORS.includes(f.color as InkColor) ? (f.color as InkColor) : null,
     });
   }
   return out;
