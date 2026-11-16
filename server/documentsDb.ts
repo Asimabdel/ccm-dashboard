@@ -7,7 +7,7 @@
 // the form flattened, and a certificate page (who signed what, when, from where, document fingerprints).
 import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
-import { BlendMode, PDFCheckBox, PDFDocument, PDFDropdown, PDFRef, PDFSignature, PDFTextField, StandardFonts, degrees, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
+import { BlendMode, LineCapStyle, PDFCheckBox, PDFDocument, PDFDropdown, PDFRef, PDFSignature, PDFTextField, StandardFonts, degrees, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import { getDb } from "./db";
 import {
   clinics, coverageOnFile, documentEvents, documentSignatures, documentSigners, documents, fhirPatients, patients, providerSignatureDelegates, providerSignatures, providers, userSignatures, users,
@@ -17,7 +17,9 @@ import {
   APPROVAL_LABELS, APPROVAL_METHODS, INK_HEX, cleanFields, guessPrefill, inkOf, isMarkup, markPen, missingFor, signerOf, usDate, type ApprovalMethod, type Assignee, type DocField, type DocPage, type DocStatus,
   type InkColor, type PrefillKey,
 } from "../shared/documents";
-import { LOGO_PNG_BASE64 } from "../shared/logoPng";
+import {
+  BRAND_CIRCLES, BRAND_PATHS, BRAND_TEAL, BRAND_VIEW, DARK_TEXT, MUTED_TEXT, logoPrims, roundedRectPath, stampPrims, type Prim, type PrimColor,
+} from "../shared/stamps";
 import { AI_PAGE_PROMPT, boxesFromAi, parseAiFields } from "../shared/docSuggest";
 import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
 import {
@@ -461,7 +463,9 @@ export async function newFromTemplate(a: WorkspaceActor, templateId: number, sub
   if (!t) throw new WorkspaceError("Template not found.", "NOT_FOUND");
   const care = subjectKey ? await subjectCare(subjectKey) : null;
   if (subjectKey && !care) throw new WorkspaceError("That patient wasn't found.", "NOT_FOUND");
-  const { fields } = fillFromRecord(fieldsOf(t), await prefillValues(a, subjectKey));
+  const filled = fillFromRecord(fieldsOf(t), await prefillValues(a, subjectKey)).fields;
+  // A dated stamp saved in a template is dated the day the template is used, not the day it was saved.
+  const fields = filled.map((f) => (f.type === "stamp" && f.design?.date ? { ...f, design: { ...f.design, date: localDateStr() } } : f));
   const res = await (await db()).insert(documents).values({
     title: care ? `${t.title}: ${care.name}`.slice(0, 255) : t.title, templateId: t.id, status: "draft", fileKey: t.fileKey, fileName: t.fileName, fileSize: t.fileSize, fileSha256: t.fileSha256,
     pages: t.pages, fields, subjectKey, patientId: care?.patientId ?? null, clinicId: care?.clinicId ?? a.clinicIds?.[0] ?? null, createdByUserId: a.id, updatedByUserId: a.id,
@@ -578,6 +582,10 @@ export async function getDocument(a: WorkspaceActor, id: number, meta: ClientMet
     fileRev: doc.fileKey ? sha256(doc.fileKey).slice(0, 12) : "",
     /** Is "Read with AI" available here (the practice's AI model is set up)? */
     aiReady: aiReady(),
+    /** For stamps ("Reviewed by …") and the letterhead (office name, address, phone). */
+    myName: a.name ?? null,
+    officeId: doc.clinicId,
+    offices: await d.select({ id: clinics.id, name: clinics.name, address: clinics.address, phone: clinics.phone }).from(clinics).orderBy(asc(clinics.name)),
     signers: signers.map((s) => ({ userId: s.s.userId, name: s.name, status: s.s.status as "pending" | "signed", signedAt: s.s.signedAt })),
     signatures: Object.fromEntries(sigs.map((s) => [`sig:${s.id}`, {
       png: `data:image/png;base64,${s.png}`, name: s.onBehalfOf ? onBehalfNames.get(s.onBehalfOf) ?? "Provider" : s.name, signedAt: s.signedAt,
@@ -942,17 +950,53 @@ function safeText(font: PDFFont, s: string) {
 
 const inkRgb = (c: InkColor) => { const n = parseInt(INK_HEX[c].slice(1), 16); return rgb(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255); };
 
+const hexRgb = (hex: string) => { const n = parseInt(hex.slice(1), 16); return rgb(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255); };
+
+/** The MyPCP Dr mark, `size` points square, its top-left at (left, top) in PDF points. Drawn as lines, so it prints sharp. */
+function drawBrand(page: PDFPage, left: number, top: number, size: number) {
+  const k = size / BRAND_VIEW.size;
+  // pdf-lib draws an SVG path with its origin at (x, y) and y running down the page. Its `scale` shrinks the
+  // line width too, so the width stays in the drawing's own units.
+  const x0 = left - BRAND_VIEW.x * k, y0 = top + BRAND_VIEW.y * k;
+  for (const p of BRAND_PATHS) page.drawSvgPath(p.d, { x: x0, y: y0, scale: k, borderColor: hexRgb(p.color), borderWidth: p.width, borderLineCap: LineCapStyle.Round });
+  for (const c of BRAND_CIRCLES) {
+    page.drawCircle({
+      x: x0 + c.cx * k, y: y0 - c.cy * k, size: c.r * k,
+      ...(c.fill ? { color: hexRgb(c.fill) } : {}), ...(c.stroke ? { borderColor: hexRgb(c.stroke), borderWidth: c.width * k } : {}),
+    });
+  }
+}
+
+/** Draw a stamp's or the logo's pieces (see shared/stamps.ts), exactly as the editor shows them. */
+function drawPrims(page: PDFPage, f: DocField, prims: Prim[], ink: ReturnType<typeof rgb>, font: PDFFont, bold: PDFFont) {
+  const X = (x: number) => f.x + x, Y = (y: number) => f.y + f.h - y;
+  const colorOf = (c: PrimColor | undefined) => (c === "brand" ? hexRgb(BRAND_TEAL) : c === "dark" ? hexRgb(DARK_TEXT) : c === "muted" ? hexRgb(MUTED_TEXT) : ink);
+  // Stamp ink is a touch see-through, like a real rubber stamp; the logo prints solid.
+  const inkOpacity = f.type === "stamp" ? 0.9 : 1;
+  for (const p of prims) {
+    if (p.t === "rect") page.drawSvgPath(roundedRectPath(p.w, p.h, p.r), { x: X(p.x), y: Y(p.y), borderColor: ink, borderWidth: p.stroke, borderOpacity: inkOpacity });
+    else if (p.t === "circle") page.drawCircle({ x: X(p.cx), y: Y(p.cy), size: p.r, borderColor: ink, borderWidth: p.stroke, borderOpacity: inkOpacity });
+    else if (p.t === "line") page.drawLine({ start: { x: X(p.x1), y: Y(p.y1) }, end: { x: X(p.x2), y: Y(p.y2) }, thickness: p.stroke, color: ink, opacity: inkOpacity });
+    else if (p.t === "brand") drawBrand(page, X(p.x), Y(p.y), p.size);
+    else {
+      const fnt = p.bold ? bold : font;
+      const text = safeText(fnt, p.text);
+      if (!text.trim()) continue;
+      const turn = ((p.rotate ?? 0) * Math.PI) / 180;
+      const back = p.anchor === "middle" ? fnt.widthOfTextAtSize(text, p.size) / 2 : 0;
+      // Where the words start, in the box (screen directions), then turned the PDF's way (counter-clockwise).
+      const sx = p.x - back * Math.cos(turn), sy = p.y - back * Math.sin(turn);
+      page.drawText(text, { x: X(sx), y: Y(sy), size: p.size, font: fnt, color: colorOf(p.color), opacity: p.color ? 1 : inkOpacity, rotate: p.rotate ? degrees(-p.rotate) : undefined });
+    }
+  }
+}
+
 /** A mark the preparer drew on the page: white-out, highlight, tick / cross / circle, line, stamp, logo. */
-function drawMarkup(page: PDFPage, f: DocField, bold: PDFFont, logo: PDFImage | null) {
+function drawMarkup(page: PDFPage, f: DocField, font: PDFFont, bold: PDFFont) {
   const { x, y, w, h } = f;
   if (f.type === "whiteout") { page.drawRectangle({ x, y, width: w, height: h, color: rgb(1, 1, 1) }); return; }
   if (f.type === "highlight") { page.drawRectangle({ x, y, width: w, height: h, color: rgb(1, 0.92, 0.23), opacity: 0.45, blendMode: BlendMode.Multiply }); return; }
-  if (f.type === "logo") {
-    if (!logo) return;
-    const s = Math.min(w / logo.width, h / logo.height);
-    page.drawImage(logo, { x: x + (w - logo.width * s) / 2, y: y + (h - logo.height * s) / 2, width: logo.width * s, height: logo.height * s });
-    return;
-  }
+  if (f.type === "logo") { drawPrims(page, f, logoPrims(f), rgb(0, 0, 0), font, bold); return; }
   const color = inkRgb(inkOf(f.color, f.type === "stamp" ? "red" : "black"));
   if (f.type === "line") {
     page.drawLine({ start: { x, y: y + h / 2 }, end: { x: x + w, y: y + h / 2 }, thickness: Math.max(0.75, Math.min(3, h / 5)), color });
@@ -972,16 +1016,7 @@ function drawMarkup(page: PDFPage, f: DocField, bold: PDFFont, logo: PDFImage | 
     page.drawLine({ start: { x: x + w * 0.4, y: y + h * 0.18 }, end: { x: x + w * 0.9, y: y + h * 0.86 }, thickness: t, color });
     return;
   }
-  if (f.type === "stamp") {
-    const text = safeText(bold, (f.value ?? "").toUpperCase());
-    if (!text.trim()) return;
-    const border = Math.max(1, Math.min(2, h * 0.07));
-    page.drawRectangle({ x: x + border / 2, y: y + border / 2, width: w - border, height: h - border, borderColor: color, borderWidth: border });
-    let size = Math.max(5, h * 0.5);
-    const wide = bold.widthOfTextAtSize(text, size);
-    if (wide > w - 8) size = Math.max(4, size * ((w - 8) / wide));
-    page.drawText(text, { x: x + (w - bold.widthOfTextAtSize(text, size)) / 2, y: y + (h - size * 0.72) / 2, size, font: bold, color });
-  }
+  if (f.type === "stamp") drawPrims(page, f, stampPrims(f), color, font, bold);
 }
 
 function drawValue(page: PDFPage, f: DocField, font: PDFFont, sigImages: Map<string, Awaited<ReturnType<PDFDocument["embedPng"]>>>) {
@@ -1037,13 +1072,12 @@ async function finalize(id: number, a: WorkspaceActor) {
   const sigImages = new Map<string, Awaited<ReturnType<PDFDocument["embedPng"]>>>();
   for (const s of sigRows) sigImages.set(`sig:${s.id}`, await pdf.embedPng(Buffer.from(s.png, "base64")));
   const pages = pdf.getPages();
-  const logo = fields.some((f) => f.type === "logo") ? await pdf.embedPng(Buffer.from(LOGO_PNG_BASE64, "base64")) : null;
   // White-out goes down first, then highlight, then everything else, so words typed over a covered spot still show.
   const layer = (f: DocField) => (f.type === "whiteout" ? 0 : f.type === "highlight" ? 1 : 2);
   for (const f of [...fields].sort((x, z) => layer(x) - layer(z))) {
     const page = pages[f.page];
     if (!page) continue;
-    if (isMarkup(f.type)) drawMarkup(page, f, bold, logo);
+    if (isMarkup(f.type)) drawMarkup(page, f, font, bold);
     else drawValue(page, f, f.bold ? bold : font, sigImages);
   }
   await addCertificate(pdf, doc, fields, sigRows, font, bold);

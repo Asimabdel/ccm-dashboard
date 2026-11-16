@@ -2,20 +2,66 @@
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import {
-  AlignEndHorizontal, AlignEndVertical, AlignStartHorizontal, AlignStartVertical, CalendarDays, Check, CheckCircle2, Circle, Copy, CopyPlus, Eraser, FilePlus2, Highlighter, Image as ImageIcon,
-  Loader2, Minus, MoveHorizontal, MoveVertical, PencilLine, Signature, Sparkles, SquareCheck, Stamp, TextCursorInput, Trash2, Type, UserRound, Wand2, X, XCircle,
+  AlignEndHorizontal, AlignEndVertical, AlignStartHorizontal, AlignStartVertical, CalendarDays, Check, CheckCircle2, Circle, Copy, CopyPlus, Eraser, FilePlus2, Highlighter,
+  Loader2, Minus, MoveHorizontal, MoveVertical, PencilLine, Signature, Sparkles, SquareCheck, TextCursorInput, Trash2, Type, UserRound, Wand2, X, XCircle,
 } from "lucide-react";
 import { DOC_FILE_ACCEPT } from "./uploadFiles";
 import { Btn, inputCls } from "@/components/workspace/ui";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import {
-  DOC_STATUS_LABELS, FIELD_LABELS, INK_COLORS, INK_HEX, MARK_LABELS, MARK_STYLES, PREFILL_KEYS, PREFILL_LABELS, STAMP_MAX, STAMP_PRESETS, inkOf, isMarkup, signerOf, usDate,
+  DOC_STATUS_LABELS, FIELD_LABELS, INK_COLORS, INK_HEX, MARK_LABELS, MARK_STYLES, PREFILL_KEYS, PREFILL_LABELS, STAMP_MAX, inkOf, isMarkup, signerOf,
   type Assignee, type DocField, type InkColor, type PrefillKey,
 } from "@shared/documents";
 import type { AlignHow } from "@shared/docEdit";
 import { AI_WHO_LABELS, type AiWho } from "@shared/docSuggest";
 import type { BoxColor, Doc, ToolChoice } from "./editorShared";
+import { StampArt } from "./StampArt";
+import {
+  LOGO_KINDS, LOGO_LABELS, STAMP_GALLERY, STAMP_KINDS, STAMP_KIND_LABELS, logoKindOf, logoSize, stampKindOf, stampSize, type LogoKind, type MarkDesign, type StampKind,
+} from "@shared/stamps";
+
+const todayYmd = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+/** The office line a stamp shows by default: "MyPCP Dr · Katy Family Medicine". */
+export const officeLine = (name: string | null | undefined) => (name ? `MyPCP Dr · ${name}` : "MyPCP Dr");
+
+/** Stamps and the logo, drawn as they will print: pick one, then click on the page. */
+function StampGallery({ tool, onTool, myName }: { tool: ToolChoice | null; onTool: (t: ToolChoice | null) => void; myName: string }) {
+  const sample: MarkDesign = { date: todayYmd(), by: myName || "Your name", place: "MyPCP Dr" };
+  const pick = (t: ToolChoice) => onTool(sameTool(tool, t) ? null : t);
+  // Previews sit on white, like the page (inline colours: dark mode recolours bg-white / text-slate-*).
+  const cls = (on: boolean) => cn("flex flex-col items-center justify-center gap-1 rounded-lg border p-1.5 text-[10px] font-semibold", on ? "border-brand ring-2 ring-brand/40" : "border-slate-200 hover:border-slate-400 dark:border-slate-600");
+  const paper = { background: "#fff", color: "#475569" };
+  return (
+    <>
+      <p className={cn(heading, "mt-3")}>Stamps</p>
+      <div className="grid grid-cols-2 gap-1.5">
+        {STAMP_GALLERY.map((p) => {
+          const size = stampSize(p.kind, p.word);
+          const t: ToolChoice = { type: "stamp", value: p.id };
+          return (
+            <button key={p.id} type="button" title={p.name} aria-label={`${p.name} stamp`} aria-pressed={sameTool(tool, t)} onClick={() => pick(t)} className={cls(sameTool(tool, t))} style={paper}>
+              <StampArt type="stamp" w={size.w} h={size.h} value={p.word} design={{ ...sample, kind: p.kind }} ink={INK_HEX[p.color]} className={cn("w-full", p.kind === "seal" ? "h-14" : "h-9")} />
+            </button>
+          );
+        })}
+      </div>
+      <p className={cn(heading, "mt-3")}>Logo</p>
+      <div className="grid grid-cols-3 gap-1.5">
+        {LOGO_KINDS.map((k) => {
+          const size = logoSize(k);
+          const t: ToolChoice = { type: "logo", value: k };
+          return (
+            <button key={k} type="button" aria-label={LOGO_LABELS[k]} aria-pressed={sameTool(tool, t)} onClick={() => pick(t)} className={cls(sameTool(tool, t))} style={paper}>
+              <StampArt type="logo" w={size.w} h={size.h} design={{ kind: k, place: "Your office", address: "Address", phone: "Phone" }} ink="#0f172a" className="h-8 w-full" />
+              {LOGO_LABELS[k]}
+            </button>
+          );
+        })}
+      </div>
+    </>
+  );
+}
 
 const FILL_TOOLS: (ToolChoice & { label: string; icon: React.ElementType })[] = [
   { type: "text", label: "Text", icon: Type }, { type: "date", label: "Date", icon: CalendarDays }, { type: "checkbox", label: "Checkbox", icon: SquareCheck },
@@ -25,14 +71,13 @@ const MARK_TOOLS: (ToolChoice & { label: string; icon: React.ElementType })[] = 
   { type: "edittext", label: "Edit text", icon: PencilLine },
   { type: "whiteout", label: "White-out", icon: Eraser }, { type: "highlight", label: "Highlight", icon: Highlighter }, { type: "mark", value: "check", label: "Check", icon: Check },
   { type: "mark", value: "x", label: "X", icon: X }, { type: "mark", value: "circle", label: "Circle", icon: Circle }, { type: "line", label: "Line", icon: Minus },
-  { type: "stamp", label: "Stamp", icon: Stamp }, { type: "logo", label: "Logo", icon: ImageIcon },
 ];
 const sameTool = (a: ToolChoice | null, b: ToolChoice) => !!a && a.type === b.type && (a.value ?? "") === (b.value ?? "");
 const panel = "rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800";
 const heading = "mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500";
 
 /** "Add a box" and "Mark up the page": pick one, then click (or drag) on the page. */
-export function ToolPalette({ tool, onTool, isTemplate, signers, newAssignee, onNewAssignee, onSuggest, onAiRead, suggesting }: {
+export function ToolPalette({ tool, onTool, isTemplate, signers, newAssignee, onNewAssignee, onSuggest, onAiRead, suggesting, myName }: {
   tool: ToolChoice | null; onTool: (t: ToolChoice | null) => void; isTemplate: boolean; signers: Doc["signers"]; newAssignee: Assignee; onNewAssignee: (a: Assignee) => void;
   /** Read the words on the pages and add boxes on the blanks it finds. */
   onSuggest: () => void;
@@ -40,6 +85,8 @@ export function ToolPalette({ tool, onTool, isTemplate, signers, newAssignee, on
   onAiRead?: () => void;
   /** What it is doing right now ("AI is reading page 2…"), or null. */
   suggesting: string | null;
+  /** For the "Reviewed by" stamp preview. */
+  myName: string;
 }) {
   const grid = (tools: typeof FILL_TOOLS, cols: string) => (
     <div className={cn("grid gap-1.5", cols)}>
@@ -76,6 +123,7 @@ export function ToolPalette({ tool, onTool, isTemplate, signers, newAssignee, on
       )}
       <p className={cn(heading, "mt-3")}>Mark up the page</p>
       {grid(MARK_TOOLS, "grid-cols-4")}
+      <StampGallery tool={tool} onTool={onTool} myName={myName} />
       <p className={cn("mt-2 text-xs", tool ? "text-brand" : "text-slate-400")}>
         {tool?.type === "edittext" ? "Click the printed words you want to change, then retype them. (Esc to stop)" : tool ? "Click on the page where it goes, or drag to set its size. (Esc to stop)" : "Pick one, then click on the page. Drag to set the size. Edit text: click printed words to retype them."}
       </p>
@@ -134,18 +182,8 @@ export function FieldPanel({ f, doc, onChange, onDelete, onCopy, onEveryPage, is
           ))}
         </div>
       )}
-      {f.type === "stamp" && (
-        <>
-          <label className="block text-xs text-slate-500">Stamp wording
-            <input className={cn(inputCls, "mt-1 h-8 text-xs uppercase")} value={f.value ?? ""} maxLength={STAMP_MAX} onChange={(e) => onChange({ value: e.target.value })} />
-          </label>
-          <div className="flex flex-wrap gap-1">
-            {STAMP_PRESETS.map((s) => <button key={s} type="button" onClick={() => onChange({ value: s })} className="rounded-full border border-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:border-slate-400 dark:border-slate-700 dark:text-slate-300">{s}</button>)}
-            <button type="button" onClick={() => onChange({ value: `${(f.value ?? "").replace(/\s*\d{2}\/\d{2}\/\d{4}$/, "")} ${usDate(new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" }))}`.trim().slice(0, STAMP_MAX) })}
-              className="rounded-full border border-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:border-slate-400 dark:border-slate-700 dark:text-slate-300">+ today's date</button>
-          </div>
-        </>
-      )}
+      {f.type === "stamp" && <StampSettings f={f} doc={doc} onChange={onChange} />}
+      {f.type === "logo" && <LogoSettings f={f} doc={doc} onChange={onChange} />}
       {(f.type === "mark" || f.type === "line" || f.type === "stamp") && (
         <div className="flex items-center gap-2 text-xs text-slate-500">Color
           {INK_COLORS.map((c: InkColor) => (
@@ -166,6 +204,108 @@ export function FieldPanel({ f, doc, onChange, onDelete, onCopy, onEveryPage, is
       </div>
       <p className="text-[11px] text-slate-400">Drag to move · corner dot to resize · arrow keys to nudge · Shift+click to pick several.</p>
     </section>
+  );
+}
+
+/** A stamp's style, wording, date, reviewer and office line. Changing the style gives the stamp that style's usual size. */
+function StampSettings({ f, doc, onChange }: { f: DocField; doc: Doc; onChange: (p: Partial<DocField>) => void }) {
+  const d = f.design ?? {};
+  const kind = stampKindOf(d);
+  const set = (patch: Partial<MarkDesign>) => onChange({ design: { ...d, kind, ...patch } });
+  const restyle = (k: StampKind) => {
+    const size = stampSize(k, f.value ?? "");
+    // Fill what the new style shows, like the ready-made stamps do: today's date, my name, the document's office.
+    const office = doc.offices.find((o) => o.id === doc.officeId)?.name;
+    const design: MarkDesign = {
+      ...d, kind: k,
+      date: d.date ?? (k === "plain" ? null : todayYmd()),
+      by: d.by ?? (k === "signed" ? doc.myName ?? null : null),
+      place: d.place ?? (k === "dated" || k === "seal" ? officeLine(office) : null),
+    };
+    onChange({ design, w: size.w, h: size.h, y: f.y + f.h - size.h });
+  };
+  const sub = "block text-xs text-slate-500";
+  return (
+    <>
+      <label className={sub}>Style
+        <select className={cn(inputCls, "mt-1 h-8 text-xs")} value={kind} onChange={(e) => restyle(e.target.value as StampKind)}>
+          {STAMP_KINDS.map((k) => <option key={k} value={k}>{STAMP_KIND_LABELS[k]}</option>)}
+        </select>
+      </label>
+      <label className={sub}>Wording
+        <input className={cn(inputCls, "mt-1 h-8 text-xs uppercase")} value={f.value ?? ""} maxLength={STAMP_MAX} onChange={(e) => onChange({ value: e.target.value })} />
+      </label>
+      <div className="flex flex-wrap gap-1">
+        {STAMP_GALLERY.filter((p) => p.kind === kind || kind === "plain").slice(0, 8).map((p) => (
+          <button key={p.id} type="button" onClick={() => onChange({ value: p.word })} className="rounded-full border border-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:border-slate-400 dark:border-slate-700 dark:text-slate-300">{p.word}</button>
+        ))}
+      </div>
+      {kind !== "plain" && (
+        <label className={sub}>Date
+          <input type="date" className={cn(inputCls, "mt-1 h-8 text-xs")} value={d.date ?? ""} onChange={(e) => set({ date: e.target.value || null })} />
+        </label>
+      )}
+      {kind === "signed" && (
+        <label className={sub}>Reviewed / approved by
+          <span className="mt-1 flex gap-1.5">
+            <input className={cn(inputCls, "h-8 flex-1 text-xs")} value={d.by ?? ""} maxLength={60} placeholder="Name" onChange={(e) => set({ by: e.target.value })} />
+            {doc.myName && <Btn size="sm" variant="secondary" onClick={() => set({ by: doc.myName })}>Me</Btn>}
+          </span>
+        </label>
+      )}
+      {(kind === "dated" || kind === "seal") && (
+        <label className={sub}>{kind === "seal" ? "Words around the seal" : "Office line"}
+          <input className={cn(inputCls, "mt-1 h-8 text-xs")} value={d.place ?? ""} maxLength={80} placeholder="MyPCP Dr" onChange={(e) => set({ place: e.target.value })} />
+          {doc.offices.length > 0 && (
+            <select className={cn(inputCls, "mt-1 h-8 text-xs")} value="" onChange={(e) => { const o = doc.offices.find((x) => String(x.id) === e.target.value); if (o) set({ place: officeLine(o.name) }); }}>
+              <option value="">Use an office…</option>
+              {doc.offices.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+            </select>
+          )}
+        </label>
+      )}
+    </>
+  );
+}
+
+/** The logo: the mark alone, with "MyPCP Dr", or a letterhead with an office's name, address and phone. */
+function LogoSettings({ f, doc, onChange }: { f: DocField; doc: Doc; onChange: (p: Partial<DocField>) => void }) {
+  const d = f.design ?? {};
+  const kind = logoKindOf(d);
+  const set = (patch: Partial<MarkDesign>) => onChange({ design: { ...d, kind, ...patch } });
+  const restyle = (k: LogoKind) => { const size = logoSize(k); onChange({ design: { ...d, kind: k }, w: size.w, h: size.h, y: f.y + f.h - size.h }); };
+  const sub = "block text-xs text-slate-500";
+  return (
+    <>
+      <div className="flex gap-1.5" role="group" aria-label="Kind of logo">
+        {LOGO_KINDS.map((k) => (
+          <button key={k} type="button" aria-pressed={kind === k} onClick={() => restyle(k)}
+            className={cn("flex-1 rounded-lg border px-1 py-1.5 text-[11px] font-semibold", kind === k ? "border-brand bg-brand/10" : "border-slate-200 dark:border-slate-700")}>{LOGO_LABELS[k]}</button>
+        ))}
+      </div>
+      {kind === "letterhead" && (
+        <>
+          {doc.offices.length > 0 && (
+            <label className={sub}>Office
+              <select className={cn(inputCls, "mt-1 h-8 text-xs")} value={doc.offices.find((o) => o.name === d.place)?.id ?? ""}
+                onChange={(e) => { const o = doc.offices.find((x) => String(x.id) === e.target.value); if (o) set({ place: o.name, address: o.address, phone: o.phone }); }}>
+                <option value="">Pick an office…</option>
+                {doc.offices.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+              </select>
+            </label>
+          )}
+          <label className={sub}>Office name
+            <input className={cn(inputCls, "mt-1 h-8 text-xs")} value={d.place ?? ""} maxLength={80} onChange={(e) => set({ place: e.target.value })} />
+          </label>
+          <label className={sub}>Address
+            <input className={cn(inputCls, "mt-1 h-8 text-xs")} value={d.address ?? ""} maxLength={140} onChange={(e) => set({ address: e.target.value })} />
+          </label>
+          <label className={sub}>Phone
+            <input className={cn(inputCls, "mt-1 h-8 text-xs")} value={d.phone ?? ""} maxLength={40} onChange={(e) => set({ phone: e.target.value })} />
+          </label>
+        </>
+      )}
+    </>
   );
 }
 

@@ -16,7 +16,8 @@ import { SignatureDialog } from "@/components/documents/SignatureDialog";
 import { FieldBox } from "@/components/documents/FieldBox";
 import { FillDialog } from "@/components/documents/FillDialog";
 import { Pages } from "@/components/documents/PdfPages";
-import { FieldPanel, MultiPanel, PagesPanel, PatientPanel, SignersPanel, ToolPalette, ViewSummary, WhoPanel } from "@/components/documents/editorPanels";
+import { FieldPanel, MultiPanel, PagesPanel, PatientPanel, SignersPanel, ToolPalette, ViewSummary, WhoPanel, officeLine } from "@/components/documents/editorPanels";
+import { STAMP_GALLERY, logoKindOf, logoSize, stampSize } from "@shared/stamps";
 import { PALETTE, useTouchScreen, type Doc, type SigMap, type ToolChoice } from "@/components/documents/editorShared";
 import { addPagesFromFile, isDocFile } from "@/components/documents/uploadFiles";
 import { openPdf, type PageViewport, type PdfDoc } from "@/lib/pdf";
@@ -259,11 +260,17 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
   const place = (page: number, vp: PageViewport, x0: number, y0: number, x1: number, y1: number) => {
     if (!tool || fieldsRef.current.length >= MAX_BOXES) return;
     if (tool.type === "edittext") { void editTextAt(page, vp, x1, y1); return; }
-    const def = FIELD_DEFAULT_SIZE[tool.type];
+    // A stamp or the logo: the one picked in the gallery, with today's date, my name and the office filled in.
+    const preset = tool.type === "stamp" ? STAMP_GALLERY.find((p) => p.id === tool.value) ?? STAMP_GALLERY[0]! : null;
+    const logoKind = tool.type === "logo" ? logoKindOf({ kind: tool.value }) : null;
+    const office = doc.offices.find((o) => o.id === doc.officeId) ?? null;
+    const def = preset ? stampSize(preset.kind, preset.word) : logoKind ? logoSize(logoKind) : FIELD_DEFAULT_SIZE[tool.type];
     const dragged = Math.abs(x1 - x0) + Math.abs(y1 - y0) > 6;
     const min = tool.type === "line" ? 4 : 8;
-    const w = dragged ? Math.max(min, Math.abs(x1 - x0) / vp.scale) : def.w;
-    const h = dragged && tool.type !== "line" ? Math.max(min, Math.abs(y1 - y0) / vp.scale) : def.h;
+    let w = dragged ? Math.max(min, Math.abs(x1 - x0) / vp.scale) : def.w;
+    let h = dragged && tool.type !== "line" ? Math.max(min, Math.abs(y1 - y0) / vp.scale) : def.h;
+    // A round seal stays round.
+    if (preset?.kind === "seal" && dragged) w = h = Math.max(w, h);
     let [x, top] = vp.convertToPdfPoint(Math.min(x0, x1), Math.min(y0, y1)) as [number, number];
     // A tick, cross or circle lands centered on the click (to tick a printed box); a line sits where it was drawn.
     if (!dragged && tool.type === "mark") { x -= w / 2; top += h / 2; }
@@ -271,7 +278,9 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
     const assignee: Assignee = isMarkup(tool.type) ? "preparer" : newAssignee;
     const f: DocField = keepOnPage({
       id: newFieldId(), type: tool.type, page, x, y: top - h, w, h, assignee, required: tool.type === "signature" || tool.type === "initials",
-      value: tool.type === "mark" ? tool.value ?? "check" : tool.type === "stamp" ? "COPY" : tool.type === "date" && assignee === "preparer" ? todayStr() : null,
+      value: tool.type === "mark" ? tool.value ?? "check" : preset ? preset.word : tool.type === "date" && assignee === "preparer" ? todayStr() : null,
+      ...(preset ? { color: preset.color, design: { kind: preset.kind, date: preset.kind === "plain" ? null : todayStr(), by: preset.kind === "signed" ? doc.myName : null, place: preset.kind === "dated" || preset.kind === "seal" ? officeLine(office?.name) : null } } : {}),
+      ...(logoKind ? { design: { kind: logoKind, place: office?.name ?? null, address: office?.address ?? null, phone: office?.phone ?? null } } : {}),
     }, pages[page]);
     change((fs) => [...fs, f]);
     if (STICKY_TOOLS.includes(tool.type)) setSelected([]);
@@ -529,7 +538,7 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
             {mode === "edit" ? (
               <>
                 <ToolPalette tool={tool} onTool={(t) => { setTool(t); if (t) setSelected([]); }} isTemplate={doc.isTemplate} signers={doc.signers} newAssignee={newAssignee} onNewAssignee={setNewAssignee}
-                  onSuggest={() => void suggest("quick")} onAiRead={doc.aiReady ? () => void suggest("ai") : undefined} suggesting={suggesting} />
+                  onSuggest={() => void suggest("quick")} onAiRead={doc.aiReady ? () => void suggest("ai") : undefined} suggesting={suggesting} myName={doc.myName ?? ""} />
 
                 {whoGroups.length > 0 && <WhoPanel groups={whoGroups} onPick={(ids) => { setTool(null); setSelected(ids); }} />}
 

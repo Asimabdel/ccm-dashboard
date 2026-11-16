@@ -2,6 +2,8 @@
 // initials), fill in your part, send it to teammates to sign, and get a flattened, signed PDF with a
 // certificate page. Shared by the server (validation, PDF building) and the editor.
 
+import { cleanDesign, type MarkDesign } from "./stamps";
+
 export const FIELD_TYPES = ["text", "date", "checkbox", "signature", "initials", "whiteout", "highlight", "mark", "line", "stamp", "logo"] as const;
 export type FieldType = (typeof FIELD_TYPES)[number];
 export const FIELD_LABELS: Record<FieldType, string> = {
@@ -27,12 +29,11 @@ export const MARK_LABELS: Record<MarkStyle, string> = { check: "Check ✓", x: "
 export const markPen = (f: { w: number; h: number }) => Math.max(1, Math.min(2.5, Math.min(f.w, f.h) * 0.1));
 
 /** Ink for marks, lines and stamps. */
-export const INK_COLORS = ["black", "red", "blue"] as const;
+export const INK_COLORS = ["black", "red", "blue", "green"] as const;
 export type InkColor = (typeof INK_COLORS)[number];
-export const INK_HEX: Record<InkColor, string> = { black: "#0f172a", red: "#c81e1e", blue: "#1d4ed8" };
+export const INK_HEX: Record<InkColor, string> = { black: "#0f172a", red: "#c81e1e", blue: "#1d4ed8", green: "#15803d" };
 export const inkOf = (c: string | null | undefined, fallback: InkColor = "black"): InkColor => (INK_COLORS.includes(c as InkColor) ? (c as InkColor) : fallback);
-/** Ready-made stamp wording (any short text can be typed instead). */
-export const STAMP_PRESETS = ["COPY", "FAXED", "RECEIVED", "APPROVED", "VOID", "DRAFT", "CONFIDENTIAL"] as const;
+/** The longest stamp wording (the ready-made stamps are in ./stamps). */
 export const STAMP_MAX = 40;
 
 /** Size of a new box, in PDF points (1/72 inch). */
@@ -123,6 +124,8 @@ export interface DocField {
   color?: InkColor | null;
   /** A text box printed in bold (e.g. a bold heading retyped with "Edit text"). */
   bold?: boolean | null;
+  /** A stamp's kind, date, reviewer and office line; the logo's kind and letterhead details (see ./stamps). */
+  design?: MarkDesign | null;
 }
 
 export interface DocPage { w: number; h: number; rotate: number }
@@ -155,7 +158,7 @@ export function cleanFields(raw: unknown, pages: DocPage[]): DocField[] {
     if (type === "date" && value && !/^\d{4}-\d{2}-\d{2}$/.test(value)) value = null;
     if ((type === "signature" || type === "initials") && value && !/^sig:\d+$/.test(value)) value = null;
     if (type === "mark") value = MARK_STYLES.includes(value as MarkStyle) ? value : "check";
-    if (type === "stamp") value = (value ?? "").replace(/[\r\n<>]/g, " ").trim().slice(0, STAMP_MAX) || STAMP_PRESETS[0];
+    if (type === "stamp") value = (value ?? "").replace(/[\r\n<>]/g, " ").trim().slice(0, STAMP_MAX) || "COPY";
     if (type === "whiteout" || type === "highlight" || type === "line" || type === "logo") value = null;
     out.push({
       id, type, page, x, y, w, h, assignee,
@@ -163,6 +166,7 @@ export function cleanFields(raw: unknown, pages: DocPage[]): DocField[] {
       required: !markup && !!f.required,
       fontSize: num(f.fontSize, 5, 36),
       bold: type === "text" && f.bold === true ? true : null,
+      design: type === "stamp" || type === "logo" ? cleanDesign(type, f.design) : null,
       value,
       prefill: !markup && PREFILL_KEYS.includes(f.prefill as PrefillKey) ? (f.prefill as PrefillKey) : null,
       acroName: typeof f.acroName === "string" ? f.acroName.slice(0, 200) : null,

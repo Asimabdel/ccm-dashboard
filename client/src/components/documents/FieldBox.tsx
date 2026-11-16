@@ -5,13 +5,15 @@ import type { PageViewport } from "@/lib/pdf";
 import { cn } from "@/lib/utils";
 import { INK_HEX, inkOf, isMarkup, markPen, usDate, type DocField } from "@shared/documents";
 import { INK, type BoxColor } from "./editorShared";
+import { StampArt } from "./StampArt";
 
 /** A mark the preparer drew: white-out, highlight, tick / cross / circle, line, stamp, logo. Drawn to match the signed PDF. */
 function Markup({ f, scale, width, height }: { f: DocField; scale: number; width: number; height: number }) {
   if (f.type === "whiteout") return <div className="h-full w-full" style={{ background: "#fff" }} />;
   if (f.type === "highlight") return <div className="h-full w-full" style={{ background: "rgba(255, 235, 59, 0.45)", mixBlendMode: "multiply" }} />;
-  if (f.type === "logo") return <img src="/icon-192.png" alt="Logo" className="h-full w-full object-contain" draggable={false} />;
+  if (f.type === "logo") return <StampArt type="logo" w={f.w} h={f.h} design={f.design} ink={INK} />;
   const color = INK_HEX[inkOf(f.color, f.type === "stamp" ? "red" : "black")];
+  if (f.type === "stamp") return <StampArt type="stamp" w={f.w} h={f.h} value={f.value} design={f.design} ink={color} />;
   if (f.type === "line") {
     return <div className="absolute inset-x-0 top-1/2 -translate-y-1/2" style={{ height: Math.max(1, Math.max(0.75, Math.min(3, f.h / 5)) * scale), background: color }} />;
   }
@@ -26,14 +28,7 @@ function Markup({ f, scale, width, height }: { f: DocField; scale: number; width
       </svg>
     );
   }
-  // A stamp: a bordered word, sized to fit like the printed one.
-  const text = (f.value ?? "").toUpperCase();
-  const fontPx = Math.max(4, Math.min(height * 0.5, (width - 8 * scale) / Math.max(1, text.length * 0.66)));
-  return (
-    <div className="flex h-full w-full items-center justify-center overflow-hidden whitespace-nowrap font-bold" style={{ color, border: `${Math.max(1, Math.min(2, f.h * 0.07) * scale)}px solid ${color}`, fontSize: fontPx, lineHeight: 1 }}>
-      {text}
-    </div>
-  );
+  return null;
 }
 
 export function FieldBox({ f, vp, color, who, editable, fillable, selected, resizable, inert, flash, tapToFill, sig, onSelect, onMoveStart, onMove, onMoveEnd, onValue, onSign, onTapFill }: {
