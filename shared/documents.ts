@@ -42,11 +42,50 @@ export const FIELD_DEFAULT_SIZE: Record<FieldType, { w: number; h: number }> = {
 };
 
 /** Things MyPCP can fill in for you when a document is started for a patient. */
-export const PREFILL_KEYS = ["patient_name", "patient_dob", "patient_phone", "today", "my_name", "clinic_name"] as const;
+export const PREFILL_KEYS = [
+  "patient_name", "patient_dob", "patient_phone", "patient_email", "patient_address", "patient_sex", "patient_mrn",
+  "insurance_name", "insurance_member_id", "insurance_group", "provider_name", "provider_npi",
+  "clinic_name", "clinic_phone", "clinic_address", "today", "my_name",
+] as const;
 export type PrefillKey = (typeof PREFILL_KEYS)[number];
 export const PREFILL_LABELS: Record<PrefillKey, string> = {
-  patient_name: "Patient name", patient_dob: "Patient date of birth", patient_phone: "Patient phone", today: "Today's date", my_name: "My name", clinic_name: "Office name",
+  patient_name: "Patient name", patient_dob: "Patient date of birth", patient_phone: "Patient phone", patient_email: "Patient email", patient_address: "Patient address",
+  patient_sex: "Patient sex", patient_mrn: "Chart number (MRN)", insurance_name: "Insurance name", insurance_member_id: "Insurance member ID", insurance_group: "Insurance group number",
+  provider_name: "Patient's provider", provider_npi: "Provider NPI", clinic_name: "Office name", clinic_phone: "Office phone", clinic_address: "Office address",
+  today: "Today's date", my_name: "My name",
 };
+
+/**
+ * What a box's label is asking for, when it is something MyPCP holds on file ("Patient name", "DOB", "Member ID",
+ * "Office phone"…). Null when unsure: a box about someone else (witness, guardian, emergency contact, employer)
+ * or a plain "Date" (whose date depends on who signs) is never guessed.
+ */
+/** A label about somebody other than the patient (their details are not on file, and must never be filled with the patient's). */
+export const ABOUT_SOMEONE_ELSE = /witness|guardian|emergency|spouse|employer|pharmacy|relative|representative|parent|next of kin|referring|referred|sponsor|guarantor|testigo|tutor|emergencia/i;
+
+export function guessPrefill(label: string | null | undefined, type: FieldType): PrefillKey | null {
+  const s = (label ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!s || (type !== "text" && type !== "date")) return null;
+  if (ABOUT_SOMEONE_ELSE.test(s)) return null;
+  if (type === "date") return /birth|\bdob\b|d\.o\.b|nacimiento/.test(s) ? "patient_dob" : null;
+  if (/birth|\bdob\b|d\.o\.b|nacimiento/.test(s)) return "patient_dob";
+  const office = /clinic|office|practice|facility|cl[ií]nica|consultorio/.test(s);
+  const doctor = /provider|physician|doctor|\bdr\b|\bpcp\b|m[eé]dico|proveedor/.test(s);
+  if (/\bnpi\b/.test(s)) return "provider_npi";
+  if (/e-?mail|correo/.test(s)) return office || doctor ? null : "patient_email";
+  if (/address|direcci[oó]n|domicilio|street/.test(s)) return office ? "clinic_address" : doctor ? null : "patient_address";
+  if (/\bfax\b/.test(s)) return null;
+  if (/phone|tel[eé]fono|\btel\b|\bcell\b|mobile|celular/.test(s)) return office ? "clinic_phone" : doctor ? null : "patient_phone";
+  if (/group\s*(#|no\b|number|num)|n[uú]mero de grupo/.test(s)) return "insurance_group";
+  if (/member|subscriber|policy\s*(#|no\b|number|id)|\bid\s*(#|no\b|number)|n[uú]mero de (miembro|p[oó]liza)/.test(s)) return "insurance_member_id";
+  if (/insurance|insurer|\bpayer\b|health plan|aseguranza|seguro/.test(s)) return "insurance_name";
+  if (/\bmrn\b|chart\s*(#|no\b|number)|medical record (#|no\b|number)/.test(s)) return "patient_mrn";
+  if (/\bsex\b|gender|sexo/.test(s)) return "patient_sex";
+  if (doctor) return /signature|firma|sign/.test(s) ? null : "provider_name";
+  if (office) return "clinic_name";
+  if (/name|nombre/.test(s)) return /patient|paciente|client\b/.test(s) || /^(full |legal |print(ed)? )?(name|nombre)( completo)?$/.test(s) ? "patient_name" : null;
+  return null;
+}
 
 export const DOC_STATUSES = ["draft", "signing", "completed", "cancelled"] as const;
 export type DocStatus = (typeof DOC_STATUSES)[number];
@@ -82,6 +121,8 @@ export interface DocField {
   acroName?: string | null;
   /** Ink for a mark, line or stamp (black when not set; stamps default to red). */
   color?: InkColor | null;
+  /** A text box printed in bold (e.g. a bold heading retyped with "Edit text"). */
+  bold?: boolean | null;
 }
 
 export interface DocPage { w: number; h: number; rotate: number }
@@ -121,6 +162,7 @@ export function cleanFields(raw: unknown, pages: DocPage[]): DocField[] {
       label: typeof f.label === "string" ? f.label.slice(0, 120) : undefined,
       required: !markup && !!f.required,
       fontSize: num(f.fontSize, 5, 36),
+      bold: type === "text" && f.bold === true ? true : null,
       value,
       prefill: !markup && PREFILL_KEYS.includes(f.prefill as PrefillKey) ? (f.prefill as PrefillKey) : null,
       acroName: typeof f.acroName === "string" ? f.acroName.slice(0, 200) : null,

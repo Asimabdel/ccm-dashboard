@@ -867,6 +867,11 @@ export const workspaceRouter = router({
         const actor = await actorFor(ctx, "documents");
         return run(() => docs.changePages(actor, input.id, input.change));
       }),
+    // "Read with AI": a picture of one page goes to the practice's AI model, which proposes where the boxes go.
+    aiReadPage: protectedProcedure.input(z.object({ id: z.number().int().positive(), page: z.number().int().min(0), image: z.string().max(4_800_000) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return run(() => docs.aiReadPage(actor, input.id, { page: input.page, image: input.image }));
+    }),
     addPagesStart: protectedProcedure.input(z.object({ id: z.number().int().positive(), size: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "documents");
       return run(() => docs.addPagesStart(actor, input.id, input.size));

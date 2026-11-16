@@ -10,13 +10,16 @@ import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { BlendMode, PDFCheckBox, PDFDocument, PDFDropdown, PDFRef, PDFSignature, PDFTextField, StandardFonts, degrees, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import { getDb } from "./db";
 import {
-  clinics, documentEvents, documentSignatures, documentSigners, documents, patients, providerSignatureDelegates, providerSignatures, userSignatures, users, workTaskActivities, workTasks,
+  clinics, coverageOnFile, documentEvents, documentSignatures, documentSigners, documents, fhirPatients, patients, providerSignatureDelegates, providerSignatures, providers, userSignatures, users,
+  workTaskActivities, workTasks,
 } from "../drizzle/schema";
 import {
-  APPROVAL_LABELS, APPROVAL_METHODS, INK_HEX, cleanFields, inkOf, isMarkup, markPen, missingFor, signerOf, usDate, type ApprovalMethod, type Assignee, type DocField, type DocPage, type DocStatus,
+  APPROVAL_LABELS, APPROVAL_METHODS, INK_HEX, cleanFields, guessPrefill, inkOf, isMarkup, markPen, missingFor, signerOf, usDate, type ApprovalMethod, type Assignee, type DocField, type DocPage, type DocStatus,
   type InkColor, type PrefillKey,
 } from "../shared/documents";
 import { LOGO_PNG_BASE64 } from "../shared/logoPng";
+import { AI_PAGE_PROMPT, boxesFromAi, parseAiFields } from "../shared/docSuggest";
+import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
 import {
   MAX_DOC_PAGES, TURNS, contentTurn, fieldsAfterOrder, fieldsAfterRemove, fieldsAfterTurn, imagePageLayout, movedOrder, sniffFile, turnedPage, type PageChange,
 } from "../shared/docPages";
@@ -392,6 +395,44 @@ export async function addPagesFinish(a: WorkspaceActor, id: number, part: string
 }
 
 // ---------------------------------------------------------------------------
+// "Read with AI": the practice's own AWS Bedrock model (the one that reads faxes; covered by the AWS BAA)
+// looks at a picture of ONE page and says where the blanks are, what each is for and who fills it.
+// It only proposes boxes: the person preparing the document checks every one. Nothing is filled in by AI.
+// ---------------------------------------------------------------------------
+
+export const aiReady = () => !!process.env.BEDROCK_MODEL_ID;
+let bedrock: BedrockRuntimeClient | null = null;
+const JPEG_RE = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/;
+
+export async function aiReadPage(a: WorkspaceActor, id: number, input: { page: number; image: string }) {
+  const doc = await docOr404(a, id);
+  if (!canEdit(a, doc)) throw new WorkspaceError("This document can't be changed.");
+  if (!aiReady()) throw new WorkspaceError("AI reading isn't set up on this copy of MyPCP.");
+  const size = pagesOf(doc)[input.page];
+  if (!size) throw new WorkspaceError("That page isn't in this document.");
+  const m = JPEG_RE.exec(input.image);
+  const bytes = m ? Buffer.from(m[1]!, "base64") : null;
+  if (!bytes || bytes.length < 1500 || bytes.length > 3_500_000) throw new WorkspaceError("The picture of the page didn't arrive. Please try again.");
+  let reply: string;
+  try {
+    bedrock ??= new BedrockRuntimeClient({ region: process.env.BEDROCK_REGION || process.env.AWS_REGION || "us-east-1" });
+    const out = await bedrock.send(new ConverseCommand({
+      modelId: process.env.BEDROCK_MODEL_ID!,
+      messages: [{ role: "user", content: [{ image: { format: "jpeg", source: { bytes } } }, { text: AI_PAGE_PROMPT }] }],
+      inferenceConfig: { maxTokens: 3000, temperature: 0 },
+    }));
+    reply = (out.output?.message?.content ?? []).map((c) => (c as { text?: string }).text ?? "").join("");
+  } catch (e) {
+    console.error("[documents] AI page read failed:", (e as Error).name); // no page contents in logs
+    throw new WorkspaceError("The AI couldn't read that page just now. Please try again in a moment.");
+  }
+  const boxes = boxesFromAi(input.page, size, parseAiFields(reply), fieldsOf(doc));
+  await logEvent(id, "ai_read", { userId: a.id, detail: `page ${input.page + 1}: ${boxes.length} box${boxes.length === 1 ? "" : "es"} proposed` });
+  await audit(a, "manage_document", { entityType: "document", entityId: id, description: `AI read page ${input.page + 1} of "${doc.title}"`.slice(0, 250) });
+  return { boxes };
+}
+
+// ---------------------------------------------------------------------------
 // Templates
 // ---------------------------------------------------------------------------
 
@@ -420,8 +461,7 @@ export async function newFromTemplate(a: WorkspaceActor, templateId: number, sub
   if (!t) throw new WorkspaceError("Template not found.", "NOT_FOUND");
   const care = subjectKey ? await subjectCare(subjectKey) : null;
   if (subjectKey && !care) throw new WorkspaceError("That patient wasn't found.", "NOT_FOUND");
-  const values = await prefillValues(a, subjectKey);
-  const fields = fieldsOf(t).map((f) => ({ ...f, value: f.prefill && values[f.prefill] != null ? values[f.prefill]! : f.value ?? null }));
+  const { fields } = fillFromRecord(fieldsOf(t), await prefillValues(a, subjectKey));
   const res = await (await db()).insert(documents).values({
     title: care ? `${t.title}: ${care.name}`.slice(0, 255) : t.title, templateId: t.id, status: "draft", fileKey: t.fileKey, fileName: t.fileName, fileSize: t.fileSize, fileSha256: t.fileSha256,
     pages: t.pages, fields, subjectKey, patientId: care?.patientId ?? null, clinicId: care?.clinicId ?? a.clinicIds?.[0] ?? null, createdByUserId: a.id, updatedByUserId: a.id,
@@ -448,11 +488,66 @@ async function prefillValues(a: WorkspaceActor, subjectKey: string | null): Prom
   }
   if (dob) out.patient_dob = dob.toISOString().slice(0, 10);
   if (phone) out.patient_phone = phone;
+  let providerId: number | null = sched?.providerId ?? null, insurance: string | null = null;
+  if (care.patientId) {
+    const [p] = await d.select({ providerId: patients.providerId, insurance: patients.insurance }).from(patients).where(eq(patients.id, care.patientId)).limit(1);
+    providerId = p?.providerId ?? providerId;
+    insurance = p?.insurance?.trim() || null;
+  }
+  // The Practice Fusion copy of the chart: email, address, sex, chart number (and a phone / date of birth we didn't have).
+  const [chart] = await d.select({ dob: fhirPatients.dob, sex: fhirPatients.sex, phone: fhirPatients.phone, email: fhirPatients.email, address: fhirPatients.address, mrn: fhirPatients.mrn }).from(fhirPatients)
+    .where(care.patientId ? eq(fhirPatients.patientId, care.patientId) : eq(fhirPatients.subjectKey, subjectKey)).limit(1);
+  if (chart) {
+    if (chart.email) out.patient_email = chart.email;
+    if (chart.address) out.patient_address = chart.address;
+    if (chart.sex) out.patient_sex = chart.sex === "F" ? "Female" : chart.sex === "M" ? "Male" : "Other";
+    if (chart.mrn) out.patient_mrn = chart.mrn;
+    if (!out.patient_phone && chart.phone) out.patient_phone = chart.phone;
+    if (!out.patient_dob && chart.dob) out.patient_dob = chart.dob;
+  }
+  // Insurance: what is on file for eligibility checks first, else the plan name on the roster.
+  const [cov] = await d.select({ payerName: coverageOnFile.payerName, memberId: coverageOnFile.memberId, groupNumber: coverageOnFile.groupNumber }).from(coverageOnFile)
+    .where(care.patientId ? or(eq(coverageOnFile.subjectKey, subjectKey), eq(coverageOnFile.patientId, care.patientId)) : eq(coverageOnFile.subjectKey, subjectKey)).limit(1);
+  if (cov?.payerName || insurance) out.insurance_name = cov?.payerName || insurance!;
+  if (cov?.memberId) out.insurance_member_id = cov.memberId;
+  if (cov?.groupNumber) out.insurance_group = cov.groupNumber;
+  if (!providerId) providerId = (await import("./directoryDb").then((m) => m.directoryEntry(subjectKey)).catch(() => null))?.providerId ?? null;
+  if (providerId) {
+    const [pr] = await d.select({ name: providers.name, npi: providers.npi }).from(providers).where(eq(providers.id, providerId)).limit(1);
+    if (pr?.name) out.provider_name = pr.name;
+    if (pr?.npi) out.provider_npi = pr.npi;
+  }
   if (care.clinicId) {
-    const [c] = await d.select({ name: clinics.name }).from(clinics).where(eq(clinics.id, care.clinicId)).limit(1);
+    const [c] = await d.select({ name: clinics.name, phone: clinics.phone, address: clinics.address }).from(clinics).where(eq(clinics.id, care.clinicId)).limit(1);
     if (c) out.clinic_name = c.name;
+    if (c?.phone) out.clinic_phone = c.phone;
+    if (c?.address) out.clinic_address = c.address;
   }
   return out;
+}
+
+/**
+ * Fill boxes from what MyPCP holds on file. A box that says what it wants ("Fill in automatically with…") always
+ * gets it. An EMPTY box of the preparer's whose label plainly asks for something on file (a suggested "Patient
+ * name", "Member ID", "Office phone"…) gets it too, and remembers what it was filled with.
+ */
+function fillFromRecord(fields: DocField[], values: Partial<Record<PrefillKey, string>>) {
+  let filled = 0;
+  const out = fields.map((f) => {
+    if (f.prefill) {
+      const v = values[f.prefill];
+      if (v == null || v === f.value) return f;
+      filled++;
+      return { ...f, value: v };
+    }
+    if (f.assignee !== "preparer" || f.value?.trim()) return f;
+    const key = guessPrefill(f.label, f.type);
+    const v = key ? values[key] : null;
+    if (!key || v == null || (f.type === "date" && !/^\d{4}-\d{2}-\d{2}$/.test(v))) return f;
+    filled++;
+    return { ...f, value: v, prefill: key };
+  });
+  return { fields: out, filled };
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +576,8 @@ export async function getDocument(a: WorkspaceActor, id: number, meta: ClientMet
     sentAt: doc.sentAt, completedAt: doc.completedAt, hasFile: !!doc.fileKey && pagesOf(doc).length > 0, hasFinal: !!doc.finalKey,
     /** Changes whenever the PDF itself changes (pages added, removed, moved, turned): the editor then opens the new file. */
     fileRev: doc.fileKey ? sha256(doc.fileKey).slice(0, 12) : "",
+    /** Is "Read with AI" available here (the practice's AI model is set up)? */
+    aiReady: aiReady(),
     signers: signers.map((s) => ({ userId: s.s.userId, name: s.name, status: s.s.status as "pending" | "signed", signedAt: s.s.signedAt })),
     signatures: Object.fromEntries(sigs.map((s) => [`sig:${s.id}`, {
       png: `data:image/png;base64,${s.png}`, name: s.onBehalfOf ? onBehalfNames.get(s.onBehalfOf) ?? "Provider" : s.name, signedAt: s.signedAt,
@@ -530,10 +627,9 @@ export async function saveDocument(a: WorkspaceActor, id: number, input: { title
 export async function applyPrefill(a: WorkspaceActor, id: number) {
   const doc = await docOr404(a, id);
   if (!canEdit(a, doc)) throw new WorkspaceError("This document can't be changed.");
-  const values = await prefillValues(a, doc.subjectKey);
-  const fields = fieldsOf(doc).map((f) => (f.prefill && values[f.prefill] != null ? { ...f, value: values[f.prefill]! } : f));
+  const { fields, filled } = fillFromRecord(fieldsOf(doc), await prefillValues(a, doc.subjectKey));
   await (await db()).update(documents).set({ fields, updatedByUserId: a.id }).where(eq(documents.id, id));
-  return { fields };
+  return { fields, filled };
 }
 
 export async function setSigners(a: WorkspaceActor, id: number, userIds: number[]) {
@@ -948,7 +1044,7 @@ async function finalize(id: number, a: WorkspaceActor) {
     const page = pages[f.page];
     if (!page) continue;
     if (isMarkup(f.type)) drawMarkup(page, f, bold, logo);
-    else drawValue(page, f, font, sigImages);
+    else drawValue(page, f, f.bold ? bold : font, sigImages);
   }
   await addCertificate(pdf, doc, fields, sigRows, font, bold);
   pdf.setTitle(doc.title);

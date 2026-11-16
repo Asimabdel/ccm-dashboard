@@ -7,7 +7,8 @@ export type Doc = RouterOutputs["workspace"]["documents"]["get"];
 export type SigMap = Record<string, { png: string; name: string | null }>;
 
 /** The tool that is "in hand": the next click on a page adds one of these. */
-export interface ToolChoice { type: FieldType; value?: string }
+/** "edittext" is not a box of its own: it picks up printed words and swaps them for white-out + a text box. */
+export interface ToolChoice { type: FieldType | "edittext"; value?: string }
 
 // One color per person filling boxes: you (teal), then each signer.
 export const PALETTE = [

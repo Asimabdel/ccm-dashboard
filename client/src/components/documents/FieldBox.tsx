@@ -128,14 +128,14 @@ export function FieldBox({ f, vp, color, who, editable, fillable, selected, resi
       onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => onValue(e.target.value),
       onPointerDown: (e: React.PointerEvent) => e.stopPropagation(),
       placeholder: f.label ?? "",
-      style: { fontSize: fontPx },
+      style: { fontSize: fontPx, fontWeight: f.bold ? 700 : undefined },
       className: "h-full w-full px-0.5 outline-none",
     };
     content = f.type === "date" ? <input type="date" {...common} />
       : f.h * scale > 34 ? <textarea {...common} className={cn(common.className, "resize-none leading-tight")} /> : <input type="text" {...common} />;
   } else {
     content = f.value
-      ? <span className="block truncate px-0.5" style={{ fontSize: fontPx, color: INK }}>{f.type === "date" ? usDate(f.value) : f.value}</span>
+      ? <span className="block truncate px-0.5" style={{ fontSize: fontPx, color: INK, fontWeight: f.bold ? 700 : undefined }}>{f.type === "date" ? usDate(f.value) : f.value}</span>
       : <span className={cn("truncate px-1 text-[10px] font-semibold", color.text)}>{who}{f.label ? `: ${f.label}` : ""}</span>;
   }
   const showFrame = !markup && (editable || fillable || !filled);

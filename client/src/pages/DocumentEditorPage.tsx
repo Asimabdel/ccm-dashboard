@@ -16,7 +16,7 @@ import { SignatureDialog } from "@/components/documents/SignatureDialog";
 import { FieldBox } from "@/components/documents/FieldBox";
 import { FillDialog } from "@/components/documents/FillDialog";
 import { Pages } from "@/components/documents/PdfPages";
-import { FieldPanel, MultiPanel, PagesPanel, PatientPanel, SignersPanel, ToolPalette, ViewSummary } from "@/components/documents/editorPanels";
+import { FieldPanel, MultiPanel, PagesPanel, PatientPanel, SignersPanel, ToolPalette, ViewSummary, WhoPanel } from "@/components/documents/editorPanels";
 import { PALETTE, useTouchScreen, type Doc, type SigMap, type ToolChoice } from "@/components/documents/editorShared";
 import { addPagesFromFile, isDocFile } from "@/components/documents/uploadFiles";
 import { openPdf, type PageViewport, type PdfDoc } from "@/lib/pdf";
@@ -25,10 +25,10 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { DOC_STATUS_LABELS, FIELD_DEFAULT_SIZE, isFilled, isMarkup, missingFor, signerOf, type Assignee, type DocField } from "@shared/documents";
 import {
-  alignFields, duplicateFields, emptyHistory, fillOrder, keepOnPage, newFieldId, nudgeFields, redo, remember, repeatOnPages, snapMove, undo, type AlignHow, type History,
+  alignFields, duplicateFields, editTextBoxes, emptyHistory, fillOrder, keepOnPage, newFieldId, nudgeFields, redo, remember, repeatOnPages, snapMove, undo, type AlignHow, type History,
 } from "@shared/docEdit";
 import type { PageChange } from "@shared/docPages";
-import { suggestBoxes, type PageText } from "@shared/docSuggest";
+import { AI_WHO, suggestBoxes, textRunAt, whoOfLabel, type PageText } from "@shared/docSuggest";
 
 const MAX_BOXES = 600;
 /** Marks that are usually added several at a time (ticking boxes, covering lines): the tool stays in hand until Esc. */
@@ -217,9 +217,48 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, selected, signing, filling]);
 
+  // --- the words printed on each page (read once per page): for "Edit text" and "Suggest boxes" ---
+  const textCache = useRef(new Map<number, PageText[]>());
+  const pageText = async (i: number): Promise<PageText[]> => {
+    const have = textCache.current.get(i);
+    if (have || !pdf) return have ?? [];
+    const page = await pdf.getPage(i + 1);
+    const content = await page.getTextContent();
+    // Is a piece of text in a bold font? Known once the page has been drawn (its fonts are loaded then).
+    const boldFont = (name: string) => {
+      try {
+        if (!page.commonObjs.has(name)) return false;
+        const font = page.commonObjs.get(name) as { name?: string; bold?: boolean } | null;
+        return !!font?.bold || /bold|black|heavy|semibold|demi/i.test(font?.name ?? "");
+      } catch { return false; }
+    };
+    const items: PageText[] = [];
+    for (const it of content.items) {
+      if (!("str" in it) || !it.str.trim()) continue;
+      items.push({ str: it.str, x: it.transform[4] as number, y: it.transform[5] as number, w: it.width, h: it.height || Math.abs(it.transform[3] as number), bold: boldFont(it.fontName) });
+    }
+    textCache.current.set(i, items);
+    return items;
+  };
+
+  /** "Edit text": pick up the printed words that were clicked, cover them, and put the same words in a box to retype. */
+  const editTextAt = async (page: number, vp: PageViewport, px: number, py: number) => {
+    if (pages[page]?.rotate) { toast.info("This page is lying on its side. Turn it upright first (the turn button above the page), then edit its text."); return; }
+    const [x, y] = vp.convertToPdfPoint(px, py) as [number, number];
+    const run = textRunAt(await pageText(page).catch(() => []), x, y);
+    if (!run) { toast.info("No printed words there that MyPCP can pick up. On a scanned or photographed page, cover the words with White-out and add a Text box on top."); return; }
+    if (fieldsRef.current.length + 2 > MAX_BOXES) return;
+    const [white, text] = editTextBoxes(page, pages[page]!, run);
+    change((fs) => [...fs, white, text]);
+    setTool(null);
+    setSelected([text.id]);
+    window.setTimeout(() => { const el = document.querySelector(`#box-${text.id} input, #box-${text.id} textarea`) as HTMLInputElement | null; el?.focus(); el?.select(); }, 60);
+  };
+
   /** A tool was used on a page: a click adds a box of the usual size, a drag sets its size. */
   const place = (page: number, vp: PageViewport, x0: number, y0: number, x1: number, y1: number) => {
     if (!tool || fieldsRef.current.length >= MAX_BOXES) return;
+    if (tool.type === "edittext") { void editTextAt(page, vp, x1, y1); return; }
     const def = FIELD_DEFAULT_SIZE[tool.type];
     const dragged = Math.abs(x1 - x0) + Math.abs(y1 - y0) > 6;
     const min = tool.type === "line" ? 4 : 8;
@@ -266,34 +305,68 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
   };
 
   // --- "Suggest boxes": read the words on each page and add a box on every blank it finds ---
-  const [suggesting, setSuggesting] = useState(false);
-  const suggest = async () => {
+  // Quick: plain pattern matching on the page's own words, in the browser. Pages with no words (scans, photos) are
+  // read by the practice's AI model when it is set up. "ai": every upright page is read by the AI (it also says
+  // who fills each box). Either way the boxes are only proposed: one undo step, all picked, for the preparer to check.
+  const [suggesting, setSuggesting] = useState<string | null>(null);
+  const aiRead = trpc.workspace.documents.aiReadPage.useMutation();
+  const AI_MAX_PAGES = 12;
+  /** A picture of one page (about 1100 px wide, JPEG) for the AI to look at. */
+  const pageJpeg = async (i: number) => {
+    const page = await pdf!.getPage(i + 1);
+    const vp = page.getViewport({ scale: Math.min(2, 1100 / page.getViewport({ scale: 1 }).width) });
+    const c = document.createElement("canvas");
+    c.width = Math.round(vp.width);
+    c.height = Math.round(vp.height);
+    const ctx = c.getContext("2d")!;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, c.width, c.height);
+    // "print" draws in one go instead of frame by frame, so it also finishes when the tab is in the background.
+    await page.render({ canvasContext: ctx, viewport: vp, intent: "print" }).promise;
+    return c.toDataURL("image/jpeg", 0.8);
+  };
+  const suggest = async (how: "quick" | "ai") => {
     if (!pdf || suggesting) return;
-    setSuggesting(true);
+    setSuggesting("Reading the pages…");
+    const proposed: DocField[] = [];
+    const propose = (list: Omit<DocField, "id" | "assignee">[]) => { for (const s of list) proposed.push({ id: `${newFieldId()}${proposed.length}`, assignee: "preparer", value: null, ...s }); };
+    let turned = 0, skipped = 0, aiFailed: string | null = null;
     try {
-      const proposed: DocField[] = [];
-      let turned = 0;
-      for (let i = 0; i < Math.min(pdf.numPages, pages.length); i++) {
+      const count = Math.min(pdf.numPages, pages.length);
+      const forAi: number[] = [];
+      for (let i = 0; i < count; i++) {
         if (pages[i]!.rotate) { turned++; continue; }
-        const content = await (await pdf.getPage(i + 1)).getTextContent();
-        const items: PageText[] = [];
-        for (const it of content.items) {
-          if (!("str" in it) || !it.str.trim()) continue;
-          items.push({ str: it.str, x: it.transform[4] as number, y: it.transform[5] as number, w: it.width, h: it.height || Math.abs(it.transform[3] as number) });
+        if (how === "ai") { forAi.push(i); continue; }
+        const items = await pageText(i);
+        if (!items.length) forAi.push(i);
+        else propose(suggestBoxes(i, pages[i]!, items, [...fieldsRef.current, ...proposed]));
+      }
+      if (forAi.length && doc.aiReady) {
+        await flush(); // the server leaves out anything on top of a box that is already there
+        const read = forAi.slice(0, AI_MAX_PAGES);
+        skipped = forAi.length - read.length;
+        for (let n = 0; n < read.length; n++) {
+          setSuggesting(`AI is reading page ${read[n]! + 1} (${n + 1} of ${read.length})…`);
+          try { propose((await aiRead.mutateAsync({ id: doc.id, page: read[n]!, image: await pageJpeg(read[n]!) })).boxes); } catch (e) { aiFailed = (e as Error).message; break; }
         }
-        for (const s of suggestBoxes(i, pages[i]!, items, [...fieldsRef.current, ...proposed])) proposed.push({ id: `${newFieldId()}${proposed.length}`, assignee: "preparer", value: null, ...s });
       }
       const added = proposed.slice(0, Math.max(0, MAX_BOXES - fieldsRef.current.length));
+      if (aiFailed) toast.error(aiFailed);
       if (!added.length) {
-        toast.info(turned ? "No blanks found. Pages lying on their side are skipped: turn them upright first (the turn button above the page)." : "No blanks found to put boxes on. (A scanned or photographed page has no words to read: add its boxes by hand.)");
+        if (!aiFailed) toast.info(turned ? "No blanks found. Pages lying on their side are skipped: turn them upright first (the turn button above the page)."
+          : forAi.length && !doc.aiReady ? "No blanks found. These pages are scans or photos with no words to read, and AI reading isn't set up here: add the boxes by hand."
+          : "No blanks found to put boxes on.");
         return;
       }
       change((fs) => [...fs, ...added]);
       setTool(null);
       setSelected(added.map((f) => f.id));
-      toast.success(`Added ${added.length} suggested box${added.length === 1 ? "" : "es"}. Please check each one. Undo (Ctrl+Z) takes them all back.`);
-    } catch (e) { toast.error(`Couldn't read the pages: ${(e as Error).message}`); } finally { setSuggesting(false); }
+      const by = AI_WHO.map((w) => [w, added.filter((f) => whoOfLabel(f.label) === w).length] as const).filter(([, n]) => n > 0);
+      toast.success(`Added ${added.length} suggested box${added.length === 1 ? "" : "es"}${by.length ? ` (${by.map(([w, n]) => `${n} for the ${w === "other" ? "form" : w}`).join(", ")})` : ""}. Please check each one. Undo (Ctrl+Z) takes them all back.${skipped ? ` Only the first ${AI_MAX_PAGES} pages were read by AI.` : ""}`);
+    } catch (e) { toast.error(`Couldn't read the pages: ${(e as Error).message}`); } finally { setSuggesting(null); }
   };
+  /** Boxes grouped by who the AI said fills them ("Provider: …"), to pick a whole group and hand it to a signer. */
+  const whoGroups = AI_WHO.map((who) => ({ who, ids: fields.filter((f) => !isMarkup(f.type) && whoOfLabel(f.label) === who).map((f) => f.id) })).filter((g) => g.ids.length > 0);
 
   // --- picking and dragging boxes ---
   const select = (fid: string, add: boolean) => {
@@ -456,7 +529,9 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
             {mode === "edit" ? (
               <>
                 <ToolPalette tool={tool} onTool={(t) => { setTool(t); if (t) setSelected([]); }} isTemplate={doc.isTemplate} signers={doc.signers} newAssignee={newAssignee} onNewAssignee={setNewAssignee}
-                  onSuggest={() => void suggest()} suggesting={suggesting} />
+                  onSuggest={() => void suggest("quick")} onAiRead={doc.aiReady ? () => void suggest("ai") : undefined} suggesting={suggesting} />
+
+                {whoGroups.length > 0 && <WhoPanel groups={whoGroups} onPick={(ids) => { setTool(null); setSelected(ids); }} />}
 
                 {selected.length > 1 ? (
                   <MultiPanel count={selected.length} onAlign={(how: AlignHow) => change((fs) => alignFields(fs, selected, how, pages))} onCopy={copySelected} onDelete={removeSelected}

@@ -3,7 +3,7 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   AlignEndHorizontal, AlignEndVertical, AlignStartHorizontal, AlignStartVertical, CalendarDays, Check, CheckCircle2, Circle, Copy, CopyPlus, Eraser, FilePlus2, Highlighter, Image as ImageIcon,
-  Loader2, Minus, MoveHorizontal, MoveVertical, Signature, SquareCheck, Stamp, TextCursorInput, Trash2, Type, UserRound, Wand2, X, XCircle,
+  Loader2, Minus, MoveHorizontal, MoveVertical, PencilLine, Signature, Sparkles, SquareCheck, Stamp, TextCursorInput, Trash2, Type, UserRound, Wand2, X, XCircle,
 } from "lucide-react";
 import { DOC_FILE_ACCEPT } from "./uploadFiles";
 import { Btn, inputCls } from "@/components/workspace/ui";
@@ -14,6 +14,7 @@ import {
   type Assignee, type DocField, type InkColor, type PrefillKey,
 } from "@shared/documents";
 import type { AlignHow } from "@shared/docEdit";
+import { AI_WHO_LABELS, type AiWho } from "@shared/docSuggest";
 import type { BoxColor, Doc, ToolChoice } from "./editorShared";
 
 const FILL_TOOLS: (ToolChoice & { label: string; icon: React.ElementType })[] = [
@@ -21,6 +22,7 @@ const FILL_TOOLS: (ToolChoice & { label: string; icon: React.ElementType })[] = 
   { type: "signature", label: "Signature", icon: Signature }, { type: "initials", label: "Initials", icon: TextCursorInput },
 ];
 const MARK_TOOLS: (ToolChoice & { label: string; icon: React.ElementType })[] = [
+  { type: "edittext", label: "Edit text", icon: PencilLine },
   { type: "whiteout", label: "White-out", icon: Eraser }, { type: "highlight", label: "Highlight", icon: Highlighter }, { type: "mark", value: "check", label: "Check", icon: Check },
   { type: "mark", value: "x", label: "X", icon: X }, { type: "mark", value: "circle", label: "Circle", icon: Circle }, { type: "line", label: "Line", icon: Minus },
   { type: "stamp", label: "Stamp", icon: Stamp }, { type: "logo", label: "Logo", icon: ImageIcon },
@@ -30,10 +32,14 @@ const panel = "rounded-xl border border-slate-200 bg-white p-3 dark:border-slate
 const heading = "mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500";
 
 /** "Add a box" and "Mark up the page": pick one, then click (or drag) on the page. */
-export function ToolPalette({ tool, onTool, isTemplate, signers, newAssignee, onNewAssignee, onSuggest, suggesting }: {
+export function ToolPalette({ tool, onTool, isTemplate, signers, newAssignee, onNewAssignee, onSuggest, onAiRead, suggesting }: {
   tool: ToolChoice | null; onTool: (t: ToolChoice | null) => void; isTemplate: boolean; signers: Doc["signers"]; newAssignee: Assignee; onNewAssignee: (a: Assignee) => void;
   /** Read the words on the pages and add boxes on the blanks it finds. */
-  onSuggest: () => void; suggesting: boolean;
+  onSuggest: () => void;
+  /** Have the AI look at every page (scans and photos too); not offered where AI reading isn't set up. */
+  onAiRead?: () => void;
+  /** What it is doing right now ("AI is reading page 2…"), or null. */
+  suggesting: string | null;
 }) {
   const grid = (tools: typeof FILL_TOOLS, cols: string) => (
     <div className={cn("grid gap-1.5", cols)}>
@@ -49,10 +55,17 @@ export function ToolPalette({ tool, onTool, isTemplate, signers, newAssignee, on
     <section className={panel}>
       <p className={heading}>Add a box</p>
       {grid(FILL_TOOLS, "grid-cols-3")}
-      <Btn size="sm" variant="secondary" className="mt-2 w-full" disabled={suggesting} onClick={onSuggest}
+      <Btn size="sm" variant="secondary" className="mt-2 w-full" disabled={!!suggesting} onClick={onSuggest}
         title="MyPCP reads the words on the pages (Name: ____, Signature: ____, Date: ____, [ ]) and adds a box on each blank. You check them.">
         {suggesting ? <Loader2 size={13} className="animate-spin" /> : <Wand2 size={13} />} Suggest boxes for me
       </Btn>
+      {onAiRead && (
+        <Btn size="sm" variant="secondary" className="mt-1.5 w-full" disabled={!!suggesting} onClick={onAiRead}
+          title="The practice's AI looks at a picture of each page (scans and photos too), finds every blank, says what it is for and who fills it. You check its work.">
+          <Sparkles size={13} /> Read the form with AI
+        </Btn>
+      )}
+      {suggesting && <p className="mt-1.5 text-xs text-brand" role="status">{suggesting}</p>}
       {!isTemplate && (
         <label className="mt-2 block text-xs text-slate-500">New boxes are for
           <select className={cn(inputCls, "mt-1 h-8 text-xs")} value={newAssignee} onChange={(e) => onNewAssignee(e.target.value as Assignee)}>
@@ -64,7 +77,7 @@ export function ToolPalette({ tool, onTool, isTemplate, signers, newAssignee, on
       <p className={cn(heading, "mt-3")}>Mark up the page</p>
       {grid(MARK_TOOLS, "grid-cols-4")}
       <p className={cn("mt-2 text-xs", tool ? "text-brand" : "text-slate-400")}>
-        {tool ? `Click on the page where it goes, or drag to set its size. (Esc to stop)` : "Pick one, then click on the page. Drag to set the size."}
+        {tool?.type === "edittext" ? "Click the printed words you want to change, then retype them. (Esc to stop)" : tool ? "Click on the page where it goes, or drag to set its size. (Esc to stop)" : "Pick one, then click on the page. Drag to set the size. Edit text: click printed words to retype them."}
       </p>
     </section>
   );
@@ -106,6 +119,11 @@ export function FieldPanel({ f, doc, onChange, onDelete, onCopy, onEveryPage, is
       {f.type === "text" && (
         <label className="block text-xs text-slate-500">Text size (points; blank = fit the box)
           <input type="number" min={5} max={36} className={cn(inputCls, "mt-1 h-8 text-xs")} value={f.fontSize ?? ""} onChange={(e) => onChange({ fontSize: e.target.value ? Number(e.target.value) : null })} />
+        </label>
+      )}
+      {f.type === "text" && (
+        <label className="flex items-center gap-2 text-xs">
+          <input type="checkbox" className="size-4 accent-teal-700" checked={!!f.bold} onChange={(e) => onChange({ bold: e.target.checked || null })} /> Bold
         </label>
       )}
       {f.type === "mark" && (
@@ -190,6 +208,23 @@ export function MultiPanel({ count, onAlign, onCopy, onDelete, signers, onAssign
   );
 }
 
+/** After an AI read: boxes grouped by who fills them. Picking a group lets you hand all of them to a signer at once. */
+export function WhoPanel({ groups, onPick }: { groups: { who: AiWho; ids: string[] }[]; onPick: (ids: string[]) => void }) {
+  return (
+    <section className={panel}>
+      <p className={heading}>Boxes by person</p>
+      <div className="flex flex-wrap gap-1.5">
+        {groups.map((g) => (
+          <button key={g.who} type="button" onClick={() => onPick(g.ids)} className="rounded-full border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:border-brand dark:border-slate-700 dark:text-slate-200">
+            {AI_WHO_LABELS[g.who]} ({g.ids.length})
+          </button>
+        ))}
+      </div>
+      <p className="mt-2 text-[11px] text-slate-500">Click one to pick all of that person's boxes, then choose "Who fills these boxes".</p>
+    </section>
+  );
+}
+
 /** Pages: add more (another PDF, photos or scans). Moving, turning and removing a page are on the strip above each page. */
 export function PagesPanel({ count, busy, onAdd }: { count: number; busy: boolean; onAdd: (files: File[]) => void }) {
   const input = useRef<HTMLInputElement>(null);
@@ -240,8 +275,22 @@ export function PatientPanel({ doc, onLinked, onPrefilled, flush }: { doc: Doc; 
   const search = trpc.workspace.documents.searchPatients.useQuery({ q: q.trim() }, { enabled: q.trim().length >= 2 });
   const save = trpc.workspace.documents.save.useMutation({ onError: (e) => toast.error(e.message) });
   const prefill = trpc.workspace.documents.prefill.useMutation({ onError: (e) => toast.error(e.message) });
-  const hasPrefill = doc.fields.some((f) => f.prefill);
-  const link = async (key: string | null) => { await flush(); await save.mutateAsync({ id: doc.id, subjectKey: key }); setQ(""); onLinked(); };
+  /** Fill every box MyPCP can from the patient's record (boxes set to fill automatically, and empty boxes whose label asks for something on file). */
+  const fill = async (quiet: boolean) => {
+    await flush();
+    const r = await prefill.mutateAsync({ id: doc.id });
+    onPrefilled(r.fields);
+    if (r.filled) toast.success(`Filled in ${r.filled} box${r.filled === 1 ? "" : "es"} from the patient's record. Please check them.`);
+    else if (!quiet) toast.info("Nothing to fill in: no empty box asks for something MyPCP has on file for this patient.");
+  };
+  const link = async (key: string | null) => {
+    await flush();
+    await save.mutateAsync({ id: doc.id, subjectKey: key });
+    setQ("");
+    // Picking the patient fills in what MyPCP knows straight away.
+    if (key) await fill(true).catch(() => undefined);
+    onLinked();
+  };
   return (
     <section className={panel}>
       <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Patient (optional)</p>
@@ -249,11 +298,11 @@ export function PatientPanel({ doc, onLinked, onPrefilled, flush }: { doc: Doc; 
         <div className="space-y-2">
           <p className="flex items-center justify-between gap-2"><span className="flex items-center gap-1.5"><UserRound size={13} /> <b>{doc.patientName}</b></span>
             <button type="button" className="text-xs text-slate-500 hover:underline" onClick={() => void link(null)}>Remove</button></p>
-          {hasPrefill && (
-            <Btn size="sm" variant="secondary" className="w-full" disabled={prefill.isPending} onClick={async () => { await flush(); const r = await prefill.mutateAsync({ id: doc.id }); onPrefilled(r.fields); toast.success("Filled in the patient's details."); }}>
-              Fill in the patient's details
-            </Btn>
-          )}
+          <Btn size="sm" variant="secondary" className="w-full" disabled={prefill.isPending} onClick={() => void fill(false)}
+            title="Name, date of birth, phone, email, address, insurance, provider and office details: whatever MyPCP has on file goes into the boxes that ask for it.">
+            {prefill.isPending && <Loader2 size={13} className="animate-spin" />} Fill in from the patient's record
+          </Btn>
+          <p className="text-[11px] text-slate-500">Fills boxes that ask for the patient's name, date of birth, phone, email, address, insurance, provider or office details.</p>
         </div>
       ) : (
         <>

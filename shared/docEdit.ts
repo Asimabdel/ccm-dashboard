@@ -47,6 +47,22 @@ export function repeatOnPages(fields: DocField[], id: string, pages: DocPage[]):
   return out;
 }
 
+/**
+ * "Edit text": the two boxes that replace some printed words: white-out over the old words, and a text box on
+ * top holding the same words at the same size, on the same baseline, ready to be retyped.
+ * `run` is the printed text: where its baseline starts (x, y), its width and its letter height.
+ */
+export function editTextBoxes(page: number, size: DocPage, run: { str: string; x: number; y: number; w: number; h: number; bold?: boolean }): [DocField, DocField] {
+  const s = clamp(Math.round((run.h || 10) * 10) / 10, 5, 36);
+  const white: DocField = keepOnPage({ id: newFieldId(), type: "whiteout", page, x: run.x - 1.5, y: run.y - s * 0.28, w: run.w + 3, h: s * 1.25, assignee: "preparer" }, size);
+  // Room to type a little more than was there; the words sit exactly where the old ones did (see drawValue).
+  const w = Math.max(40, Math.min(size.w - (run.x - 2) - 4, run.w * 1.25 + 24));
+  const text: DocField = keepOnPage({
+    id: `${newFieldId()}t`, type: "text", page, x: run.x - 2, y: run.y - s * 0.375, w, h: s * 1.3, assignee: "preparer", value: run.str.slice(0, 2000), fontSize: s, label: "Edited text", bold: run.bold ? true : null,
+  }, size);
+  return [white, text];
+}
+
 /** Move boxes by a small step (arrow keys). `dy` is in screen terms: positive moves DOWN the page. */
 export function nudgeFields(fields: DocField[], ids: string[], dx: number, dy: number, pages: DocPage[]): DocField[] {
   return fields.map((f) => (ids.includes(f.id) ? keepOnPage({ ...f, x: f.x + dx, y: f.y - dy }, pages[f.page]) : f));
