@@ -12,6 +12,7 @@ import { Btn, EmptyState, ErrorNote, Loading, PageHeader, Panel, inputCls } from
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { SendFormsDialog } from "@/components/intake/SendFormsDialog";
+import { ScoreChip } from "@/components/intake/ScoreChip";
 import { rcText } from "@/components/phone/ringcentralStore";
 import { chartHref } from "@/components/chart/ChartLookup";
 import { trpc, type RouterOutputs } from "@/lib/trpc";
@@ -20,8 +21,9 @@ import {
   CONSENT_KINDS, CONSENT_LABELS, INTAKE_LANGS, LANG_LABELS, MEDICAL_INTAKE, PACKET_STATUS_LABELS, PUBLIC_SLUG_RE, answerText, isVisible, textBlocks, type Answers,
   type ConsentKind, type IntakeLang, type PacketStatus,
 } from "@shared/intake";
+import { SCREENING_METHOD, screeningFor, screeningResult, screeningSummary, type ScreeningAnswers } from "@shared/screenings";
 
-type Tab = "waiting" | "to_file" | "filed" | "all" | "signups" | "library";
+type Tab ="waiting" | "to_file" | "filed" | "all" | "signups" | "library";
 const TABS: { k: Tab; label: string; icon: React.ElementType }[] = [
   { k: "waiting", label: "Waiting on patient", icon: Clock },
   { k: "to_file", label: "Ready to file", icon: FileCheck2 },
@@ -46,7 +48,7 @@ const EVENT_LABELS: Record<string, string> = {
   photo_added: "Photo added", signed: "Signed", completed: "All forms finished", viewed: "Viewed by staff", photo_viewed: "Photo viewed by staff",
   filed: "Marked filed in Practice Fusion", cancelled: "Cancelled", extended: "Link extended",
   declined: "Said no", linked: "Linked to patient", copy_viewed: "Patient opened their copy", dob_ok_copy: "Date of birth confirmed (to see their copy)",
-  consents: "Program answers recorded",
+  consents: "Program answers recorded", answered: "Answers sent", safety_alert: "Urgent safety alert raised",
 };
 
 async function copyText(s: string) {
@@ -145,6 +147,7 @@ export default function IntakeFormsPage() {
                             <span key={f.key} className="me-2 inline-flex items-center gap-1">
                               {f.declined ? <XCircle size={12} className="text-slate-500" /> : f.signed ? <Check size={12} className="text-emerald-600" /> : <span className="inline-block size-2 rounded-full bg-slate-300" />}
                               {f.title}{f.declined ? " (said no)" : ""}
+                              {f.score && <ScoreChip score={f.score} />}
                             </span>
                           ))}
                         </p>
@@ -280,9 +283,9 @@ function PacketSheet({ id, onClose }: { id: number | null; onClose: () => void }
                           <p className="font-medium">{f.title}</p>
                           {sig && (
                             <p className="text-xs text-slate-500">
-                              {sig.decision === "declined" ? <b className="text-slate-700 dark:text-slate-200">Said no</b> : "Signed"} by {sig.signerName}
+                              {sig.decision === "declined" ? <b className="text-slate-700 dark:text-slate-200">Said no</b> : sig.method === SCREENING_METHOD ? "Answered" : "Signed"} by {sig.signerName}
                               {sig.signerRelation !== "self" ? ` (${sig.relationLabel}${sig.authorityLabel ? `: ${sig.authorityLabel}${sig.authorityNote ? `, ${sig.authorityNote}` : ""}` : ""})` : ""}
-                              {sig.decision === "declined" ? "" : ` · ${sig.method}`} · {when(sig.signedAt)}
+                              {sig.decision === "declined" ? "" : sig.method === SCREENING_METHOD ? " · sent online, no signature" : ` · ${sig.method}`} · {when(sig.signedAt)}
                               {sig.consentKind ? ` · records ${CONSENT_LABELS[sig.consentKind]} consent` : ""}
                             </p>
                           )}
@@ -301,6 +304,15 @@ function PacketSheet({ id, onClose }: { id: number | null; onClose: () => void }
                   })}
                 </ul>
               </section>
+
+              {p.signatures.some((x) => x.screening) && (
+                <section>
+                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Screening results</h3>
+                  <div className="space-y-3">
+                    {p.signatures.filter((x) => x.screening).map((x) => <ScreeningResultCard key={x.formKey} formKey={x.formKey} answers={x.screening!.answers} />)}
+                  </div>
+                </section>
+              )}
 
               {p.forms.some((f) => f.kind === "questionnaire") && Object.keys(p.answers).length > 0 && (
                 <section>
@@ -362,6 +374,48 @@ function LinkPatient({ packetId, name, onDone }: { packetId: number; name: strin
         ))}
         {search.data && search.data.length === 0 && <li className="text-xs text-slate-500">No patients match. If they're new, add them in Practice Fusion first.</li>}
       </ul>
+    </div>
+  );
+}
+
+/** A depression / anxiety screening the patient sent in: the score, its published range, and every answer. */
+function ScreeningResultCard({ formKey, answers }: { formKey: string; answers: ScreeningAnswers }) {
+  const s = screeningFor(formKey);
+  if (!s) return null;
+  const r = screeningResult(s, answers);
+  return (
+    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="font-semibold">{s.name}</p>
+        <span className={cn("rounded-full px-2.5 py-0.5 text-xs font-bold", r.positive ? "bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200" : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200")}>
+          Score {screeningSummary(s, r)}
+        </span>
+      </div>
+      {r.risk && (
+        <p className="mt-2 flex items-start gap-2 rounded-md border border-rose-300 bg-rose-50 p-2 text-rose-900 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+          <span><b>Self-harm question (9): "{s.options[r.riskPoints ?? 0]!.en}".</b> An urgent task and alert were sent when this came in. Please make sure the patient has been contacted.</span>
+        </p>
+      )}
+      <table className="mt-2 w-full border-collapse text-xs">
+        <tbody>
+          {s.items.map((item, i) => {
+            const pts = answers[item.id] != null ? Number(answers[item.id]) : null;
+            return (
+              <tr key={item.id} className={cn("border-t border-slate-100 align-top dark:border-slate-800", item.id === s.riskItem && r.risk && "font-semibold text-rose-800 dark:text-rose-300")}>
+                <td className="py-1 pe-2 text-slate-500">{i + 1}</td>
+                <td className="py-1 pe-2">{item.text.en}</td>
+                <td className="whitespace-nowrap py-1 pe-2 text-end">{pts != null ? s.options[pts]!.en : "—"}</td>
+                <td className="w-6 py-1 text-end font-semibold">{pts ?? ""}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {s.difficulty && r.asksDifficulty && (
+        <p className="mt-2 text-xs"><span className="text-slate-500">How difficult these problems make work, home or getting along with people:</span> <b>{r.difficulty != null ? s.difficulty.options[r.difficulty]!.en : "—"}</b></p>
+      )}
+      <p className="mt-2 text-xs text-slate-500">A score of {s.cutoff} or more usually calls for a closer look by the provider. This is a screening score, not a diagnosis.</p>
     </div>
   );
 }

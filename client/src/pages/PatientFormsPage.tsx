@@ -15,6 +15,10 @@ import {
   agreementIn, answerText, choiceIn, formatUsPhone, isVisible, langDir, missingInSection, needsAuthority, textBlocks, tr, type Answers, type IntakeField, type IntakeLang,
   type ChoiceAnswer, type ConsentChoice, type ListRow, type PhotoKind, type SignerAuthority, type SignerRelation,
 } from "@shared/intake";
+import {
+  DIFFICULTY_ID, RISK_NOTE, SCREENING_INTRO, SCREENING_METHOD, SCREENING_NOT_LIVE, cleanScreeningAnswers, screeningFor, screeningMissing, screeningResult,
+  type Screening, type ScreeningAnswers,
+} from "@shared/screenings";
 
 type Payload = RouterOutputs["patientForms"]["load"];
 type FormItem = Payload["forms"][number];
@@ -42,6 +46,7 @@ export default function PatientFormsPage() {
   const [blocked, setBlocked] = useState("not_found");
   const [clinic, setClinic] = useState<{ name: string | null; phone: string | null }>({ name: null, phone: null });
   const [formCount, setFormCount] = useState(1);
+  const [openMinutes, setOpenMinutes] = useState<number | null>(null);
   const [session, setSession] = useState<string | null>(null);
   const [payload, setPayload] = useState<Payload | null>(null);
   const [active, setActive] = useState<string | null>(null);
@@ -136,6 +141,7 @@ export default function PatientFormsPage() {
         if (!alive) return;
         setClinic(r.clinic);
         setFormCount(r.formCount || 1);
+        setOpenMinutes(r.minutes ?? null);
         setLangState((r.language as IntakeLang) || "en");
         const saved = store.get(sessionKey);
         if (r.state === "done") { if (saved) setSession(saved); setPhase("done"); return; }
@@ -196,7 +202,7 @@ export default function PatientFormsPage() {
             onStarted={(s, p) => { setNotice(null); startWith(s, p); }} />
         )}
         {(phase === "welcome" || phase === "copyDob") && (
-          <Welcome lang={lang} onLang={changeLang} token={token} formCount={formCount} notice={notice} forCopy={phase === "copyDob"}
+          <Welcome lang={lang} onLang={changeLang} token={token} formCount={formCount} minutes={openMinutes} notice={notice} forCopy={phase === "copyDob"}
             onVerified={(s, p) => {
               setNotice(null);
               if (phase === "copyDob") { store.set(sessionKey, s); setSession(s); setPhase("copy"); return; }
@@ -211,6 +217,10 @@ export default function PatientFormsPage() {
           activeForm.kind === "questionnaire" ? (
             <Questionnaire key={activeForm.key} lang={lang} session={session} payload={payload} onExit={() => { setPhase("home"); void refresh(); }}
               onSigned={(c) => afterSign(activeForm.key, c)} onServerError={onServerError} />
+          ) : activeForm.kind === "screening" ? (
+            <ScreeningForm key={activeForm.key} lang={lang} session={session} form={activeForm} saved={payload.screeningAnswers?.[activeForm.key] ?? {}}
+              onExit={() => { setPhase("home"); void refresh(); }} onSent={(c) => afterSign(activeForm.key, c)} onServerError={onServerError}
+              onChanged={async () => { setNotice(t(T.changedNote, lang)); await refresh(); setPhase("home"); window.scrollTo({ top: 0 }); }} />
           ) : (
             <Agreement key={`${activeForm.key}:${activeForm.version}`} lang={lang} session={session} form={activeForm} notice={notice}
               onExit={isPublic && payload.forms.length === 1 ? undefined : () => setPhase("home")} onSigned={(c, declined) => afterSign(activeForm.key, c, declined)} onServerError={onServerError}
@@ -340,8 +350,8 @@ function Done({ lang, phone, isPublic, notice, onCopy }: { lang: IntakeLang; pho
 // Welcome + date of birth
 // ---------------------------------------------------------------------------
 
-function Welcome({ lang, onLang, token, formCount, notice, forCopy = false, onVerified, onBlocked }: {
-  lang: IntakeLang; onLang: (l: IntakeLang) => void; token: string; formCount: number; notice: string | null; forCopy?: boolean;
+function Welcome({ lang, onLang, token, formCount, minutes: estimate, notice, forCopy = false, onVerified, onBlocked }: {
+  lang: IntakeLang; onLang: (l: IntakeLang) => void; token: string; formCount: number; minutes?: number | null; notice: string | null; forCopy?: boolean;
   onVerified: (session: string, p: Payload) => void; onBlocked: (s: string) => void;
 }) {
   const verify = trpc.patientForms.verify.useMutation();
@@ -351,7 +361,7 @@ function Welcome({ lang, onLang, token, formCount, notice, forCopy = false, onVe
   const [err, setErr] = useState<string | null>(null);
   const dRef = useRef<HTMLInputElement>(null);
   const yRef = useRef<HTMLInputElement>(null);
-  const minutes = Math.min(20, Math.max(5, formCount * 5));
+  const minutes = estimate ?? Math.min(20, Math.max(5, formCount * 5));
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -542,13 +552,15 @@ function PublicStart({ lang, onLang, slug, info, notice, onStarted }: {
 // ---------------------------------------------------------------------------
 
 function formTitle(f: FormItem, lang: IntakeLang) {
-  return f.kind === "questionnaire" ? tr(MEDICAL_INTAKE.title, lang) : agreementIn(f.doc!, lang).title;
+  if (f.kind === "questionnaire") return tr(MEDICAL_INTAKE.title, lang);
+  if (f.kind === "screening") return tr(screeningFor(f.key)?.title, lang);
+  return agreementIn(f.doc!, lang).title;
 }
 
 function Home({ lang, payload, notice, onOpen }: { lang: IntakeLang; payload: Payload; notice: string | null; onOpen: (key: string) => void }) {
   const first = niceName(payload.firstName);
   const nextKey = payload.forms.find((f) => !f.signed)?.key;
-  const started = Object.keys(payload.answers ?? {}).length > 0;
+  const isStarted = (f: FormItem) => Object.keys((f.kind === "screening" ? payload.screeningAnswers?.[f.key] : f.kind === "questionnaire" ? payload.answers : null) ?? {}).length > 0;
   return (
     <div className="space-y-5">
       <div>
@@ -558,7 +570,7 @@ function Home({ lang, payload, notice, onOpen }: { lang: IntakeLang; payload: Pa
       {notice && <Note tone="warn">{notice}</Note>}
       <ol className="space-y-3">
         {payload.forms.map((f, i) => {
-          const Icon = f.kind === "questionnaire" ? ClipboardList : FileText;
+          const Icon = f.kind === "agreement" ? FileText : ClipboardList;
           const isNext = f.key === nextKey;
           return (
             <li key={f.key} className={cn("rounded-3xl border-2 bg-white p-5 shadow-sm", f.signed ? "border-emerald-200" : isNext ? "border-teal-600" : "border-slate-200")}>
@@ -571,13 +583,14 @@ function Home({ lang, payload, notice, onOpen }: { lang: IntakeLang; payload: Pa
                   <h2 className="text-2xl font-bold leading-tight">{formTitle(f, lang)}</h2>
                   <p className="mt-1 text-lg text-slate-600">
                     {f.signed ? <span className="font-semibold text-emerald-700">{f.declined ? t(T.youSaidNo, lang) : `${t(T.formDone, lang)} ✓`}</span>
-                      : f.kind === "questionnaire" ? t(T.aboutMinutes, lang, { m: MEDICAL_INTAKE.minutes }) : t(T.readSign, lang)}
+                      : f.kind === "questionnaire" ? t(T.aboutMinutes, lang, { m: MEDICAL_INTAKE.minutes })
+                      : f.kind === "screening" ? t(T.aboutMinutes, lang, { m: screeningFor(f.key)?.minutes ?? 2 }) : t(T.readSign, lang)}
                   </p>
                 </div>
               </div>
               {!f.signed && (
                 <BigButton onClick={() => onOpen(f.key)} variant={isNext ? "primary" : "secondary"} className="mt-4 w-full">
-                  {f.kind === "questionnaire" && started ? t(T.keepGoing, lang) : t(T.begin, lang)}
+                  {isStarted(f) ? t(T.keepGoing, lang) : t(T.begin, lang)}
                   <ChevronRight className="size-6 rtl:rotate-180" />
                 </BigButton>
               )}
@@ -917,6 +930,289 @@ function PhotoInput({ kind, lang, session, has, onDone, onServerError }: { kind:
 }
 
 // ---------------------------------------------------------------------------
+// Depression / anxiety screenings (PHQ-9, GAD-7): one question per screen with big answers,
+// then check and send. No signature. The patient never sees a score.
+// ---------------------------------------------------------------------------
+
+/** The help numbers: shown the moment the self-harm question gets any answer above "Not at all", and again after sending. */
+function RiskNote({ lang, afterSending = false }: { lang: IntakeLang; afterSending?: boolean }) {
+  return (
+    <div role="alert" className="rounded-3xl border-2 border-rose-300 bg-rose-50 p-5 text-rose-950">
+      <h2 className="text-2xl font-bold leading-tight">{tr(RISK_NOTE.title, lang)}</h2>
+      <p className="mt-2 text-xl">{tr(RISK_NOTE.body, lang)}</p>
+      <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+        <a href="tel:988" className="flex min-h-14 flex-1 items-center justify-center gap-2 rounded-2xl bg-rose-700 px-6 text-xl font-bold text-white shadow-sm active:bg-rose-800">
+          <Phone className="size-6" /> {tr(RISK_NOTE.call988, lang)}
+        </a>
+        <a href="tel:911" className="flex min-h-14 flex-1 items-center justify-center gap-2 rounded-2xl border-2 border-rose-700 bg-white px-6 text-xl font-bold text-rose-800 active:bg-rose-100">
+          <Phone className="size-6" /> {tr(RISK_NOTE.call911, lang)}
+        </a>
+      </div>
+      {afterSending && <p className="mt-4 text-lg">{tr(RISK_NOTE.followUp, lang)}</p>}
+    </div>
+  );
+}
+
+interface ScreeningProps {
+  lang: IntakeLang; session: string; form: FormItem; saved: ScreeningAnswers; onExit: () => void; onSent: (completed: boolean) => void;
+  onServerError: (e: unknown) => boolean; onChanged: () => void;
+}
+
+function ScreeningForm(props: ScreeningProps) {
+  const s = screeningFor(props.form.key);
+  if (!s) return <Note tone="warn">{t(T.tryAgain, props.lang)}</Note>;
+  return <ScreeningSteps s={s} {...props} />;
+}
+
+function ScreeningSteps({ s, lang, session, form, saved, onExit, onSent, onServerError, onChanged }: ScreeningProps & { s: Screening }) {
+  const [answers, setAnswers] = useState<ScreeningAnswers>(() => cleanScreeningAnswers(s, saved));
+  // "intro" → each question → (PHQ-9: the difficulty question, when a problem was checked) → "send".
+  const [step, setStep] = useState<string>(() => {
+    const a = cleanScreeningAnswers(s, saved);
+    return Object.keys(a).length ? screeningMissing(s, a)[0] ?? "send" : "intro";
+  });
+  // Came from "Change" on the last screen: go straight back there after answering.
+  const [fixing, setFixing] = useState(false);
+  const [who, setWho] = useState<"self" | "helper">("self");
+  const [relation, setRelation] = useState<SignerRelation | "">("");
+  const [helperName, setHelperName] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  // Sent, with the help numbers still on screen (only after a self-harm answer).
+  const [sent, setSent] = useState<{ completed: boolean } | null>(null);
+  const save = trpc.patientForms.save.useMutation();
+  const submit = trpc.patientForms.submitScreening.useMutation();
+  const answersRef = useRef(answers);
+  answersRef.current = answers;
+  const dirty = useRef(false);
+  const saveTimer = useRef<number | undefined>(undefined);
+  const nextTimer = useRef<number | undefined>(undefined);
+
+  const result = screeningResult(s, answers);
+  const orderFor = (a: ScreeningAnswers) => [...s.items.map((i) => i.id), ...(screeningResult(s, a).asksDifficulty ? [DIFFICULTY_ID] : []), "send"];
+  const order = orderFor(answers);
+
+  const flush = useCallback(async () => {
+    window.clearTimeout(saveTimer.current);
+    if (!dirty.current) return;
+    dirty.current = false;
+    try {
+      await save.mutateAsync({ session, formKey: s.key, answers: answersRef.current });
+    } catch (e) {
+      dirty.current = true;
+      onServerError(e);
+    }
+  }, [onServerError, save, s.key, session]);
+  useEffect(() => () => { window.clearTimeout(saveTimer.current); window.clearTimeout(nextTimer.current); }, []);
+  // The difficulty question disappears when every answer goes back to "Not at all".
+  useEffect(() => { if (step === DIFFICULTY_ID && !result.asksDifficulty) setStep("send"); }, [step, result.asksDifficulty]);
+  // The help numbers appear under the answers: bring them fully into view.
+  const riskRef = useRef<HTMLDivElement>(null);
+  const riskShown = step === s.riskItem && result.risk;
+  useEffect(() => { if (riskShown) riskRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }); }, [riskShown]);
+
+  const goto = (to: string) => { window.clearTimeout(nextTimer.current); if (to === "send") setFixing(false); setStep(to); setErr(null); window.scrollTo({ top: 0 }); };
+  const after = (id: string, a: ScreeningAnswers) => {
+    if (fixing) return screeningMissing(s, a)[0] ?? "send";
+    const o = orderFor(a);
+    return o[o.indexOf(id) + 1] ?? "send";
+  };
+  const pick = (id: string, v: string) => {
+    const next = cleanScreeningAnswers(s, { ...answers, [id]: v });
+    setAnswers(next);
+    setErr(null);
+    dirty.current = true;
+    window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => { void flush(); }, 800);
+    window.clearTimeout(nextTimer.current);
+    // The self-harm question: stay on this screen so the help numbers are seen; they tap Next when ready.
+    if (id === s.riskItem && v !== "0") return;
+    nextTimer.current = window.setTimeout(() => goto(after(id, next)), 300);
+  };
+  const exit = async () => { await flush(); onExit(); };
+  const back = () => {
+    setFixing(false);
+    const i = order.indexOf(step);
+    if (step === "intro" || i === 0) return void exit();
+    goto(order[i - 1] ?? order[0]!);
+  };
+
+  const send = async () => {
+    setErr(null);
+    const missing = screeningMissing(s, answers);
+    if (missing.length) { setFixing(true); goto(missing[0]!); return; }
+    if (who === "helper" && !relation) return setErr(t(T.needRelation, lang));
+    if (who === "helper" && helperName.trim().length < 2) return setErr(t(T.needName, lang));
+    window.clearTimeout(saveTimer.current);
+    dirty.current = false;
+    try {
+      const r = await submit.mutateAsync({
+        session, formKey: s.key, version: form.version, language: lang, answers,
+        relation: who === "self" ? "self" : (relation as SignerRelation), helperName: who === "helper" ? helperName.trim() : null,
+      });
+      if (result.risk) { setSent({ completed: !!r.completed }); window.scrollTo({ top: 0 }); return; }
+      onSent(!!r.completed);
+    } catch (e) {
+      if (onServerError(e)) return;
+      const c = errCode(e);
+      if (c === "changed") return onChanged();
+      if (c === "incomplete") { setFixing(true); goto(screeningMissing(s, answers)[0] ?? s.items[0]!.id); return; }
+      setErr(t(c === "name" ? T.needName : T.tryAgain, lang));
+    }
+  };
+
+  if (sent) {
+    return (
+      <div className="space-y-5">
+        <Note tone="ok">{t(T.answersSent, lang)}</Note>
+        <RiskNote lang={lang} afterSending />
+        <BigButton onClick={() => onSent(sent.completed)} className="w-full">{t(T.continue, lang)} <ChevronRight className="size-6 rtl:rotate-180" /></BigButton>
+      </div>
+    );
+  }
+
+  const isDifficulty = step === DIFFICULTY_ID && !!s.difficulty;
+  const item = s.items.find((i) => i.id === step) ?? null;
+  const number = item ? s.items.indexOf(item) + 1 : 0;
+  const options = isDifficulty ? s.difficulty!.options : s.options;
+  const question = isDifficulty ? tr(s.difficulty!.question, lang) : item ? tr(item.text, lang) : "";
+  const value = answers[step];
+  const pill = (on: boolean) => cn("min-h-14 flex-1 rounded-2xl border-2 px-3 py-2 text-lg font-bold", on ? "border-teal-700 bg-teal-700 text-white" : "border-slate-300 bg-white text-slate-800");
+  const rows = [
+    ...s.items.map((i) => ({ id: i.id, text: tr(i.text, lang), answer: answers[i.id] != null ? tr(s.options[Number(answers[i.id])], lang) : null })),
+    ...(s.difficulty && result.asksDifficulty ? [{ id: DIFFICULTY_ID, text: tr(s.difficulty.question, lang), answer: answers[DIFFICULTY_ID] != null ? tr(s.difficulty.options[Number(answers[DIFFICULTY_ID])], lang) : null }] : []),
+  ];
+
+  return (
+    <div>
+      <div className="mb-5">
+        <button type="button" onClick={() => void exit()} className="mb-2 flex items-center gap-1 text-lg font-semibold text-teal-800">
+          <ChevronLeft className="size-5 rtl:rotate-180" /> {t(T.allForms, lang)}
+        </button>
+        {step === "send" && <p className="text-lg font-semibold text-slate-500">{tr(s.title, lang)}</p>}
+        {(item || isDifficulty) && (
+          <>
+            <p className="text-lg font-semibold text-slate-600">{item ? t(T.questionOf, lang, { i: number, n: s.items.length }) : t(T.lastQuestion, lang)}</p>
+            <div className="mt-2 h-3 overflow-hidden rounded-full bg-slate-200" aria-hidden="true">
+              <div className="h-full rounded-full bg-teal-600 transition-all" style={{ width: `${((order.indexOf(step) + 1) / order.length) * 100}%` }} />
+            </div>
+          </>
+        )}
+      </div>
+
+      {step === "intro" ? (
+        <div className="space-y-5">
+          <h1 className="text-3xl font-bold leading-tight">{tr(s.title, lang)}</h1>
+          <p className="text-xl text-slate-700">{tr(SCREENING_INTRO, lang)}</p>
+          <p className="text-xl text-slate-700">{t(T.tapAnswer, lang)}</p>
+          <Note tone="warn">{tr(SCREENING_NOT_LIVE, lang)}</Note>
+          <BigButton onClick={() => goto(s.items[0]!.id)} className="w-full">{t(T.begin, lang)} <ChevronRight className="size-6 rtl:rotate-180" /></BigButton>
+        </div>
+      ) : item || isDifficulty ? (
+        // One key for the whole question, so every part of it is fresh on each question.
+        <div key={step} className="space-y-4">
+          {item && <p className="text-lg leading-snug text-slate-600">{tr(s.stem, lang)}</p>}
+          <h1 id="sq-label" className="text-2xl font-bold leading-snug">{question}</h1>
+          <div role="radiogroup" aria-labelledby="sq-label" className="space-y-2">
+            {options.map((o, i) => {
+              const on = value === String(i);
+              return (
+                <button key={i} type="button" role="radio" aria-checked={on} onClick={() => pick(step, String(i))}
+                  className={cn("flex min-h-14 w-full items-center gap-3 rounded-2xl border-2 px-4 py-3 text-start text-xl", on ? "border-teal-700 bg-teal-50 font-bold text-teal-900" : "border-slate-300 bg-white")}>
+                  <span className={cn("grid size-7 shrink-0 place-items-center rounded-full border-2", on ? "border-teal-700 bg-teal-700 text-white" : "border-slate-400")}>{on && <Check className="size-4" strokeWidth={4} />}</span>
+                  {tr(o, lang)}
+                </button>
+              );
+            })}
+          </div>
+          {step === s.riskItem && result.risk && <div ref={riskRef}><RiskNote lang={lang} /></div>}
+          {/* Tapping an answer moves on by itself, so Back / Next sit under the answers (not pinned to the
+              bottom of the screen): that leaves room for all four answers on a phone without scrolling. */}
+          <div className="flex gap-3 pt-2">
+            <BigButton variant="secondary" onClick={back} className="flex-1"><ChevronLeft className="size-6 rtl:rotate-180" /> {t(T.back, lang)}</BigButton>
+            <BigButton onClick={() => goto(after(step, answers))} disabled={value == null} className="flex-[2]">{t(T.next, lang)} <ChevronRight className="size-6 rtl:rotate-180" /></BigButton>
+          </div>
+          <ReadAloud lang={lang} speakLang={lang} text={`${item ? `${tr(s.stem, lang)} ` : ""}${question}. ${options.map((o) => tr(o, lang)).join(". ")}.`} />
+        </div>
+      ) : (
+        <div className="space-y-5">
+          <div>
+            <h1 className="text-3xl font-bold">{t(T.reviewTitle, lang)}</h1>
+            <p className="mt-2 text-xl text-slate-700">{t(T.screeningReview, lang)}</p>
+          </div>
+          <ol className="divide-y divide-slate-200 rounded-3xl border border-slate-200 bg-white">
+            {rows.map((row, i) => (
+              <li key={row.id} className="px-4 py-3">
+                <p className="text-base leading-snug text-slate-600">{row.id === DIFFICULTY_ID ? "" : `${i + 1}. `}{row.text}</p>
+                <div className="mt-1 flex items-center justify-between gap-3">
+                  <p className="text-lg font-bold">{row.answer ?? <span className="font-normal text-slate-400">{t(T.noAnswer, lang)}</span>}</p>
+                  <button type="button" onClick={() => { setFixing(true); goto(row.id); }} className="shrink-0 rounded-xl border-2 border-slate-300 px-3 py-1.5 text-base font-semibold text-teal-800">{t(T.change, lang)}</button>
+                </div>
+              </li>
+            ))}
+          </ol>
+          <section className="space-y-4 rounded-3xl border-2 border-teal-600 bg-white p-5 shadow-sm">
+            <div>
+              <p className="mb-2 text-xl font-semibold">{t(T.whoAnswered, lang)}</p>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <button type="button" className={pill(who === "self")} aria-pressed={who === "self"} onClick={() => { setWho("self"); setErr(null); }}>{t(T.signMe, lang)}</button>
+                <button type="button" className={pill(who === "helper")} aria-pressed={who === "helper"} onClick={() => { setWho("helper"); setErr(null); }}>{t(T.answeredHelper, lang)}</button>
+              </div>
+            </div>
+            {who === "helper" && (
+              <>
+                <label className="block">
+                  <span className="mb-2 block text-xl font-semibold">{t(T.helperRelation, lang)}</span>
+                  <select className={inputCls} value={relation} onChange={(e) => { setRelation(e.target.value as SignerRelation); setErr(null); }}>
+                    <option value="">—</option>
+                    {SIGNER_RELATIONS.filter((r) => r !== "self").map((r) => <option key={r} value={r}>{tr(RELATION_LABELS[r], lang)}</option>)}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="mb-2 block text-xl font-semibold">{t(T.helperName, lang)}</span>
+                  <input className={inputCls} value={helperName} onChange={(e) => { setHelperName(e.target.value); setErr(null); }} autoComplete="name" maxLength={160} />
+                </label>
+              </>
+            )}
+            {err && <Note tone="error">{err}</Note>}
+            <BigButton variant="success" onClick={() => void send()} disabled={submit.isPending} className="w-full">
+              {submit.isPending ? <Loader2 className="size-6 animate-spin" /> : null} {t(submit.isPending ? T.sending : T.sendAnswers, lang)}
+            </BigButton>
+          </section>
+          <BigButton variant="secondary" onClick={back} className="w-full"><ChevronLeft className="size-6 rtl:rotate-180" /> {t(T.back, lang)}</BigButton>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A screening in the patient's copy: the questions and their own answers (no score). */
+function ScreeningCopy({ formKey, answers, lang }: { formKey: string; answers: ScreeningAnswers; lang: IntakeLang }) {
+  const s = screeningFor(formKey);
+  if (!s) return null;
+  const r = screeningResult(s, answers);
+  return (
+    <div dir={langDir(lang)} lang={lang} className="mt-3 space-y-3">
+      <p className="text-lg text-slate-700">{tr(s.stem, lang)}</p>
+      <dl className="space-y-2">
+        {s.items.map((item, i) => (
+          <div key={item.id} className="break-inside-avoid">
+            <dt className="text-base text-slate-600">{i + 1}. {tr(item.text, lang)}</dt>
+            <dd className="text-lg font-semibold">{answers[item.id] != null ? tr(s.options[Number(answers[item.id])], lang) : "—"}</dd>
+          </div>
+        ))}
+        {s.difficulty && r.asksDifficulty && (
+          <div className="break-inside-avoid">
+            <dt className="text-base text-slate-600">{tr(s.difficulty.question, lang)}</dt>
+            <dd className="text-lg font-semibold">{r.difficulty != null ? tr(s.difficulty.options[r.difficulty], lang) : "—"}</dd>
+          </div>
+        )}
+      </dl>
+      <p className="text-sm text-slate-500">{tr(s.credit, lang)}</p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Agreements (practice wording), with "read it to me"
 // ---------------------------------------------------------------------------
 
@@ -1250,7 +1546,7 @@ function PatientCopy({ lang, session, phone, onBack, onServerError }: { lang: In
         </div>
         <h1 className="mt-4 text-3xl font-bold">{t(T.copyTitle, lang)}</h1>
         <p className="mt-1 text-xl">{niceName(data.name)} · {t(T.dobLabel, lang)}: <span dir="ltr">{m}/{d}/{y}</span></p>
-        <p className="mt-2 text-lg text-slate-600 print:hidden">{t(T.copyIntro, lang)}</p>
+        <p className="mt-2 text-lg text-slate-600 print:hidden">{t(data.forms.every((f) => f.kind === "screening") ? T.copyIntroAnswers : T.copyIntro, lang)}</p>
         <BigButton onClick={() => window.print()} className="mt-4 w-full print:hidden"><Printer className="size-6" /> {t(T.savePrint, lang)}</BigButton>
         <p className="mt-2 text-base text-slate-500 print:hidden">{t(T.savePrintHow, lang)}</p>
       </section>
@@ -1278,6 +1574,8 @@ function PatientCopy({ lang, session, phone, onBack, onServerError }: { lang: In
                   </div>
                 ))}
               </div>
+            ) : f.kind === "screening" ? (
+              <ScreeningCopy formKey={f.key} answers={f.screening?.answers ?? {}} lang={fl} />
             ) : (
               <div dir={langDir(fl)} className="mt-3 space-y-4">
                 {MEDICAL_INTAKE.sections.map((s) => (
@@ -1302,13 +1600,13 @@ function PatientCopy({ lang, session, phone, onBack, onServerError }: { lang: In
             <div className="mt-5 break-inside-avoid rounded-2xl border-2 border-slate-700 p-4">
               {f.decision === "declined" ? (
                 <p className="text-xl font-bold">{t(T.yourAnswerNo, lang)}</p>
-              ) : (
+              ) : f.method === SCREENING_METHOD ? null : (
                 <div className="flex h-20 items-end border-b-2 border-slate-700 pb-1">
                   {f.signature ? <img src={f.signature} alt="" className="max-h-20" /> : <span className="text-4xl" style={{ fontFamily: scriptFont }} dir="auto">{f.signerName}</span>}
                 </div>
               )}
-              <p className="mt-2 text-lg">
-                {t(f.decision === "declined" ? T.answeredBy : T.signedBy, lang, { name: f.signerName })}
+              <p className={cn("text-lg", f.method !== SCREENING_METHOD && "mt-2")}>
+                {t(f.decision === "declined" || f.method === SCREENING_METHOD ? T.answeredBy : T.signedBy, lang, { name: f.signerName })}
                 {f.relation !== "self" ? ` (${tr(RELATION_LABELS[f.relation], lang)}, ${t(T.forThePatient, lang)}${f.authority ? `: ${tr(AUTHORITY_LABELS[f.authority], lang)}${f.authorityNote ? `, ${f.authorityNote}` : ""}` : ""})` : ""}
               </p>
               <p className="text-lg">{t(T.signedOn, lang, { date: when(f.signedAt) })}</p>

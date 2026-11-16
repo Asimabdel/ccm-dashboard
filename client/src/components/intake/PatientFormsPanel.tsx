@@ -3,6 +3,7 @@ import { Link } from "wouter";
 import { Check, CheckCircle2, ClipboardSignature, Clock, Globe, Printer, Send, XCircle } from "lucide-react";
 import { Btn, EmptyState, ErrorNote, Loading, Panel } from "@/components/workspace/ui";
 import { SendFormsDialog } from "@/components/intake/SendFormsDialog";
+import { ScoreChip } from "@/components/intake/ScoreChip";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { PACKET_STATUS_LABELS } from "@shared/intake";
@@ -84,6 +85,7 @@ export function PatientFormsPanel({ subjectKey }: { subjectKey: string }) {
                       <span key={f.key} className="inline-flex items-center gap-1">
                         {f.declined ? <XCircle size={12} className="text-slate-500" /> : f.signed ? <Check size={12} className="text-emerald-600" /> : <Clock size={12} className="text-slate-400" />}
                         {f.title}{f.declined ? " (said no)" : ""}
+                        {f.score && <ScoreChip score={f.score} />}
                       </span>
                     ))}
                   </p>

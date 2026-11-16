@@ -207,7 +207,7 @@ export function SendFormsDialog({ open, onClose, preset }: { open: boolean; onCl
                         {!c.builtIn && c.langs.length < 3 && <span className="text-xs text-slate-500">({c.langs.map((l) => LANG_LABELS[l as IntakeLang] ?? l).join(", ")})</span>}
                       </label>
                     ))}
-                    {choices.data && choices.data.length === 1 && <p className="text-xs text-slate-500">Add your consents and agreements under Patient forms → Form library.</p>}
+                    {choices.data && !choices.data.some((c) => !c.builtIn) && <p className="text-xs text-slate-500">Add your consents and agreements under Patient forms → Form library.</p>}
                   </div>
                   {langGap && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">A picked form isn't available in {LANG_LABELS[language]} yet; the patient will see it in English.</p>}
                 </fieldset>

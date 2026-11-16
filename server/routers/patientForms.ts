@@ -57,10 +57,26 @@ export const patientFormsRouter = router({
     brake(ctx, 120);
     return intake.patientSetLanguage(input.token, input.language);
   }),
-  save: publicProcedure.input(z.object({ session, answers: z.record(z.string(), z.unknown()) })).mutation(({ ctx, input }) => {
+  save: publicProcedure.input(z.object({ session, answers: z.record(z.string(), z.unknown()), formKey: z.string().max(40).optional() })).mutation(({ ctx, input }) => {
     brake(ctx, 600);
-    return run(() => intake.patientSave(input.session, input.answers));
+    return run(() => intake.patientSave(input.session, input.answers, input.formKey));
   }),
+  /** Send in a depression / anxiety screening (answers only; no signature). */
+  submitScreening: publicProcedure
+    .input(z.object({
+      session,
+      formKey: z.string().max(40),
+      version: z.number().int().min(0),
+      language: z.string().max(2),
+      answers: z.record(z.string().max(20), z.string().max(4)),
+      relation: z.enum(SIGNER_RELATIONS),
+      helperName: z.string().max(160).nullish(),
+    }))
+    .mutation(({ ctx, input }) => {
+      brake(ctx, 120);
+      const { session: s, ...rest } = input;
+      return run(() => intake.patientSubmitScreening(s, rest, meta(ctx)));
+    }),
   photo: publicProcedure
     .input(z.object({ session, kind: z.enum(PHOTO_KINDS), dataUrl: z.string().max(5_600_000).nullable() }))
     .mutation(({ ctx, input }) => {

@@ -2,6 +2,7 @@
 // agreements/consents whose wording an admin pastes into MyPCP (Form library). Patients open a
 // private link, confirm their date of birth, fill everything in on their phone and sign.
 // Shared by the server (validation, hashing) and both UIs (patient page, staff page).
+// The depression / anxiety screenings (PHQ-9, GAD-7) that can be sent the same way are in ./screenings.
 
 export const INTAKE_LANGS = ["en", "es", "ar"] as const;
 export type IntakeLang = (typeof INTAKE_LANGS)[number];

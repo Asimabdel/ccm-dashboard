@@ -104,6 +104,18 @@ export const T = {
   ),
   changedNote: s("This form was just updated. Please read it again, then sign.", "Este formulario se acaba de actualizar. Léalo de nuevo y luego firme.", "تم تحديث هذا النموذج للتو. يرجى قراءته مرة أخرى ثم التوقيع."),
   incompleteNote: s("A few questions still need answers.", "Todavía faltan algunas respuestas.", "لا تزال بعض الأسئلة بحاجة إلى إجابة."),
+
+  // Depression / anxiety screenings: one question per screen, answers only (no signature)
+  questionOf: s("Question {i} of {n}", "Pregunta {i} de {n}", "السؤال {i} من {n}"),
+  lastQuestion: s("One more question", "Una pregunta más", "سؤال أخير"),
+  tapAnswer: s("Tap the answer that fits you best.", "Toque la respuesta que mejor le describe.", "اضغط على الإجابة الأنسب لك."),
+  screeningReview: s("Tap Change to fix anything. Then send your answers.", "Toque Cambiar para corregir algo. Luego envíe sus respuestas.", "اضغط على \"تغيير\" لتصحيح أي شيء، ثم أرسل إجاباتك."),
+  whoAnswered: s("Who answered these questions?", "¿Quién contestó estas preguntas?", "من أجاب عن هذه الأسئلة؟"),
+  answeredHelper: s("I answered for the patient", "Contesté por el paciente", "أجبتُ نيابةً عن المريض"),
+  helperName: s("Your full name (the person helping)", "Su nombre completo (quien ayuda)", "اسمك الكامل (الشخص الذي يساعد)"),
+  sendAnswers: s("Send my answers", "Enviar mis respuestas", "إرسال إجاباتي"),
+  sending: s("Sending…", "Enviando…", "جارٍ الإرسال…"),
+  answersSent: s("Your answers were sent. Thank you.", "Sus respuestas fueron enviadas. Gracias.", "تم إرسال إجاباتك. شكرًا لك."),
   doneTitle: s("All done. Thank you!", "¡Listo! Muchas gracias.", "تم كل شيء. شكرًا لك!"),
   doneBody: s("We received your forms. We'll see you at your visit.", "Recibimos sus formularios. Le esperamos en su cita.", "لقد استلمنا نماذجك. نراك في موعدك."),
   doneClose: s("You can close this page now.", "Ya puede cerrar esta página.", "يمكنك الآن إغلاق هذه الصفحة."),
@@ -118,6 +130,7 @@ export const T = {
   seeCopy: s("See or save my copy", "Ver o guardar mi copia", "عرض نسختي أو حفظها"),
   copyTitle: s("Your copy", "Su copia", "نسختك"),
   copyIntro: s("This is what you signed. Keep it for your records.", "Esto es lo que firmó. Guárdelo para su archivo.", "هذا ما وقّعت عليه. احتفظ به في سجلاتك."),
+  copyIntroAnswers: s("These are the answers you sent. Keep them for your records.", "Estas son las respuestas que envió. Guárdelas para su archivo.", "هذه هي الإجابات التي أرسلتها. احتفظ بها في سجلاتك."),
   savePrint: s("Save or print", "Guardar o imprimir", "حفظ أو طباعة"),
   savePrintHow: s(
     "On a phone: tap Save or print, then choose Save as PDF (or Share).",

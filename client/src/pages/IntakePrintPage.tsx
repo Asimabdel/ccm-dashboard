@@ -8,6 +8,63 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { BrandMark } from "@/components/BrandMark";
 import { trpc } from "@/lib/trpc";
 import { CONSENT_LABELS, DECLINE_CONSENT, ESIGN_CONSENT, LANG_LABELS, MEDICAL_INTAKE, answerText, isVisible, langDir, textBlocks, tr, type Answers, type IntakeLang } from "@shared/intake";
+import { SCREENING_METHOD, screeningFor, screeningResult, type ScreeningAnswers } from "@shared/screenings";
+
+/** A depression / anxiety screening on the printed copy: every answer with its points, the total and the published ranges. */
+function ScreeningPrint({ formKey, answers, language }: { formKey: string; answers: ScreeningAnswers | null; language: string }) {
+  const s = screeningFor(formKey);
+  if (!s) return null;
+  if (!answers) return <><h2 className="border-b border-slate-300 pb-1 text-lg font-bold">{s.name}</h2><p className="mt-3 text-sm text-slate-500">Not answered.</p></>;
+  const r = screeningResult(s, answers);
+  return (
+    <>
+      <h2 className="border-b border-slate-300 pb-1 text-lg font-bold">{s.name}</h2>
+      <p className="mt-1 text-xs text-slate-500">
+        {s.official.en}
+        {language !== "en" ? ` · answered in ${LANG_LABELS[language as IntakeLang] ?? language} (the published ${LANG_LABELS[language as IntakeLang] ?? language} version); shown here in English` : ""}
+      </p>
+      <div className="mt-3 flex flex-wrap items-baseline justify-between gap-3 rounded border-2 border-slate-800 p-3 text-sm">
+        <p className="text-base font-bold">Total score: {r.score} of {r.max}</p>
+        {r.band && <p className="font-semibold">{r.band.label} ({r.band.min}–{r.band.max})</p>}
+      </div>
+      {r.risk && (
+        <p className="mt-2 break-inside-avoid rounded border-2 border-rose-700 p-2 text-sm font-bold text-rose-800">
+          Question 9 (thoughts of being better off dead or of self-harm) was answered "{s.options[r.riskPoints ?? 0]!.en}". An urgent task and alert were sent to the practice when this form came in.
+        </p>
+      )}
+      <p className="mt-3 text-sm font-semibold">{s.stem.en}</p>
+      <table className="mt-1 w-full border-collapse text-sm">
+        <thead>
+          <tr className="border-b border-slate-300 text-left text-xs text-slate-500"><th className="w-6 py-1" /><th className="py-1 pe-3 font-medium">Question</th><th className="py-1 pe-3 font-medium">Answer</th><th className="w-12 py-1 text-right font-medium">Points</th></tr>
+        </thead>
+        <tbody>
+          {s.items.map((item, i) => {
+            const pts = answers[item.id] != null ? Number(answers[item.id]) : null;
+            return (
+              <tr key={item.id} className="break-inside-avoid border-b border-slate-100 align-top">
+                <td className="py-1 text-slate-500">{i + 1}</td>
+                <td className="py-1 pe-3">{item.text.en}</td>
+                <td className="whitespace-nowrap py-1 pe-3 font-medium">{pts != null ? s.options[pts]!.en : "—"}</td>
+                <td className="py-1 text-right font-semibold">{pts ?? ""}</td>
+              </tr>
+            );
+          })}
+          <tr className="border-t-2 border-slate-800 font-bold"><td /><td className="py-1" colSpan={2}>Total</td><td className="py-1 text-right">{r.score}</td></tr>
+        </tbody>
+      </table>
+      {s.difficulty && r.asksDifficulty && (
+        <div className="mt-3 break-inside-avoid text-sm">
+          <p className="text-slate-600">{s.difficulty.question.en}</p>
+          <p className="font-medium">{r.difficulty != null ? s.difficulty.options[r.difficulty]!.en : "—"}</p>
+        </div>
+      )}
+      <p className="mt-3 text-xs text-slate-600">
+        Score ranges: {s.bands.map((b) => `${b.min}–${b.max} ${b.label}`).join(" · ")}. A score of {s.cutoff} or more usually calls for a closer look by the provider. This is a screening score, not a diagnosis.
+      </p>
+      <p className="mt-1 text-[10px] text-slate-500">{s.credit.en}</p>
+    </>
+  );
+}
 
 const at = (d: Date | string | null | undefined) =>
   d ? `${new Date(d).toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit", timeZone: "America/Chicago" })} CT` : "—";
@@ -106,6 +163,8 @@ export default function IntakePrintPage() {
                     </div>
                   </div>
                 </>
+              ) : f.kind === "screening" ? (
+                <ScreeningPrint formKey={f.key} answers={sig?.screening?.answers ?? null} language={sig?.language ?? "en"} />
               ) : (
                 <>
                   <h2 className="border-b border-slate-300 pb-1 text-lg font-bold" dir={sig?.text ? langDir(sig.language) : undefined}>{sig?.text?.title ?? f.title}</h2>
@@ -140,6 +199,8 @@ export default function IntakePrintPage() {
                     <div className="min-w-[16rem] flex-1">
                       {sig.decision === "declined" ? (
                         <p className="text-base font-bold">DECLINED: the patient chose not to agree to this form.</p>
+                      ) : sig.method === SCREENING_METHOD ? (
+                        <p className="text-base font-bold">Answered online. No signature is asked for a screening.</p>
                       ) : (
                         <>
                           <div className="flex h-20 items-end border-b border-slate-800 pb-1">
@@ -153,14 +214,14 @@ export default function IntakePrintPage() {
                       {sig.consentKind && <p className="mt-1 text-xs text-slate-600">Records: {CONSENT_LABELS[sig.consentKind]} consent ({sig.decision === "declined" ? "declined" : "given"})</p>}
                     </div>
                     <div className="text-xs">
-                      <p><span className="text-slate-500">{sig.decision === "declined" ? "Answered by:" : "Signed by:"}</span> <b>{sig.signerName}</b>{sig.signerRelation !== "self" ? ` (${sig.relationLabel}, for the patient)` : " (patient)"}</p>
+                      <p><span className="text-slate-500">{sig.decision === "declined" || sig.method === SCREENING_METHOD ? "Answered by:" : "Signed by:"}</span> <b>{sig.signerName}</b>{sig.signerRelation !== "self" ? ` (${sig.relationLabel}, for the patient)` : " (patient)"}</p>
                       {sig.authorityLabel && <p><span className="text-slate-500">Legal authority:</span> {sig.authorityLabel}{sig.authorityNote ? `: ${sig.authorityNote}` : ""}</p>}
                       <p><span className="text-slate-500">Date:</span> {at(sig.signedAt)}</p>
                       <p><span className="text-slate-500">IP address:</span> {sig.ip ?? "—"}</p>
                       <p><span className="text-slate-500">Form version:</span> {sig.formVersion}</p>
                     </div>
                   </div>
-                  {sig.decision === "declined"
+                  {sig.method === SCREENING_METHOD ? null : sig.decision === "declined"
                     ? <p className="mt-3 text-xs text-slate-600">Signer confirmed: "{tr(DECLINE_CONSENT, sig.language)}"{sig.language !== "en" ? ` ("${DECLINE_CONSENT.en}")` : ""}</p>
                     : <p className="mt-3 text-xs text-slate-600">Signer agreed: "{tr(ESIGN_CONSENT, sig.language)}"{sig.language !== "en" ? ` ("${ESIGN_CONSENT.en}")` : ""}</p>}
                 </div>

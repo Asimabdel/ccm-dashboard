@@ -10,7 +10,7 @@ import { ENV } from "./_core/env";
 import { sealSecret, openSecret } from "./secretBox";
 import {
   bookingRequests, clinics, emailContacts, fhirPatients, intakeDocuments, intakeEvents, intakeFiles, intakePackets, intakeSignatures,
-  patients, users, workTaskActivities, workTasks,
+  patients, providers, staffProfiles, users, workTaskActivities, workTasks,
 } from "../drizzle/schema";
 import {
   AUTHORITY_LABELS, CHOICES_CONSENT, CONSENT_LABELS, MEDICAL_INTAKE, MEDICAL_INTAKE_KEY, OPEN_PACKET, PACKET_EXPIRY_DAYS, PHOTO_KINDS, PUBLIC_SLUG_RE, RELATION_LABELS,
@@ -18,6 +18,7 @@ import {
   isIntakeLang, langFromPreferred, missingRequired, needsAuthority, stableStringify, tr, type Answers, type ConsentKind, type IntakeLang, type PacketSource,
   type ChoiceAnswer, type ConsentChoice, type PacketStatus, type PhotoKind, type SignDecision, type SignerAuthority, type SignerRelation,
 } from "../shared/intake";
+import { SCREENINGS, SCREENING_METHOD, cleanScreeningAnswers, screeningFor, screeningMissing, screeningResult, type ScreeningAnswers } from "../shared/screenings";
 import { enrollmentsForSubject, recordConsent, type ConsentEvent } from "./enrollDb";
 import { matchFaxPatient } from "../shared/fax";
 import { normalizePhone } from "../shared/phone";
@@ -144,11 +145,31 @@ export async function importDocuments(docs: { title: Record<string, string>; bod
   return { ok: true, docs: out };
 }
 
-/** Forms staff can pick when sending: the built-in health history + every active agreement. */
+/** The forms that are part of MyPCP itself: the health history, and the depression / anxiety screenings. */
+type FormKind = "questionnaire" | "screening" | "agreement";
+const builtInKind = (key: string): Exclude<FormKind, "agreement"> | null => (key === MEDICAL_INTAKE_KEY ? "questionnaire" : screeningFor(key) ? "screening" : null);
+const formKind = (key: string): FormKind => builtInKind(key) ?? "agreement";
+/** The name staff see for a built-in form (null for a Form library agreement). */
+const builtInTitle = (key: string) => (key === MEDICAL_INTAKE_KEY ? MEDICAL_INTAKE.title.en : screeningFor(key)?.name ?? null);
+
+/** A screening's answers as they were sent in (kept with its record, like signed wording), or null for other forms. */
+function sentScreening(formKey: string, snapshot: string): { answers: ScreeningAnswers } | null {
+  const s = screeningFor(formKey);
+  if (!s) return null;
+  try {
+    return { answers: cleanScreeningAnswers(s, (JSON.parse(snapshot) as { answers?: unknown }).answers) };
+  } catch {
+    return null;
+  }
+}
+
+/** Forms staff can pick when sending: the built-in health history and screenings + every active agreement. */
 export async function formChoices() {
   const docs = await listDocuments();
+  const all = ["en", "es", "ar"] as string[];
   return [
-    { key: MEDICAL_INTAKE_KEY, title: MEDICAL_INTAKE.title.en, builtIn: true, langs: ["en", "es", "ar"] as string[], consentKind: null as ConsentKind | null },
+    { key: MEDICAL_INTAKE_KEY, title: MEDICAL_INTAKE.title.en, builtIn: true, langs: all, consentKind: null as ConsentKind | null },
+    ...SCREENINGS.map((s) => ({ key: s.key, title: s.name, builtIn: true, langs: all, consentKind: null as ConsentKind | null })),
     ...docs.map((x) => ({ key: x.key, title: x.title.en ?? "Form", builtIn: false, langs: Object.keys(x.body), consentKind: x.consentKind })),
   ];
 }
@@ -196,7 +217,7 @@ export async function createPacket(actor: WorkspaceActor, input: CreatePacketInp
   if (!name) throw new WorkspaceError("Enter the patient's name.");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.dob)) throw new WorkspaceError("Enter the patient's date of birth; they use it to open the forms.");
   const active = new Set((await listDocuments()).map((x) => x.key));
-  const forms = Array.from(new Set(input.forms)).filter((k) => k === MEDICAL_INTAKE_KEY || active.has(k));
+  const forms = Array.from(new Set(input.forms)).filter((k) => !!builtInKind(k) || active.has(k));
   if (!forms.length) throw new WorkspaceError("Pick at least one form.");
   const d = await db();
   const care = input.subjectKey ? await subjectCare(input.subjectKey) : null;
@@ -330,12 +351,24 @@ async function packetRows(where: SQL | undefined, limit: number) {
   const signed = ids.length ? await d.select({ packetId: intakeSignatures.packetId, formKey: intakeSignatures.formKey, decision: intakeSignatures.decision }).from(intakeSignatures).where(inArray(intakeSignatures.packetId, ids)) : [];
   const titles = new Map((await listDocuments(true)).map((x) => [x.key, x.title.en ?? "Form"]));
   titles.set(MEDICAL_INTAKE_KEY, MEDICAL_INTAKE.title.en);
+  for (const s of SCREENINGS) titles.set(s.key, s.name);
+  // Screenings that came back: their score sits next to the form's name in the lists.
+  const sentScreenings = ids.length ? await d.select({ packetId: intakeSignatures.packetId, formKey: intakeSignatures.formKey, snapshot: intakeSignatures.snapshot }).from(intakeSignatures)
+    .where(and(inArray(intakeSignatures.packetId, ids), inArray(intakeSignatures.formKey, SCREENINGS.map((s) => s.key)))) : [];
+  const scoreOf = (packetId: number, formKey: string) => {
+    const row = sentScreenings.find((x) => x.packetId === packetId && x.formKey === formKey);
+    const s = screeningFor(formKey);
+    const sent = row ? sentScreening(formKey, row.snapshot) : null;
+    if (!s || !sent) return null;
+    const r = screeningResult(s, sent.answers);
+    return { score: r.score, max: r.max, positive: r.positive, risk: r.risk };
+  };
   return rows.map(({ p, clinicName, createdBy }) => ({
     id: p.id, name: p.name, subjectKey: p.subjectKey, patientId: p.patientId, language: p.language, status: p.status as PacketStatus, source: p.source as PacketSource,
     expired: OPEN_PACKET.includes(p.status as PacketStatus) && isExpired(p), expiresAt: p.expiresAt,
     forms: (p.forms as string[]).map((k) => {
       const s = signed.find((x) => x.packetId === p.id && x.formKey === k);
-      return { key: k, title: titles.get(k) ?? "Form", signed: !!s, declined: s?.decision === "declined" };
+      return { key: k, title: titles.get(k) ?? "Form", signed: !!s, declined: s?.decision === "declined", score: s ? scoreOf(p.id, k) : null };
     }),
     sentVia: p.sentVia, sentAt: p.sentAt, sendCount: p.sendCount, openedAt: p.openedAt, completedAt: p.completedAt, filedAt: p.filedAt, createdAt: p.createdAt,
     hasPhone: !!p.phone, hasEmail: !!p.email, phoneLast4: p.phone?.slice(-4) ?? null, clinicName, createdBy, locked: !!p.lockedUntil && p.lockedUntil.getTime() > Date.now(),
@@ -432,7 +465,7 @@ export async function packetDetail(actor: WorkspaceActor, id: number) {
     source: p.source as PacketSource,
     expired: OPEN_PACKET.includes(p.status as PacketStatus) && isExpired(p), expiresAt: p.expiresAt, createdAt: p.createdAt, sentAt: p.sentAt, openedAt: p.openedAt, completedAt: p.completedAt, filedAt: p.filedAt,
     clinic, taskId: p.taskId,
-    forms: (p.forms as string[]).map((k) => ({ key: k, title: k === MEDICAL_INTAKE_KEY ? MEDICAL_INTAKE.title.en : docs.get(k)?.title.en ?? "Form", kind: k === MEDICAL_INTAKE_KEY ? "questionnaire" as const : "agreement" as const })),
+    forms: (p.forms as string[]).map((k) => ({ key: k, title: builtInTitle(k) ?? docs.get(k)?.title.en ?? "Form", kind: formKind(k) })),
     answers: ((p.answers ?? {}) as Record<string, Answers>)[MEDICAL_INTAKE_KEY] ?? {},
     signatures: sigs.map((s) => ({
       formKey: s.formKey, formTitle: s.formTitle, language: s.language, formVersion: s.formVersion, signerName: s.signerName, signerRelation: s.signerRelation,
@@ -440,7 +473,9 @@ export async function packetDetail(actor: WorkspaceActor, id: number) {
       decision: s.decision as SignDecision, consentKind: isConsentKind(s.consentKind) ? s.consentKind : null,
       authority: s.signerAuthority as SignerAuthority | null, authorityLabel: s.signerAuthority ? AUTHORITY_LABELS[s.signerAuthority as SignerAuthority]?.en ?? s.signerAuthority : null, authorityNote: s.authorityNote,
       signedAt: s.signedAt, ip: s.ip, userAgent: s.userAgent, textHash: s.textHash, docHash: s.docHash,
-      text: s.formKey === MEDICAL_INTAKE_KEY ? null : (JSON.parse(s.snapshot) as SignedText),
+      text: formKind(s.formKey) === "agreement" ? (JSON.parse(s.snapshot) as SignedText) : null,
+      /** A depression / anxiety screening: the answers exactly as they were sent in. */
+      screening: sentScreening(s.formKey, s.snapshot),
     })),
     files,
     events: events.map(({ e, userName }) => ({ at: e.at, type: e.type, detail: e.detail, ip: e.ip, userAgent: e.userAgent, userName })),
@@ -590,12 +625,19 @@ async function publicClinic(clinicId: number | null) {
 export async function patientOpen(token: string, meta: ClientMeta) {
   const p = await byToken(token);
   const state = stateOf(p);
-  if (!p) return { state, language: "en" as string, clinic: { name: null, phone: null }, formCount: 0 };
+  if (!p) return { state, language: "en" as string, clinic: { name: null, phone: null }, formCount: 0, minutes: 5 };
   if (state === "ok" && !p.openedAt) {
     await (await db()).update(intakePackets).set({ openedAt: new Date(), status: p.status === "waiting" ? "opened" : p.status }).where(eq(intakePackets.id, p.id));
     await logEvent(p.id, "opened", { meta });
   }
-  return { state, language: p.language, clinic: await publicClinic(p.clinicId), formCount: (p.forms as string[]).length };
+  return { state, language: p.language, clinic: await publicClinic(p.clinicId), formCount: (p.forms as string[]).length, minutes: minutesFor(p.forms as string[]) };
+}
+
+/** "It takes about N minutes" on the welcome screen: 5 per form (5 to 20) as before; a screening is only about 2. */
+function minutesFor(forms: string[]) {
+  const screenings = forms.filter((k) => screeningFor(k)).reduce((n, k) => n + (screeningFor(k)?.minutes ?? 2), 0);
+  const others = forms.filter((k) => !screeningFor(k)).length;
+  return Math.min(20, (others ? Math.max(5, others * 5) : 0) + screenings);
 }
 
 const isLocked = (p: { lockedUntil: Date | null }) => !!p.lockedUntil && p.lockedUntil.getTime() > Date.now();
@@ -653,21 +695,26 @@ async function payload(p: typeof intakePackets.$inferSelect) {
     const sig = sigs.find((s) => s.formKey === k);
     const done = { signed: !!sig, declined: sig?.decision === "declined", signedAt: sig?.signedAt ?? null };
     if (k === MEDICAL_INTAKE_KEY) return { key: k, kind: "questionnaire" as const, version: MEDICAL_INTAKE.version, ...done, canDecline: false, doc: null };
+    const screening = screeningFor(k);
+    if (screening) return { key: k, kind: "screening" as const, version: screening.version, ...done, canDecline: false, doc: null };
     const doc = docs.get(k);
     // Consents are a choice: the patient may say no. Other agreements must be signed.
     return {
       key: k, kind: "agreement" as const, version: doc?.version ?? 0, ...done, canDecline: !!doc?.consentKind && !doc.choices.length,
       doc: doc ? { title: doc.title, body: doc.body, choices: doc.choices } : null,
     };
-  }).filter((f) => f.kind === "questionnaire" || f.doc);
+  }).filter((f) => f.kind !== "agreement" || f.doc);
   // "LAST, FIRST" (Practice Fusion style) or "First Last" → the first name, for "Hello, …".
   const given = (p.name.includes(",") ? p.name.split(",")[1] : p.name) ?? "";
+  const saved = (p.answers ?? {}) as Record<string, Answers>;
   return {
     firstName: given.trim().split(/\s+/)[0] ?? "",
     language: p.language,
     clinic: await publicClinic(p.clinicId),
     forms,
-    answers: ((p.answers ?? {}) as Record<string, Answers>)[MEDICAL_INTAKE_KEY] ?? {},
+    answers: saved[MEDICAL_INTAKE_KEY] ?? {},
+    /** Screening answers saved so far, by form (so the patient can stop and come back). */
+    screeningAnswers: Object.fromEntries(SCREENINGS.filter((s) => (p.forms as string[]).includes(s.key)).map((s) => [s.key, cleanScreeningAnswers(s, saved[s.key])])) as Record<string, ScreeningAnswers>,
     prefill: { name: p.name, phone: p.phone ?? "", email: p.email ?? "" },
     photos: PHOTO_KINDS.filter((k) => photos.some((x) => x.kind === k)),
   };
@@ -684,11 +731,21 @@ export async function patientSetLanguage(token: string, language: IntakeLang) {
   return { ok: true };
 }
 
-/** Save the health-history answers as the patient goes (so they can stop and come back). */
-export async function patientSave(session: string, raw: unknown) {
+/** Save answers as the patient goes (so they can stop and come back): the health history, or one screening. */
+export async function patientSave(session: string, raw: unknown, formKey: string = MEDICAL_INTAKE_KEY) {
   const p = await fromSession(session);
-  if (!(p.forms as string[]).includes(MEDICAL_INTAKE_KEY)) throw new PatientFormError("bad");
+  if (!(p.forms as string[]).includes(formKey)) throw new PatientFormError("bad");
   const d = await db();
+  const screening = screeningFor(formKey);
+  if (screening) {
+    const [sent] = await d.select({ id: intakeSignatures.id }).from(intakeSignatures).where(and(eq(intakeSignatures.packetId, p.id), eq(intakeSignatures.formKey, formKey))).limit(1);
+    if (sent) return { ok: true, locked: true };
+    const first = p.status !== "in_progress";
+    await d.update(intakePackets).set({ answers: { ...((p.answers ?? {}) as Record<string, Answers>), [formKey]: cleanScreeningAnswers(screening, raw) }, status: "in_progress" }).where(eq(intakePackets.id, p.id));
+    if (first) await logEvent(p.id, "started");
+    return { ok: true, locked: false };
+  }
+  if (formKey !== MEDICAL_INTAKE_KEY) throw new PatientFormError("bad");
   const [signed] = await d.select({ id: intakeSignatures.id }).from(intakeSignatures).where(and(eq(intakeSignatures.packetId, p.id), eq(intakeSignatures.formKey, MEDICAL_INTAKE_KEY))).limit(1);
   if (signed) return { ok: true, locked: true };
   const prev = ((p.answers ?? {}) as Record<string, Answers>)[MEDICAL_INTAKE_KEY] ?? {};
@@ -840,6 +897,117 @@ export async function patientSign(session: string, input: SignInput, meta: Clien
   return patientAfterSign(p.id);
 }
 
+export interface ScreeningSubmitInput {
+  formKey: string;
+  version: number;
+  language: string;
+  answers: unknown;
+  /** Who answered: the patient ("self"), or someone helping them. */
+  relation: SignerRelation;
+  /** The helper's name (when it wasn't the patient). */
+  helperName?: string | null;
+}
+
+/**
+ * Send in one screening (PHQ-9 / GAD-7). No signature is asked for these: we keep the answers
+ * exactly as sent, who answered, when and from where, in the same tamper-evident record as a signature.
+ */
+export async function patientSubmitScreening(session: string, input: ScreeningSubmitInput, meta: ClientMeta) {
+  const p = await fromSession(session);
+  const d = await db();
+  const screening = screeningFor(input.formKey);
+  if (!screening || !(p.forms as string[]).includes(input.formKey)) throw new PatientFormError("bad");
+  if (!SIGNER_RELATIONS.includes(input.relation)) throw new PatientFormError("bad");
+  const [already] = await d.select({ id: intakeSignatures.id }).from(intakeSignatures).where(and(eq(intakeSignatures.packetId, p.id), eq(intakeSignatures.formKey, screening.key))).limit(1);
+  if (already) return patientAfterSign(p.id);
+  if (input.version !== screening.version) throw new PatientFormError("changed");
+  const answers = cleanScreeningAnswers(screening, input.answers);
+  if (screeningMissing(screening, answers).length) throw new PatientFormError("incomplete");
+  const helper = input.relation === "self" ? null : (input.helperName ?? "").replace(/[\r\n<>]/g, " ").trim().slice(0, 160);
+  if (helper !== null && helper.length < 2) throw new PatientFormError("name");
+  const signerName = helper ?? p.name.slice(0, 160);
+  const lang: IntakeLang = isIntakeLang(input.language) ? input.language : "en";
+  const result = screeningResult(screening, answers);
+
+  const formTitle = tr(screening.title, lang);
+  const snapshot = stableStringify({ form: screening.key, version: screening.version, language: lang, answers, score: result.score, max: result.max });
+  const signedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
+  const textHash = sha256(snapshot);
+  const ip = meta.ip?.slice(0, 64) ?? null;
+  const userAgent = meta.userAgent?.slice(0, 255) ?? null;
+  const docHash = sha256(stableStringify({
+    packetId: p.id, formKey: screening.key, formVersion: screening.version, language: lang, textHash, signerName, relation: input.relation, method: SCREENING_METHOD, signatureHash: null, signedAt: signedAt.toISOString(), ip,
+  }));
+  await d.insert(intakeSignatures).values({
+    packetId: p.id, formKey: screening.key, formTitle: formTitle.slice(0, 255), language: lang, formVersion: screening.version, snapshot, textHash, signerName, signerRelation: input.relation,
+    signerAuthority: null, authorityNote: null, decision: "signed", consentKind: null, choices: null, method: SCREENING_METHOD, signatureFileId: null, signedAt, ip, userAgent, docHash,
+  });
+  const open = p.status === "waiting" || p.status === "opened";
+  await d.update(intakePackets).set({ answers: { ...((p.answers ?? {}) as Record<string, Answers>), [screening.key]: answers }, ...(open ? { status: "in_progress" as const } : {}) }).where(eq(intakePackets.id, p.id));
+  await logEvent(p.id, "answered", { meta, detail: `${screening.name}${input.relation === "self" ? "" : ` · by ${input.relation}`}` });
+  // The self-harm question: people are told right away. Never holds up the patient's own screen.
+  if (result.risk) {
+    try {
+      await raiseSelfHarmAlert(p, tr(screening.options[result.riskPoints ?? 0], "en"));
+    } catch (e) {
+      // No patient details in logs: a database error's message can carry the task's wording, so only its code / kind.
+      console.error("[patient-forms] SAFETY ALERT FAILED for packet", p.id, (e as { code?: string }).code ?? (e as Error).name ?? "error");
+    }
+  }
+  return patientAfterSign(p.id);
+}
+
+/**
+ * A patient answered the PHQ-9 self-harm question with anything above "Not at all".
+ *  - An URGENT task, due today, for the patient's provider (their own login); the admins' queue when we don't know the provider.
+ *  - An urgent alert in the bell (the kind nobody can switch off) for that provider, every admin, and the
+ *    front desk + medical assistants at the patient's clinic.
+ * The patient has already been shown the 988 / 911 numbers on their screen.
+ */
+async function raiseSelfHarmAlert(p: typeof intakePackets.$inferSelect, answer: string) {
+  const d = await db();
+  const key = p.subjectKey ?? (p.patientId ? `p:${p.patientId}` : null);
+  let provider: { userId: number | null; name: string } | null = null;
+  if (key) {
+    const { directoryEntry } = await import("./directoryDb");
+    const providerId = (await directoryEntry(key))?.providerId ?? null;
+    if (providerId) provider = (await d.select({ userId: providers.userId, name: providers.name }).from(providers).where(eq(providers.id, providerId)).limit(1))[0] ?? null;
+  }
+  const admins = (await d.select({ id: users.id }).from(users).where(eq(users.role, "admin"))).map((u) => u.id);
+  const actor = await filingActor(null);
+  const task = await createTask(actor, {
+    title: `URGENT: self-harm answer on a depression screening: ${p.name}`.slice(0, 250),
+    description: [
+      `${p.name} answered "${answer}" to question 9 of the depression screening (PHQ-9): "Thoughts that you would be better off dead or of hurting yourself in some way".`,
+      "They filled the form in online. Their screen showed the 988 Suicide & Crisis Lifeline and 911, and said our office will contact them.",
+      "",
+      "Please review this and contact the patient as soon as possible.",
+      provider?.userId ? null
+        : provider ? `Their provider (${provider.name}) has no MyPCP login, so this went to the admins: please make sure ${provider.name} sees it.`
+        : "We don't know this patient's provider, so this went to the admins: please pass it to the right provider.",
+      "",
+      `All their answers: /intake-forms?p=${p.id}`,
+    ].filter((x) => x !== null).join("\n"),
+    patientId: p.patientId, subjectKey: p.patientId ? null : p.subjectKey, subjectName: p.name, clinicId: p.clinicId,
+    assignedUserId: provider?.userId ?? null, assignedRole: provider?.userId ? null : "admin",
+    priority: "urgent", category: "patient_call", dueDate: localDateStr(), sourceType: "intake_screening", sourceRef: String(p.id),
+  });
+  // The front desk and medical assistants whose home office is the patient's clinic hear about it too (owner's choice, 2026-11-16).
+  const clinicStaff = p.clinicId
+    ? (await d.select({ id: users.id }).from(users).innerJoin(staffProfiles, eq(staffProfiles.userId, users.id))
+        .where(and(inArray(users.role, ["front_desk", "medical_assistant"]), eq(staffProfiles.homeClinicId, p.clinicId), eq(staffProfiles.active, true)))).map((u) => u.id)
+    : [];
+  const { createNotification } = await import("./db");
+  for (const userId of Array.from(new Set([provider?.userId ?? null, ...admins, ...clinicStaff].filter((x): x is number => !!x)))) {
+    await createNotification({
+      userId, type: "urgent_symptom", title: "Urgent: self-harm answer on a patient form",
+      content: `${p.name} answered "${answer}" to the self-harm question on the depression screening (PHQ-9). An urgent task is in My Work${provider?.userId ? ` for ${provider.name}` : " (admin queue)"}.`,
+      relatedPatientId: p.patientId,
+    });
+  }
+  await logEvent(p.id, "safety_alert", { detail: `urgent task #${task.id}${provider?.userId ? ` for ${provider.name}` : " for the admins"}` });
+}
+
 /** After each signature: when every form is signed, the packet is done and the front desk gets a task. */
 async function patientAfterSign(packetId: number) {
   const d = await db();
@@ -892,10 +1060,12 @@ export async function patientCopy(session: string, meta: ClientMeta) {
     forms: sigs.sort((a, b) => order.indexOf(a.formKey) - order.indexOf(b.formKey)).map((s) => {
       const file = drawn.find((f) => f.id === s.signatureFileId);
       return {
-        key: s.formKey, kind: s.formKey === MEDICAL_INTAKE_KEY ? "questionnaire" as const : "agreement" as const, title: s.formTitle, language: s.language,
+        key: s.formKey, kind: formKind(s.formKey), title: s.formTitle, language: s.language,
         decision: s.decision as SignDecision, signerName: s.signerName, relation: s.signerRelation as SignerRelation, authority: s.signerAuthority as SignerAuthority | null,
         authorityNote: s.authorityNote, method: s.method, signedAt: s.signedAt, signature: file ? `data:${file.mime};base64,${file.data}` : null, docHash: s.docHash,
-        text: s.formKey === MEDICAL_INTAKE_KEY ? null : (JSON.parse(s.snapshot) as SignedText),
+        text: formKind(s.formKey) === "agreement" ? (JSON.parse(s.snapshot) as SignedText) : null,
+        /** A screening: the patient's own answers (no score is shown to patients). */
+        screening: sentScreening(s.formKey, s.snapshot),
       };
     }),
   };
