@@ -8,6 +8,7 @@ import { useWorkspace } from "@/components/workspace/useWorkspace";
 import { Btn, EmptyState, ErrorNote, Loading, PageHeader, Panel, inputCls } from "@/components/workspace/ui";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { SignatureDialog, imageToSignaturePng } from "@/components/documents/SignatureDialog";
+import { DOC_FILE_ACCEPT, addPagesFromFile, baseName, blobToBase64, isDocFile, prepareFile } from "@/components/documents/uploadFiles";
 import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { APPROVAL_LABELS, DOC_STATUS_LABELS, PROVIDER_SIGNATURE_RULE, type DocStatus } from "@shared/documents";
@@ -32,15 +33,6 @@ const STATUS_CLS: Record<DocStatus, string> = {
 const when = (d: Date | string | null | undefined) =>
   d ? new Date(d).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Chicago" }) : "—";
 
-function toBase64(file: File): Promise<string> {
-  return new Promise((res, rej) => {
-    const r = new FileReader();
-    r.onload = () => res(String(r.result).split(",")[1] ?? "");
-    r.onerror = () => rej(r.error);
-    r.readAsDataURL(file);
-  });
-}
-
 /** Documents: our own DocuSign. Upload a PDF, fill and sign it, send it to teammates to co-sign, download the signed PDF. */
 export default function DocumentsPage() {
   const { user } = useAuth({ redirectOnUnauthenticated: true });
@@ -57,29 +49,41 @@ export default function DocumentsPage() {
   const list = trpc.workspace.documents.list.useQuery({ view: isList(view) ? view : "in_progress", q: q.length >= 2 ? q : null }, { enabled: enabled && isList(view), refetchInterval: 30_000 });
   const [uploading, setUploading] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const utils = trpc.useUtils();
   const create = trpc.workspace.documents.create.useMutation();
   const uploadLocal = trpc.workspace.documents.uploadLocal.useMutation();
   const uploaded = trpc.workspace.documents.uploaded.useMutation();
   const [useTemplate, setUseTemplate] = useState<{ id: number; title: string } | null>(null);
   const [sigSetup, setSigSetup] = useState<"signature" | "initials" | null>(null);
 
-  const upload = async (file: File | undefined) => {
+  /** One or several files (PDFs, photos, scans) become ONE document: the first starts it, the rest are added as pages. */
+  const upload = async (list: FileList | null) => {
+    const files = Array.from(list ?? []);
+    const file = files[0];
     if (!file) return;
-    if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") { toast.error("Please choose a PDF file."); return; }
+    const bad = files.find((f) => !isDocFile(f));
+    if (bad) { toast.error(`"${bad.name}" isn't a PDF or a photo. Please choose PDF, JPG or PNG files.`); return; }
     setUploading(true);
+    let docId: number | null = null;
     try {
-      const c = await create.mutateAsync({ title: file.name.replace(/\.pdf$/i, ""), fileName: file.name, size: file.size });
+      // A photo is shrunk and sent as a JPEG; the server turns it into a PDF page.
+      const body = await prepareFile(file);
+      const c = await create.mutateAsync({ title: baseName(file.name), fileName: file.name, size: body.size });
       if (c.upload.url) {
-        const r = await fetch(c.upload.url, { method: "PUT", headers: { "Content-Type": "application/pdf" }, body: file });
+        const r = await fetch(c.upload.url, { method: "PUT", headers: { "Content-Type": "application/pdf" }, body });
         if (!r.ok) throw new Error(`Upload failed (${r.status}).`);
       } else {
-        await uploadLocal.mutateAsync({ id: c.id, base64: await toBase64(file) });
+        await uploadLocal.mutateAsync({ id: c.id, base64: await blobToBase64(body) });
       }
       const info = await uploaded.mutateAsync({ id: c.id });
-      toast.success(info.fieldsFound ? `Uploaded. Found ${info.fieldsFound} fillable box${info.fieldsFound === 1 ? "" : "es"} in the PDF.` : "Uploaded.");
+      docId = c.id;
+      for (const f of files.slice(1)) await addPagesFromFile(utils.client, c.id, f);
+      toast.success(files.length > 1 ? `Uploaded ${files.length} files as one document.` : info.fieldsFound ? `Uploaded. Found ${info.fieldsFound} fillable box${info.fieldsFound === 1 ? "" : "es"} in the PDF.` : "Uploaded.");
       navigate(`/documents/${c.id}`);
     } catch (e) {
       toast.error((e as Error).message);
+      // Some files made it in: open what there is rather than leaving it out of sight.
+      if (docId) navigate(`/documents/${docId}`);
     } finally {
       setUploading(false);
       if (fileInput.current) fileInput.current.value = "";
@@ -91,17 +95,17 @@ export default function DocumentsPage() {
     <CCMDashboardLayout title="Documents" pageTitle={false}>
       <PageHeader
         title="Documents"
-        subtitle="Upload a PDF, fill it in and sign it, send it to a teammate or provider to co-sign, and download the signed PDF."
+        subtitle="Upload a PDF (or photos and scans), fill it in and sign it, send it to a teammate or provider to co-sign, and download the signed PDF."
         actions={enabled ? (
           <div className="flex flex-wrap gap-2">
             <MySignatureButton onEdit={setSigSetup} />
             <Btn onClick={() => fileInput.current?.click()} disabled={uploading}>
-              {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Upload a PDF
+              {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Upload PDF or photos
             </Btn>
           </div>
         ) : undefined}
       />
-      <input ref={fileInput} type="file" accept="application/pdf,.pdf" className="hidden" onChange={(e) => void upload(e.target.files?.[0])} />
+      <input ref={fileInput} type="file" multiple accept={DOC_FILE_ACCEPT} className="hidden" onChange={(e) => void upload(e.target.files)} />
       {ws.caps && !ws.caps.documents && <ErrorNote message="You don't have access to Documents." />}
 
       <div className="mb-4 flex gap-1 overflow-x-auto border-b border-slate-200 dark:border-slate-700" role="tablist">
@@ -128,8 +132,8 @@ export default function DocumentsPage() {
         <Panel>
           <EmptyState icon={view === "templates" ? FileStack : FileSignature}
             title={view === "to_sign" ? "Nothing waiting for your signature" : view === "templates" ? "No templates yet" : "Nothing here yet"}
-            body={view === "templates" ? "Open any document and click \"Save as template\" to reuse its boxes next time." : "Upload a PDF to get started."}
-            action={view !== "to_sign" && enabled ? <Btn onClick={() => fileInput.current?.click()}><FilePlus2 size={14} /> Upload a PDF</Btn> : undefined} />
+            body={view === "templates" ? "Open any document and click \"Save as template\" to reuse its boxes next time." : "Upload a PDF, or photos of a paper form, to get started. Pick several files to make them one document."}
+            action={view !== "to_sign" && enabled ? <Btn onClick={() => fileInput.current?.click()}><FilePlus2 size={14} /> Upload PDF or photos</Btn> : undefined} />
         </Panel>
       )}
       {rows.length > 0 && (

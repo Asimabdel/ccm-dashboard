@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "wouter";
 import { toast } from "sonner";
-import { ArrowLeft, ArrowRight, CheckCircle2, Download, FileStack, Loader2, Minus, Plus, Redo2, Send, Trash2, Undo2 } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, CheckCircle2, Download, FileStack, Loader2, Minus, Plus, Redo2, RotateCw, Send, Trash2, Undo2 } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { Btn, ErrorNote, Loading, inputCls } from "@/components/workspace/ui";
@@ -16,8 +16,9 @@ import { SignatureDialog } from "@/components/documents/SignatureDialog";
 import { FieldBox } from "@/components/documents/FieldBox";
 import { FillDialog } from "@/components/documents/FillDialog";
 import { Pages } from "@/components/documents/PdfPages";
-import { FieldPanel, MultiPanel, PatientPanel, SignersPanel, ToolPalette, ViewSummary } from "@/components/documents/editorPanels";
+import { FieldPanel, MultiPanel, PagesPanel, PatientPanel, SignersPanel, ToolPalette, ViewSummary } from "@/components/documents/editorPanels";
 import { PALETTE, useTouchScreen, type Doc, type SigMap, type ToolChoice } from "@/components/documents/editorShared";
+import { addPagesFromFile, isDocFile } from "@/components/documents/uploadFiles";
 import { openPdf, type PageViewport, type PdfDoc } from "@/lib/pdf";
 import { downloadPdf } from "@/lib/pdfDownload";
 import { trpc } from "@/lib/trpc";
@@ -26,6 +27,8 @@ import { DOC_STATUS_LABELS, FIELD_DEFAULT_SIZE, isFilled, isMarkup, missingFor, 
 import {
   alignFields, duplicateFields, emptyHistory, fillOrder, keepOnPage, newFieldId, nudgeFields, redo, remember, repeatOnPages, snapMove, undo, type AlignHow, type History,
 } from "@shared/docEdit";
+import type { PageChange } from "@shared/docPages";
+import { suggestBoxes, type PageText } from "@shared/docSuggest";
 
 const MAX_BOXES = 600;
 /** Marks that are usually added several at a time (ticking boxes, covering lines): the tool stays in hand until Esc. */
@@ -40,7 +43,8 @@ export default function DocumentEditorPage() {
     <CCMDashboardLayout title="Documents" pageTitle={false}>
       {q.isLoading && <Loading />}
       {q.error && <ErrorNote message={q.error.message} />}
-      {q.data && <Editor key={`${q.data.id}:${q.data.status}:${q.data.mode}`} doc={q.data} refetch={() => void q.refetch()} />}
+      {/* A new file (pages added, removed, moved, turned) starts the editor fresh on it. */}
+      {q.data && <Editor key={`${q.data.id}:${q.data.status}:${q.data.mode}:${q.data.fileRev}`} doc={q.data} refetch={() => void q.refetch()} />}
     </CCMDashboardLayout>
   );
 }
@@ -235,6 +239,62 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
     else { setSelected([f.id]); setTool(null); }
   };
 
+  // --- page tools: move, turn, remove a page; add pages from other files. The server rebuilds the PDF. ---
+  const changePages = trpc.workspace.documents.changePages.useMutation();
+  const [pageBusy, setPageBusy] = useState(false);
+  const pageChange = async (c: PageChange, confirmText?: string) => {
+    if (pageBusy || (confirmText && !window.confirm(confirmText))) return;
+    setPageBusy(true);
+    try {
+      await flush();
+      await changePages.mutateAsync({ id: doc.id, change: c });
+      refetch();
+    } catch (e) { toast.error((e as Error).message); } finally { setPageBusy(false); }
+  };
+  const addPages = async (files: File[]) => {
+    const bad = files.find((f) => !isDocFile(f));
+    if (bad) { toast.error(`"${bad.name}" isn't a PDF or a photo.`); return; }
+    setPageBusy(true);
+    let added = 0;
+    try {
+      await flush();
+      for (const f of files) added += (await addPagesFromFile(utils.client, doc.id, f)).added;
+      toast.success(`Added ${added} page${added === 1 ? "" : "s"} at the end.`);
+    } catch (e) {
+      toast.error(`${(e as Error).message}${added ? ` (${added} page${added === 1 ? " was" : "s were"} added before that.)` : ""}`);
+    } finally { setPageBusy(false); refetch(); }
+  };
+
+  // --- "Suggest boxes": read the words on each page and add a box on every blank it finds ---
+  const [suggesting, setSuggesting] = useState(false);
+  const suggest = async () => {
+    if (!pdf || suggesting) return;
+    setSuggesting(true);
+    try {
+      const proposed: DocField[] = [];
+      let turned = 0;
+      for (let i = 0; i < Math.min(pdf.numPages, pages.length); i++) {
+        if (pages[i]!.rotate) { turned++; continue; }
+        const content = await (await pdf.getPage(i + 1)).getTextContent();
+        const items: PageText[] = [];
+        for (const it of content.items) {
+          if (!("str" in it) || !it.str.trim()) continue;
+          items.push({ str: it.str, x: it.transform[4] as number, y: it.transform[5] as number, w: it.width, h: it.height || Math.abs(it.transform[3] as number) });
+        }
+        for (const s of suggestBoxes(i, pages[i]!, items, [...fieldsRef.current, ...proposed])) proposed.push({ id: `${newFieldId()}${proposed.length}`, assignee: "preparer", value: null, ...s });
+      }
+      const added = proposed.slice(0, Math.max(0, MAX_BOXES - fieldsRef.current.length));
+      if (!added.length) {
+        toast.info(turned ? "No blanks found. Pages lying on their side are skipped: turn them upright first (the turn button above the page)." : "No blanks found to put boxes on. (A scanned or photographed page has no words to read: add its boxes by hand.)");
+        return;
+      }
+      change((fs) => [...fs, ...added]);
+      setTool(null);
+      setSelected(added.map((f) => f.id));
+      toast.success(`Added ${added.length} suggested box${added.length === 1 ? "" : "es"}. Please check each one. Undo (Ctrl+Z) takes them all back.`);
+    } catch (e) { toast.error(`Couldn't read the pages: ${(e as Error).message}`); } finally { setSuggesting(false); }
+  };
+
   // --- picking and dragging boxes ---
   const select = (fid: string, add: boolean) => {
     if (mode !== "edit") return;
@@ -339,6 +399,7 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
   const fillingField = filling ? fields.find((f) => f.id === filling) ?? null : null;
   const pageCount = pdf?.numPages ?? pages.length;
   const stepBtn = "px-2 py-1.5 disabled:opacity-30";
+  const pageBtn = "rounded-md p-1.5 text-slate-500 hover:bg-slate-200 hover:text-slate-900 disabled:opacity-30 disabled:hover:bg-transparent dark:hover:bg-slate-700 dark:hover:text-slate-100";
 
   return (
     <div className="-mx-2 sm:mx-0">
@@ -394,14 +455,19 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
           <aside className="w-full shrink-0 space-y-3 text-sm lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)] lg:w-72 lg:overflow-y-auto">
             {mode === "edit" ? (
               <>
-                <ToolPalette tool={tool} onTool={(t) => { setTool(t); if (t) setSelected([]); }} isTemplate={doc.isTemplate} signers={doc.signers} newAssignee={newAssignee} onNewAssignee={setNewAssignee} />
+                <ToolPalette tool={tool} onTool={(t) => { setTool(t); if (t) setSelected([]); }} isTemplate={doc.isTemplate} signers={doc.signers} newAssignee={newAssignee} onNewAssignee={setNewAssignee}
+                  onSuggest={() => void suggest()} suggesting={suggesting} />
 
                 {selected.length > 1 ? (
-                  <MultiPanel count={selected.length} onAlign={(how: AlignHow) => change((fs) => alignFields(fs, selected, how, pages))} onCopy={copySelected} onDelete={removeSelected} />
+                  <MultiPanel count={selected.length} onAlign={(how: AlignHow) => change((fs) => alignFields(fs, selected, how, pages))} onCopy={copySelected} onDelete={removeSelected}
+                    signers={doc.signers}
+                    onAssign={doc.isTemplate ? undefined : (who) => change((fs) => fs.map((f) => (selected.includes(f.id) && !isMarkup(f.type) && f.assignee !== who ? { ...f, assignee: who, value: who === "preparer" ? f.value ?? null : null } : f)))} />
                 ) : sel ? (
                   <FieldPanel f={sel} doc={doc} isTemplate={doc.isTemplate} pageCount={pages.length}
                     onChange={(p) => update(sel.id, p, `panel:${sel.id}:${Object.keys(p).join(",")}`)} onDelete={removeSelected} onCopy={copySelected} onEveryPage={() => everyPage(sel.id)} />
                 ) : null}
+
+                <PagesPanel count={pages.length} busy={pageBusy} onAdd={(files) => void addPages(files)} />
 
                 {!doc.isTemplate && (
                   <SignersPanel doc={doc} fields={fields} colorOf={colorOf} onChanged={(ids) => {
@@ -460,6 +526,18 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
           {pdf && (
             <Pages pdf={pdf} count={pageCount} zoom={zoom} drawing={mode === "edit" && !!tool}
               onPageClick={() => setSelected([])} onDraw={place} onHover={(p) => { hoverPage.current = p; }}
+              pageBar={mode !== "edit" || showFinal ? undefined : (i) => (
+                <>
+                  <span className="font-semibold text-slate-500">Page {i + 1} of {pages.length}{pageBusy ? " · updating…" : ""}</span>
+                  <span className="flex items-center gap-0.5">
+                    <button type="button" className={pageBtn} disabled={pageBusy || i === 0} title="Move this page up" aria-label={`Move page ${i + 1} up`} onClick={() => void pageChange({ op: "move", page: i, to: i - 1 })}><ArrowUp size={14} /></button>
+                    <button type="button" className={pageBtn} disabled={pageBusy || i >= pages.length - 1} title="Move this page down" aria-label={`Move page ${i + 1} down`} onClick={() => void pageChange({ op: "move", page: i, to: i + 1 })}><ArrowDown size={14} /></button>
+                    <button type="button" className={pageBtn} disabled={pageBusy} title="Turn this page a quarter turn" aria-label={`Turn page ${i + 1}`} onClick={() => void pageChange({ op: "turn", page: i, turn: 90 })}><RotateCw size={14} /></button>
+                    <button type="button" className={cn(pageBtn, "hover:text-red-600")} disabled={pageBusy || pages.length <= 1} title="Remove this page" aria-label={`Remove page ${i + 1}`}
+                      onClick={() => void pageChange({ op: "remove", page: i }, `Remove page ${i + 1}? Any boxes on it go with it. This can't be undone.`)}><Trash2 size={14} /></button>
+                  </span>
+                </>
+              )}
               overlay={(page, vp) => showFinal ? null : (
                 <>
                   {fields.filter((f) => f.page === page).map((f) => (

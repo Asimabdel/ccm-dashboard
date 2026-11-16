@@ -853,6 +853,32 @@ export const workspaceRouter = router({
       const actor = await actorFor(ctx, "documents");
       return run(() => docs.fileFor(actor, input.id, input.which, docMeta(ctx)));
     }),
+    // Page tools (drafts): remove, move or turn a page; add pages from another PDF or a photo.
+    changePages: protectedProcedure
+      .input(z.object({
+        id: z.number().int().positive(),
+        change: z.discriminatedUnion("op", [
+          z.object({ op: z.literal("remove"), page: z.number().int().min(0) }),
+          z.object({ op: z.literal("move"), page: z.number().int().min(0), to: z.number().int().min(0) }),
+          z.object({ op: z.literal("turn"), page: z.number().int().min(0), turn: z.union([z.literal(90), z.literal(180), z.literal(270)]) }),
+        ]),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "documents");
+        return run(() => docs.changePages(actor, input.id, input.change));
+      }),
+    addPagesStart: protectedProcedure.input(z.object({ id: z.number().int().positive(), size: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return run(() => docs.addPagesStart(actor, input.id, input.size));
+    }),
+    addPagesLocal: protectedProcedure.input(z.object({ id: z.number().int().positive(), part: z.string().max(40), base64: z.string().max(36_000_000) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return run(() => docs.addPagesLocal(actor, input.id, input.part, input.base64));
+    }),
+    addPagesFinish: protectedProcedure.input(z.object({ id: z.number().int().positive(), part: z.string().max(40), fileName: z.string().max(255) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return run(() => docs.addPagesFinish(actor, input.id, input.part, input.fileName));
+    }),
     save: protectedProcedure
       .input(z.object({
         id: z.number().int().positive(),

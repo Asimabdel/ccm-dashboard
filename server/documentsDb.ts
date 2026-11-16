@@ -17,6 +17,9 @@ import {
   type InkColor, type PrefillKey,
 } from "../shared/documents";
 import { LOGO_PNG_BASE64 } from "../shared/logoPng";
+import {
+  MAX_DOC_PAGES, TURNS, contentTurn, fieldsAfterOrder, fieldsAfterRemove, fieldsAfterTurn, imagePageLayout, movedOrder, sniffFile, turnedPage, type PageChange,
+} from "../shared/docPages";
 import { localDateStr } from "../shared/workforce";
 import { MAX_PDF_BYTES, getBytes, onS3, putBytes, readTarget, uploadTarget } from "./docStore";
 import { WorkspaceError, audit, createTask, loadScheduleSubjects, notifyTask, subjectCare, type WorkspaceActor } from "./workspaceDb";
@@ -171,19 +174,40 @@ export async function uploadLocal(a: WorkspaceActor, id: number, base64: string)
   return { ok: true };
 }
 
-/** After the upload: check it's a PDF, record its pages, and turn its own fillable boxes into ours. */
+const NOT_A_PDF = "MyPCP couldn't read that PDF. Try saving it again as a PDF (Print → Save as PDF) and upload that.";
+const pagesIn = (pdf: PDFDocument): DocPage[] => pdf.getPages().map((p) => { const { width, height } = p.getSize(); return { w: width, h: height, rotate: p.getRotation().angle }; });
+
+/** A photo or scan (JPEG / PNG) as one more page at the end of a PDF. */
+async function addImagePage(pdf: PDFDocument, bytes: Uint8Array, kind: "jpeg" | "png") {
+  let img: PDFImage;
+  try { img = kind === "png" ? await pdf.embedPng(bytes) : await pdf.embedJpg(bytes); } catch { throw new WorkspaceError("MyPCP couldn't read that picture. Try taking the photo again, or save it as a JPG."); }
+  const at = imagePageLayout(img.width, img.height);
+  pdf.addPage([at.pageW, at.pageH]).drawImage(img, { x: at.x, y: at.y, width: at.w, height: at.h });
+}
+
+/** After the upload: check it's a PDF (a photo becomes a one-page PDF), record its pages, and turn its own fillable boxes into ours. */
 export async function fileUploaded(a: WorkspaceActor, id: number) {
   const doc = await docOr404(a, id);
   if (!canEdit(a, doc) || !doc.fileKey) throw new WorkspaceError("This document can't be changed.");
   let bytes: Buffer;
   try { bytes = await getBytes(doc.fileKey); } catch { throw new WorkspaceError("The upload didn't arrive. Please try again."); }
-  if (bytes.length > MAX_PDF_BYTES) throw new WorkspaceError("That PDF is too big.");
-  if (bytes.subarray(0, 1024).indexOf("%PDF") < 0) throw new WorkspaceError("That file isn't a PDF.");
-  let pdf: PDFDocument;
-  try { pdf = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false }); } catch { throw new WorkspaceError("MyPCP couldn't read that PDF. Try saving it again as a PDF (Print → Save as PDF) and upload that."); }
-  const pages: DocPage[] = pdf.getPages().map((p) => { const { width, height } = p.getSize(); return { w: width, h: height, rotate: p.getRotation().angle }; });
+  if (bytes.length > MAX_PDF_BYTES) throw new WorkspaceError("That file is too big.");
+  const kind = sniffFile(bytes);
+  if (!kind) throw new WorkspaceError("That file isn't a PDF or a photo (JPG / PNG).");
+  let pdf: PDFDocument, fileKey = doc.fileKey;
+  if (kind === "pdf") {
+    try { pdf = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false }); } catch { throw new WorkspaceError(NOT_A_PDF); }
+  } else {
+    // A photo or scan: MyPCP makes the PDF (kept under its own name; the picture as sent stays where it was).
+    pdf = await PDFDocument.create();
+    await addImagePage(pdf, bytes, kind);
+    bytes = Buffer.from(await pdf.save());
+    fileKey = `documents/${randomUUID()}.pdf`;
+    await putBytes(fileKey, bytes);
+  }
+  const pages = pagesIn(pdf);
   const fields = readFormFields(pdf);
-  await (await db()).update(documents).set({ pages, fields, fileSha256: sha256(bytes), fileSize: bytes.length, updatedByUserId: a.id }).where(eq(documents.id, id));
+  await (await db()).update(documents).set({ pages, fields, fileKey, fileSha256: sha256(bytes), fileSize: bytes.length, updatedByUserId: a.id }).where(eq(documents.id, id));
   await logEvent(id, "uploaded", { userId: a.id, detail: `${pages.length} page${pages.length === 1 ? "" : "s"}${fields.length ? `, ${fields.length} fillable box${fields.length === 1 ? "" : "es"} found` : ""}` });
   await audit(a, "manage_document", { entityType: "document", entityId: id, description: `Uploaded "${doc.title}" (${pages.length} pages)` });
   return { pages: pages.length, fieldsFound: fields.length };
@@ -227,6 +251,144 @@ function readFormFields(pdf: PDFDocument): DocField[] {
     });
   }
   return out.slice(0, 600);
+}
+
+// ---------------------------------------------------------------------------
+// Page tools (drafts only): add pages from another PDF or a photo; remove, move or turn a page.
+// The PDF is never changed in place: a new file is written and the document points at it, so a
+// template (or another document made from it) that shares the old file is left alone.
+// ---------------------------------------------------------------------------
+
+async function loadForPages(a: WorkspaceActor, id: number) {
+  const doc = await docOr404(a, id);
+  if (!canEdit(a, doc) || !doc.fileKey || !pagesOf(doc).length) throw new WorkspaceError("This document can't be changed.");
+  let pdf: PDFDocument;
+  try { pdf = await PDFDocument.load(await getBytes(doc.fileKey), { ignoreEncryption: true, updateMetadata: false }); } catch { throw new WorkspaceError(NOT_A_PDF); }
+  return { doc, pdf };
+}
+
+/** Write the changed PDF under a new name and point the document (pages, boxes, fingerprint) at it. */
+async function storePages(a: WorkspaceActor, doc: DocRow, pdf: PDFDocument, fields: DocField[], what: string) {
+  const bytes = Buffer.from(await pdf.save({ updateFieldAppearances: false }));
+  if (bytes.length > MAX_PDF_BYTES) throw new WorkspaceError(`That would make the PDF too big (max ${MAX_PDF_BYTES / 1024 / 1024} MB).`);
+  // The page list is read back from the file that was just written (the library's own list can be out of
+  // date after a page is removed), which also proves the new file opens.
+  let pages: DocPage[];
+  try { pages = pagesIn(await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false })); } catch { throw new WorkspaceError("That change didn't work on this PDF. Nothing was changed."); }
+  if (!pages.length) throw new WorkspaceError("A document needs at least one page.");
+  const fileKey = `documents/${randomUUID()}.pdf`;
+  await putBytes(fileKey, bytes);
+  await (await db()).update(documents).set({ pages, fields: cleanFields(fields, pages), fileKey, fileSha256: sha256(bytes), fileSize: bytes.length, updatedByUserId: a.id }).where(eq(documents.id, doc.id));
+  await logEvent(doc.id, "pages_changed", { userId: a.id, detail: what });
+  await audit(a, "manage_document", { entityType: "document", entityId: doc.id, description: `Pages of "${doc.title}": ${what}`.slice(0, 250) });
+  return { pages: pages.length };
+}
+
+/** A fillable PDF's own form boxes that sit on a page that is going away (removed, or redrawn turned): taken out of the form so it still flattens cleanly. */
+function dropFormFieldsOn(pdf: PDFDocument, page: PDFPage) {
+  try {
+    const form = pdf.getForm();
+    for (const f of form.getFields()) {
+      const onPage = f.acroField.getWidgets().some((w) => w.P() === page.ref || (() => {
+        const annots = page.node.Annots(), ref = pdf.context.getObjectRef(w.dict);
+        if (!annots || !ref) return false;
+        for (let k = 0; k < annots.size(); k++) if (annots.get(k) === ref) return true;
+        return false;
+      })());
+      if (onPage) { try { form.removeField(f); } catch { /* leave it; the stamped values still print on top */ } }
+    }
+  } catch { /* no form */ }
+}
+
+export async function changePages(a: WorkspaceActor, id: number, change: PageChange) {
+  const { doc, pdf } = await loadForPages(a, id);
+  const count = pdf.getPageCount();
+  const fields = fieldsOf(doc);
+  const page = change.page;
+  if (!Number.isInteger(page) || page < 0 || page >= count) throw new WorkspaceError("That page isn't in this document.");
+  if (change.op === "remove") {
+    if (count <= 1) throw new WorkspaceError("A document needs at least one page.");
+    dropFormFieldsOn(pdf, pdf.getPage(page));
+    pdf.removePage(page);
+    return storePages(a, doc, pdf, fieldsAfterRemove(fields, page), `page ${page + 1} removed`);
+  }
+  if (change.op === "move") {
+    const to = change.to;
+    if (!Number.isInteger(to) || to < 0 || to >= count) throw new WorkspaceError("That page can't go there.");
+    if (to === page) return { pages: count };
+    const p = pdf.getPage(page);
+    pdf.removePage(page);
+    pdf.insertPage(to, p);
+    return storePages(a, doc, pdf, fieldsAfterOrder(fields, movedOrder(count, page, to)), `page ${page + 1} moved to position ${to + 1}`);
+  }
+  if (!TURNS.includes(change.turn)) throw new WorkspaceError("Turn the page a quarter, half or three-quarter turn.");
+  // Turning redraws the page's content turned on a fresh, upright page (so boxes added later are upright too).
+  const old = pagesIn(pdf)[page]!;
+  const by = contentTurn(old, change.turn);
+  const src = pdf.getPage(page);
+  if (by === 0) src.setRotation(degrees(0));
+  else {
+    const W = old.w, H = old.h;
+    const embedded = await pdf.embedPage(src);
+    const size = turnedPage(old, by);
+    dropFormFieldsOn(pdf, src);
+    const fresh = pdf.insertPage(page, [size.w, size.h]);
+    fresh.drawPage(embedded, by === 90 ? { x: 0, y: W, rotate: degrees(-90) } : by === 180 ? { x: W, y: H, rotate: degrees(180) } : { x: H, y: 0, rotate: degrees(90) });
+    pdf.removePage(page + 1);
+  }
+  return storePages(a, doc, pdf, fieldsAfterTurn(fields, page, by, old), `page ${page + 1} turned`);
+}
+
+// An extra file (PDF or photo) on its way in, to be added as pages at the end of a document.
+const PART_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const partKey = (docId: number, part: string) => `documents/part-${docId}-${part}`;
+export const PART_CONTENT_TYPE = "application/octet-stream";
+
+export async function addPagesStart(a: WorkspaceActor, id: number, size: number) {
+  const doc = await docOr404(a, id);
+  if (!canEdit(a, doc) || !doc.fileKey) throw new WorkspaceError("This document can't be changed.");
+  if (size > MAX_PDF_BYTES) throw new WorkspaceError(`That file is too big (max ${MAX_PDF_BYTES / 1024 / 1024} MB).`);
+  const part = randomUUID();
+  return { part, upload: await uploadTarget(partKey(id, part), PART_CONTENT_TYPE) };
+}
+
+/** Local development only: the browser sends the extra file through the API. */
+export async function addPagesLocal(a: WorkspaceActor, id: number, part: string, base64: string) {
+  if (onS3()) throw new WorkspaceError("Upload the file with the upload link.");
+  const doc = await docOr404(a, id);
+  if (!canEdit(a, doc) || !PART_RE.test(part)) throw new WorkspaceError("This document can't be changed.");
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes.length > MAX_PDF_BYTES) throw new WorkspaceError("That file is too big.");
+  await putBytes(partKey(id, part), bytes, PART_CONTENT_TYPE);
+  return { ok: true };
+}
+
+/** The extra file arrived: add its pages (a PDF's pages, or a photo as one page) to the end of the document. */
+export async function addPagesFinish(a: WorkspaceActor, id: number, part: string, fileName: string) {
+  if (!PART_RE.test(part)) throw new WorkspaceError("The upload didn't arrive. Please try again.");
+  const { doc, pdf } = await loadForPages(a, id);
+  const name = fileName.replace(/[\r\n<>"]/g, " ").trim().slice(0, 120) || "file";
+  let bytes: Buffer;
+  try { bytes = await getBytes(partKey(id, part)); } catch { throw new WorkspaceError("The upload didn't arrive. Please try again."); }
+  if (bytes.length > MAX_PDF_BYTES) throw new WorkspaceError("That file is too big.");
+  const kind = sniffFile(bytes);
+  if (!kind) throw new WorkspaceError(`"${name}" isn't a PDF or a photo (JPG / PNG).`);
+  const before = pdf.getPageCount();
+  const tooMany = new WorkspaceError(`A document can have up to ${MAX_DOC_PAGES} pages.`);
+  if (kind === "pdf") {
+    let extra: PDFDocument;
+    try { extra = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false }); } catch { throw new WorkspaceError(NOT_A_PDF); }
+    if (before + extra.getPageCount() > MAX_DOC_PAGES) throw tooMany;
+    // That file's own fill-in boxes can't come along (they belong to its form): what was typed in them is printed onto its pages instead.
+    try { const form = extra.getForm(); if (form.getFields().length) form.flatten(); } catch { /* not a form, or one that can't be flattened */ }
+    for (const p of await pdf.copyPages(extra, extra.getPageIndices())) pdf.addPage(p);
+  } else {
+    if (before + 1 > MAX_DOC_PAGES) throw tooMany;
+    await addImagePage(pdf, bytes, kind);
+  }
+  const added = pdf.getPageCount() - before;
+  const r = await storePages(a, doc, pdf, fieldsOf(doc), `${added} page${added === 1 ? "" : "s"} added from "${name}"`);
+  return { ...r, added };
 }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +479,8 @@ export async function getDocument(a: WorkspaceActor, id: number, meta: ClientMet
     fileName: doc.fileName, pages: pagesOf(doc), fields: fieldsOf(doc), message: doc.message,
     subjectKey: doc.subjectKey, patientName, creator: creator?.name ?? null, createdByMe: doc.createdByUserId === a.id,
     sentAt: doc.sentAt, completedAt: doc.completedAt, hasFile: !!doc.fileKey && pagesOf(doc).length > 0, hasFinal: !!doc.finalKey,
+    /** Changes whenever the PDF itself changes (pages added, removed, moved, turned): the editor then opens the new file. */
+    fileRev: doc.fileKey ? sha256(doc.fileKey).slice(0, 12) : "",
     signers: signers.map((s) => ({ userId: s.s.userId, name: s.name, status: s.s.status as "pending" | "signed", signedAt: s.s.signedAt })),
     signatures: Object.fromEntries(sigs.map((s) => [`sig:${s.id}`, {
       png: `data:image/png;base64,${s.png}`, name: s.onBehalfOf ? onBehalfNames.get(s.onBehalfOf) ?? "Provider" : s.name, signedAt: s.signedAt,

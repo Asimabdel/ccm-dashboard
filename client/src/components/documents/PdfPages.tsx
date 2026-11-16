@@ -14,6 +14,8 @@ interface PageProps {
   /** The mouse is over this page (where a pasted box goes). */
   onHover?: (page: number) => void;
   overlay: (page: number, vp: PageViewport) => React.ReactNode;
+  /** A strip above each page (the page tools while preparing a document). */
+  pageBar?: (page: number) => React.ReactNode;
 }
 
 export function Pages({ count, zoom, ...rest }: PageProps & { count: number; zoom: number }) {
@@ -35,7 +37,7 @@ export function Pages({ count, zoom, ...rest }: PageProps & { count: number; zoo
   );
 }
 
-function PdfPage({ pdf, index, width, drawing, onPageClick, onDraw, onHover, overlay }: PageProps & { index: number; width: number }) {
+function PdfPage({ pdf, index, width, drawing, onPageClick, onDraw, onHover, overlay, pageBar }: PageProps & { index: number; width: number }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [vp, setVp] = useState<PageViewport | null>(null);
   // Dragging out the size of a new box.
@@ -67,6 +69,8 @@ function PdfPage({ pdf, index, width, drawing, onPageClick, onDraw, onHover, ove
   const at = (e: React.PointerEvent | React.MouseEvent) => { const r = e.currentTarget.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
   const onThePage = (e: React.SyntheticEvent) => e.target === e.currentTarget || !!(e.target as HTMLElement).dataset.page;
   return (
+    <>
+    {pageBar && <div className="mx-auto mb-1 flex items-center justify-between gap-2 px-1 text-xs" style={{ width: vp?.width ?? width }}>{pageBar(index)}</div>}
     <div className={cn("relative mx-auto mb-3 shadow-sm", drawing && "touch-none")} style={{ background: "#fff", width: vp?.width ?? width, height: vp?.height, minHeight: vp ? undefined : width * 1.29 }}
       onPointerEnter={() => onHover?.(index)}
       onPointerDown={(e) => {
@@ -100,5 +104,6 @@ function PdfPage({ pdf, index, width, drawing, onPageClick, onDraw, onHover, ove
       {vp && overlay(index, vp)}
       {rect && rect.w + rect.h > 6 && <div className="pointer-events-none absolute border-2 border-dashed border-teal-600 bg-teal-500/10" style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }} />}
     </div>
+    </>
   );
 }

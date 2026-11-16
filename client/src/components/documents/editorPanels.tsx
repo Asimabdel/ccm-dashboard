@@ -1,10 +1,11 @@
 // The Documents editor's side panels: the tools, the picked box's settings, lining boxes up, signers, patient.
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import {
-  AlignEndHorizontal, AlignEndVertical, AlignStartHorizontal, AlignStartVertical, CalendarDays, Check, CheckCircle2, Circle, Copy, CopyPlus, Eraser, Highlighter, Image as ImageIcon,
-  Minus, MoveHorizontal, MoveVertical, Signature, SquareCheck, Stamp, TextCursorInput, Trash2, Type, UserRound, X, XCircle,
+  AlignEndHorizontal, AlignEndVertical, AlignStartHorizontal, AlignStartVertical, CalendarDays, Check, CheckCircle2, Circle, Copy, CopyPlus, Eraser, FilePlus2, Highlighter, Image as ImageIcon,
+  Loader2, Minus, MoveHorizontal, MoveVertical, Signature, SquareCheck, Stamp, TextCursorInput, Trash2, Type, UserRound, Wand2, X, XCircle,
 } from "lucide-react";
+import { DOC_FILE_ACCEPT } from "./uploadFiles";
 import { Btn, inputCls } from "@/components/workspace/ui";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -29,8 +30,10 @@ const panel = "rounded-xl border border-slate-200 bg-white p-3 dark:border-slate
 const heading = "mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500";
 
 /** "Add a box" and "Mark up the page": pick one, then click (or drag) on the page. */
-export function ToolPalette({ tool, onTool, isTemplate, signers, newAssignee, onNewAssignee }: {
+export function ToolPalette({ tool, onTool, isTemplate, signers, newAssignee, onNewAssignee, onSuggest, suggesting }: {
   tool: ToolChoice | null; onTool: (t: ToolChoice | null) => void; isTemplate: boolean; signers: Doc["signers"]; newAssignee: Assignee; onNewAssignee: (a: Assignee) => void;
+  /** Read the words on the pages and add boxes on the blanks it finds. */
+  onSuggest: () => void; suggesting: boolean;
 }) {
   const grid = (tools: typeof FILL_TOOLS, cols: string) => (
     <div className={cn("grid gap-1.5", cols)}>
@@ -46,6 +49,10 @@ export function ToolPalette({ tool, onTool, isTemplate, signers, newAssignee, on
     <section className={panel}>
       <p className={heading}>Add a box</p>
       {grid(FILL_TOOLS, "grid-cols-3")}
+      <Btn size="sm" variant="secondary" className="mt-2 w-full" disabled={suggesting} onClick={onSuggest}
+        title="MyPCP reads the words on the pages (Name: ____, Signature: ____, Date: ____, [ ]) and adds a box on each blank. You check them.">
+        {suggesting ? <Loader2 size={13} className="animate-spin" /> : <Wand2 size={13} />} Suggest boxes for me
+      </Btn>
       {!isTemplate && (
         <label className="mt-2 block text-xs text-slate-500">New boxes are for
           <select className={cn(inputCls, "mt-1 h-8 text-xs")} value={newAssignee} onChange={(e) => onNewAssignee(e.target.value as Assignee)}>
@@ -145,7 +152,11 @@ export function FieldPanel({ f, doc, onChange, onDelete, onCopy, onEveryPage, is
 }
 
 /** Several boxes picked: line them up with the first one picked, make them the same size, copy or delete them. */
-export function MultiPanel({ count, onAlign, onCopy, onDelete }: { count: number; onAlign: (how: AlignHow) => void; onCopy: () => void; onDelete: () => void }) {
+export function MultiPanel({ count, onAlign, onCopy, onDelete, signers, onAssign }: {
+  count: number; onAlign: (how: AlignHow) => void; onCopy: () => void; onDelete: () => void;
+  /** Give all the picked fill-in boxes to one person (not offered on templates). */
+  signers?: Doc["signers"]; onAssign?: (a: Assignee) => void;
+}) {
   const b = (how: AlignHow, label: string, Icon: React.ElementType) => (
     <button type="button" onClick={() => onAlign(how)} className="flex flex-col items-center gap-1 rounded-lg border border-slate-200 px-1 py-2 text-[11px] font-semibold text-slate-600 hover:border-slate-400 dark:border-slate-700 dark:text-slate-300">
       <Icon size={16} /> {label}
@@ -164,8 +175,33 @@ export function MultiPanel({ count, onAlign, onCopy, onDelete }: { count: number
       <div className="grid grid-cols-2 gap-1.5">
         {b("width", "Same width", MoveHorizontal)}{b("height", "Same height", MoveVertical)}
       </div>
+      {onAssign && (
+        <label className="block text-xs text-slate-500">Who fills these boxes
+          <select className={cn(inputCls, "mt-1 h-8 text-xs")} value="" onChange={(e) => e.target.value && onAssign(e.target.value as Assignee)}>
+            <option value="">Choose…</option>
+            <option value="preparer">Me</option>
+            {(signers ?? []).map((s) => <option key={s.userId} value={`signer:${s.userId}`}>{s.name ?? "Signer"}</option>)}
+          </select>
+        </label>
+      )}
       <Btn size="sm" variant="secondary" onClick={onCopy} title="Ctrl+D"><Copy size={13} /> Copy them</Btn>
       <p className="text-[11px] text-slate-400">Drag any of them to move them together · arrow keys to nudge.</p>
+    </section>
+  );
+}
+
+/** Pages: add more (another PDF, photos or scans). Moving, turning and removing a page are on the strip above each page. */
+export function PagesPanel({ count, busy, onAdd }: { count: number; busy: boolean; onAdd: (files: File[]) => void }) {
+  const input = useRef<HTMLInputElement>(null);
+  return (
+    <section className={panel}>
+      <p className={heading}>Pages ({count})</p>
+      <Btn size="sm" variant="secondary" className="w-full" disabled={busy} onClick={() => input.current?.click()}>
+        {busy ? <Loader2 size={13} className="animate-spin" /> : <FilePlus2 size={13} />} Add pages (PDF or photos)
+      </Btn>
+      <input ref={input} type="file" multiple accept={DOC_FILE_ACCEPT} className="hidden"
+        onChange={(e) => { const files = Array.from(e.target.files ?? []); e.target.value = ""; if (files.length) onAdd(files); }} />
+      <p className="mt-2 text-[11px] text-slate-500">They go at the end. Use the arrows above each page to move it, or turn or remove it there.</p>
     </section>
   );
 }
