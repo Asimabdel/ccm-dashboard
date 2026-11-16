@@ -1531,6 +1531,8 @@ const INTAKE_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: "providers", column: "npi", ddl: "`npi` varchar(10) NULL AFTER `aliases`" },
   // Added 2026-11-14: website bookings — when the "waited 15 minutes for a call" alert went out.
   { table: "bookingRequests", column: "waitAlertAt", ddl: "`waitAlertAt` datetime NULL AFTER `firstContactAt`" },
+  // Added 2026-11-16: how each provider's name prints on letterheads and excuse notes.
+  { table: "providers", column: "letterName", ddl: "`letterName` varchar(120) NULL AFTER `npi`" },
 ];
 async function upgradeIntake(db: Db): Promise<string[]> {
   const applied: string[] = [];

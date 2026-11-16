@@ -21,12 +21,13 @@ import {
   BRAND_CIRCLES, BRAND_PATHS, BRAND_TEAL, BRAND_VIEW, DARK_TEXT, MUTED_TEXT, logoPrims, roundedRectPath, stampPrims, type Prim, type PrimColor,
 } from "../shared/stamps";
 import { AI_PAGE_PROMPT, boxesFromAi, parseAiFields } from "../shared/docSuggest";
+import { excuseNoteLayout, letterNameOf } from "../shared/excuseNote";
 import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
 import {
   MAX_DOC_PAGES, TURNS, contentTurn, fieldsAfterOrder, fieldsAfterRemove, fieldsAfterTurn, imagePageLayout, movedOrder, sniffFile, turnedPage, type PageChange,
 } from "../shared/docPages";
 import { localDateStr } from "../shared/workforce";
-import { MAX_PDF_BYTES, getBytes, onS3, putBytes, readTarget, uploadTarget } from "./docStore";
+import { MAX_PDF_BYTES, exists, getBytes, onS3, putBytes, readTarget, uploadTarget } from "./docStore";
 import { WorkspaceError, audit, createTask, loadScheduleSubjects, notifyTask, subjectCare, type WorkspaceActor } from "./workspaceDb";
 
 async function db() {
@@ -83,7 +84,8 @@ export async function signedPdfForFax(a: WorkspaceActor, id: number, folderKey: 
   const inFolder = !!doc && !!folderKey && doc.subjectKey === folderKey;
   if (!doc || !(inFolder || (await canView(a, doc)))) throw new WorkspaceError("That document wasn't found.", "NOT_FOUND");
   if (doc.status !== "completed" || !doc.finalKey) throw new WorkspaceError(`"${doc.title}" isn't signed yet.`);
-  return { bytes: await getBytes(doc.finalKey), title: doc.title };
+  // An excuse note is faxed to an employer or school as the note alone (the certificate page stays on file).
+  return { bytes: await getBytes(isExcuseNote(doc) ? await shareCopyKey(doc) : doc.finalKey), title: doc.title };
 }
 
 const pagesOf = (doc: DocRow) => (doc.pages ?? []) as DocPage[];
@@ -476,6 +478,75 @@ export async function newFromTemplate(a: WorkspaceActor, templateId: number, sub
   return { id };
 }
 
+// ---------------------------------------------------------------------------
+// Excuse notes: a work / school note on a provider's letterhead
+// ---------------------------------------------------------------------------
+
+/** Providers for letters (excuse notes, letterheads): how each name prints, and their office. Names set for letters first. */
+export async function letterProviders() {
+  const rows = await (await db()).select({
+    id: providers.id, name: providers.name, title: providers.title, letterName: providers.letterName, clinicId: providers.clinicId, userId: providers.userId, userName: users.name,
+  }).from(providers).leftJoin(users, eq(users.id, providers.userId));
+  return rows.map((r) => ({ id: r.id, name: letterNameOf(r), clinicId: r.clinicId, userId: r.userId, set: !!r.letterName?.trim() }))
+    .filter((r) => r.name)
+    .sort((a, b) => Number(b.set) - Number(a.set) || a.name.localeCompare(b.name));
+}
+
+/**
+ * Start an excuse note on a provider's letterhead, optionally for a patient (name and date of birth fill in).
+ * The provider signs it: themself if they make it; staff they picked apply their saved signature (with their
+ * approval, as for any document); anyone else gets the provider added as a co-signer.
+ */
+export async function newExcuseNote(a: WorkspaceActor, input: { providerId: number; subjectKey: string | null }) {
+  const d = await db();
+  const [p] = await d.select({
+    id: providers.id, name: providers.name, title: providers.title, letterName: providers.letterName, clinicId: providers.clinicId, userId: providers.userId, userName: users.name,
+  }).from(providers).leftJoin(users, eq(users.id, providers.userId)).where(eq(providers.id, input.providerId)).limit(1);
+  if (!p) throw new WorkspaceError("That provider wasn't found.", "NOT_FOUND");
+  const care = input.subjectKey ? await subjectCare(input.subjectKey) : null;
+  if (input.subjectKey && !care) throw new WorkspaceError("That patient wasn't found.", "NOT_FOUND");
+  const who = letterNameOf(p);
+  const clinicId = p.clinicId ?? care?.clinicId ?? a.clinicIds?.[0] ?? null;
+  const [office] = clinicId ? await d.select({ name: clinics.name, address: clinics.address }).from(clinics).where(eq(clinics.id, clinicId)).limit(1) : [];
+  const appliesForThem = !!p.userId && (await signaturesICanApply(a)).some((s) => s.providerUserId === p.userId && !!s.signaturePng);
+  const coSigner = p.userId && p.userId !== a.id && !appliesForThem && (await signerChoices()).some((u) => u.id === p.userId) ? p.userId : null;
+  const note = excuseNoteLayout({ who, office: office ?? null, today: localDateStr(), signer: coSigner ? `signer:${coSigner}` : "preparer" });
+  const bytes = await drawExcuseNote(note);
+  const key = `documents/${randomUUID()}.pdf`;
+  await putBytes(key, bytes);
+  const { fields } = fillFromRecord(note.fields, await prefillValues(a, input.subjectKey));
+  const res = await d.insert(documents).values({
+    title: `Excuse note (${who || "provider"})${care ? `: ${care.name}` : ""}`.slice(0, 255), status: "draft",
+    fileKey: key, fileName: "excuse-note.pdf", fileSize: bytes.length, fileSha256: sha256(bytes), pages: [{ w: note.page.w, h: note.page.h, rotate: 0 }], fields,
+    subjectKey: input.subjectKey, patientId: care?.patientId ?? null, clinicId, createdByUserId: a.id, updatedByUserId: a.id,
+  });
+  const id = (res as unknown as [{ insertId: number }])[0].insertId;
+  if (coSigner) await d.insert(documentSigners).values({ documentId: id, userId: coSigner, sortOrder: 0, status: "pending" });
+  await logEvent(id, "created", { userId: a.id, detail: `Excuse note on ${who || "a provider"}'s letterhead`.slice(0, 200) });
+  await audit(a, "manage_document", { entityType: "document", entityId: id, description: `New excuse note (${who})${care ? " for a patient" : ""}` });
+  return { id, coSigner: !!coSigner };
+}
+
+/** The note's page: its printed wording, the blanks, check-box squares and the rule under the letterhead (the letterhead itself is a box). */
+async function drawExcuseNote(note: ReturnType<typeof excuseNoteLayout>) {
+  const pdf = await PDFDocument.create();
+  pdf.setTitle("Work / school excuse");
+  pdf.setProducer("MyPCP");
+  const page = pdf.addPage([note.page.w, note.page.h]);
+  const font = await pdf.embedFont(StandardFonts.Helvetica), bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const H = note.page.h;
+  for (const t of note.texts) {
+    const f = t.bold ? bold : font;
+    const text = safeText(f, t.text);
+    page.drawText(text, { x: t.center ? t.x - f.widthOfTextAtSize(text, t.size) / 2 : t.x, y: H - t.b, size: t.size, font: f, color: hexRgb(t.muted ? MUTED_TEXT : DARK_TEXT) });
+  }
+  for (const l of note.lines) {
+    page.drawLine({ start: { x: l.x1, y: H - l.top }, end: { x: l.x2, y: H - l.top }, thickness: l.rule ? 1.4 : 0.6, color: l.rule ? hexRgb(BRAND_TEAL) : rgb(0.5, 0.5, 0.5) });
+  }
+  for (const s of note.squares) page.drawRectangle({ x: s.x, y: H - s.top - s.size, width: s.size, height: s.size, borderColor: rgb(0.3, 0.3, 0.3), borderWidth: 0.8 });
+  return Buffer.from(await pdf.save());
+}
+
 /** What MyPCP knows to fill in: the patient's name, DOB, phone, office; today; the preparer's name. */
 async function prefillValues(a: WorkspaceActor, subjectKey: string | null): Promise<Partial<Record<PrefillKey, string>>> {
   const out: Partial<Record<PrefillKey, string>> = { today: localDateStr(), my_name: a.name ?? "" };
@@ -586,6 +657,8 @@ export async function getDocument(a: WorkspaceActor, id: number, meta: ClientMet
     myName: a.name ?? null,
     officeId: doc.clinicId,
     offices: await d.select({ id: clinics.id, name: clinics.name, address: clinics.address, phone: clinics.phone }).from(clinics).orderBy(asc(clinics.name)),
+    /** For the letterhead's provider line. */
+    letterProviders: (await letterProviders()).map((p) => ({ id: p.id, name: p.name, clinicId: p.clinicId })),
     signers: signers.map((s) => ({ userId: s.s.userId, name: s.name, status: s.s.status as "pending" | "signed", signedAt: s.s.signedAt })),
     signatures: Object.fromEntries(sigs.map((s) => [`sig:${s.id}`, {
       png: `data:image/png;base64,${s.png}`, name: s.onBehalfOf ? onBehalfNames.get(s.onBehalfOf) ?? "Provider" : s.name, signedAt: s.signedAt,
@@ -595,17 +668,37 @@ export async function getDocument(a: WorkspaceActor, id: number, meta: ClientMet
   };
 }
 
-/** The PDF itself, for the editor to draw (or the signed PDF to download). */
-export async function fileFor(a: WorkspaceActor, id: number, which: "source" | "final", meta: ClientMeta) {
+/**
+ * The PDF itself, for the editor to draw, or the signed PDF to download: "final" with its certificate page
+ * (kept on file), "copy" without it (to hand to the patient, an employer or a school).
+ */
+export async function fileFor(a: WorkspaceActor, id: number, which: "source" | "final" | "copy", meta: ClientMeta) {
   const doc = await docOr404(a, id);
-  const key = which === "final" ? doc.finalKey : doc.fileKey;
-  if (!key) throw new WorkspaceError(which === "final" ? "The signed PDF isn't ready yet." : "No PDF uploaded yet.");
-  if (which === "final") {
-    await logEvent(id, "downloaded", { userId: a.id, meta });
-    await audit(a, "view_document", { entityType: "document", entityId: id, description: `Downloaded signed "${doc.title}"` });
+  const signed = which !== "source";
+  if (signed && !doc.finalKey) throw new WorkspaceError("The signed PDF isn't ready yet.");
+  const key = which === "copy" ? await shareCopyKey(doc) : which === "final" ? doc.finalKey : doc.fileKey;
+  if (!key) throw new WorkspaceError("No PDF uploaded yet.");
+  if (signed) {
+    await logEvent(id, "downloaded", { userId: a.id, meta, detail: which === "copy" ? "copy without the certificate page" : null });
+    await audit(a, "view_document", { entityType: "document", entityId: id, description: `Downloaded signed "${doc.title}"${which === "copy" ? " (without certificate page)" : ""}` });
   }
-  const name = which === "final" ? `${doc.title} (signed).pdf` : doc.fileName;
-  return readTarget(key, which === "final" ? name : null);
+  return readTarget(key, signed ? `${doc.title}${which === "copy" ? "" : " (signed)"}.pdf` : null);
+}
+
+/** An excuse note (made by MyPCP): what goes to a patient, employer or school is the note alone. */
+const isExcuseNote = (doc: DocRow) => doc.fileName === "excuse-note.pdf";
+
+/** The signed pages without the certificate page; made the first time it's asked for, then kept beside the signed PDF. */
+async function shareCopyKey(doc: DocRow) {
+  if (!doc.finalKey) throw new WorkspaceError("The signed PDF isn't ready yet.");
+  const key = `${doc.finalKey.replace(/\.pdf$/, "")}-copy.pdf`;
+  if (await exists(key)) return key;
+  const pdf = await PDFDocument.load(await getBytes(doc.finalKey), { ignoreEncryption: true });
+  const keep = Math.max(1, pagesOf(doc).length);
+  for (let i = pdf.getPageCount() - 1; i >= keep; i--) pdf.removePage(i);
+  pdf.setTitle(doc.title);
+  await putBytes(key, await pdf.save());
+  return key;
 }
 
 /** Save the preparer's work: title, boxes (and their values), patient, message. Drafts only. */

@@ -19,10 +19,18 @@ export interface MarkDesign {
   by?: string | null;
   /** The office line (dated stamps, seal ring, letterhead). */
   place?: string | null;
-  /** Letterhead only. */
+  /** Letterhead only: the provider's name as it prints on letters ("Sudad Al Hadad, MD"), address, phone, fax. */
+  who?: string | null;
   address?: string | null;
   phone?: string | null;
+  fax?: string | null;
 }
+
+/** The practice's main phone and fax: every letterhead shows them (they can be changed on each one). */
+export const PRACTICE_PHONE = "(346) 707-8978";
+export const PRACTICE_FAX = "(313) 457-1003";
+/** "MyPCP Dr - Katy" → "Katy": the logo already says MyPCP Dr. */
+export const officeShortName = (name: string | null | undefined) => (name ?? "").replace(/^\s*my\s*pcp\s*dr\.?\s*[-–·:]\s*/i, "").trim() || null;
 
 export interface StampPreset { id: string; name: string; word: string; kind: StampKind; color: "black" | "red" | "blue" | "green" }
 /** The ready-made stamps in the editor's gallery (wording, date, name and colour can all be changed after). */
@@ -51,14 +59,16 @@ export function stampSize(kind: StampKind, word: string): { w: number; h: number
   if (kind === "dated") return { w: Math.max(132, textWidth(word, 17, true) + 30), h: 60 };
   return { w: Math.max(80, textWidth(word, 15, true) + 28), h: 30 };
 }
-export const logoSize = (kind: LogoKind) => (kind === "letterhead" ? { w: 300, h: 62 } : kind === "full" ? { w: 150, h: 40 } : { w: 54, h: 54 });
+export const logoSize = (kind: LogoKind) => (kind === "letterhead" ? { w: 330, h: 74 } : kind === "full" ? { w: 150, h: 40 } : { w: 54, h: 54 });
 
 const clean = (v: unknown, max: number) => (typeof v === "string" ? v.replace(/[\r\n<>]/g, " ").replace(/\s+/g, " ").trim().slice(0, max) || null : null);
 
 /** Keep only well-formed details for a stamp or the logo (they come from the editor). */
 export function cleanDesign(type: "stamp" | "logo", raw: unknown): MarkDesign {
   const d = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  if (type === "logo") return { kind: logoKindOf(d as MarkDesign), place: clean(d.place, 80), address: clean(d.address, 140), phone: clean(d.phone, 40) };
+  if (type === "logo") {
+    return { kind: logoKindOf(d as MarkDesign), who: clean(d.who, 80), place: clean(d.place, 80), address: clean(d.address, 140), phone: clean(d.phone, 40), fax: clean(d.fax, 40) };
+  }
   return {
     kind: stampKindOf(d as MarkDesign),
     date: typeof d.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.date) ? d.date : null,
@@ -241,18 +251,31 @@ export function logoPrims(f: { w: number; h: number; design?: MarkDesign | null 
     out.push({ t: "text", x, y: h / 2 + size * 0.36, size, bold: true, text: "MyPCP Dr", anchor: "start", color: "brand" });
     return out;
   }
-  const line2 = d.place ?? "";
-  const line3 = [d.address, d.phone].filter(Boolean).join("  ·  ");
-  const rows = 1 + (line2 ? 1 : 0) + (line3 ? 1 : 0);
-  const name = fitSize("MyPCP Dr", room, h * (rows === 1 ? 0.5 : 0.32), true);
-  let y = rows === 1 ? h / 2 + name * 0.36 : h * 0.34;
-  out.push({ t: "text", x, y, size: name, bold: true, text: "MyPCP Dr", anchor: "start", color: "brand" });
-  if (line2) {
-    y = rows === 2 ? h * 0.72 : h * 0.6;
-    out.push({ t: "text", x, y, size: fitSize(line2, room, h * 0.19, true), bold: true, text: line2, anchor: "start", color: "dark" });
-  }
-  if (line3) out.push({ t: "text", x, y: rows === 2 ? h * 0.72 : h * 0.84, size: fitSize(line3, room, h * 0.15, false), bold: false, text: line3, anchor: "start", color: "muted" });
+  // "MyPCP Dr", then the provider (or the office), the address, and "PH: …   FAX: …", each on its own line.
+  const lines: { text: string; size: number; bold: boolean; color: PrimColor }[] = [{ text: "MyPCP Dr", size: 0.3, bold: true, color: "brand" }];
+  const named = d.who || d.place;
+  if (named) lines.push({ text: named, size: 0.175, bold: true, color: "dark" });
+  if (d.address) lines.push({ text: d.address, size: 0.14, bold: false, color: "muted" });
+  const contact = letterContact(d);
+  if (contact) lines.push({ text: contact, size: 0.14, bold: false, color: "muted" });
+  if (lines.length === 1) lines[0]!.size = 0.5;
+  // Each line takes its size plus a little air; the block is centred on the logo and shrunk if it would overflow.
+  const gap = 0.32;
+  const sizes = lines.map((l) => fitSize(l.text, room, h * l.size, l.bold));
+  const tall = sizes.reduce((a, s, i) => a + s * (i ? 1 + gap : 1), 0);
+  const k = Math.min(1, (h * 0.96) / tall);
+  let y = (h - tall * k) / 2;
+  lines.forEach((l, i) => {
+    const size = sizes[i]! * k;
+    y += i ? size * (1 + gap) : size;
+    out.push({ t: "text", x, y: y - size * 0.24, size, bold: l.bold, text: l.text, anchor: "start", color: l.color });
+  });
   return out;
+}
+
+/** "PH: (346) 707-8978   FAX: (313) 457-1003" (either part left out when not set). */
+export function letterContact(d: Pick<MarkDesign, "phone" | "fax">) {
+  return [d.phone ? `PH: ${d.phone}` : null, d.fax ? `FAX: ${d.fax}` : null].filter(Boolean).join("     ");
 }
 
 /** A rounded rectangle as an SVG path (top-left origin), for the PDF (pdf-lib has no rounded rectangle). */

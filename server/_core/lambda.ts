@@ -286,6 +286,11 @@ export const handler = async (event: any, context: any) => {
     const { opportunityOutcomes } = await import("../opportunityOutcomes");
     return opportunityOutcomes({ asOf: typeof event.asOf === "string" && /^\d{4}-\d{2}-\d{2}$/.test(event.asOf) ? event.asOf : "2026-09-28" });
   }
+  // Letterheads: providers' names as printed on letters + offices' full addresses (IAM-only; dry run unless apply; no patient data).
+  if (event && event.__job === "letterhead-setup" && !event.requestContext && !event.version) {
+    const { letterheadSetup } = await import("../letterheadSetup");
+    return letterheadSetup(event.apply === true);
+  }
   // Clinic locations for the clock-in check: list (names, addresses, what's set) or set {set:[{id,lat,lng}]} (IAM-only).
   if (event && event.__job === "clinic-places" && !event.requestContext && !event.version) {
     const wfdb = await import("../workforceDb");

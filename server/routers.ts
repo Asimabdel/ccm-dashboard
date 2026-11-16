@@ -1576,22 +1576,23 @@ export const appRouter = router({
         return { success: true };
       }),
     create: protectedProcedure
-      .input(z.object({ name: z.string().min(1), title: z.string().optional(), clinicId: z.number().optional(), userId: z.number().optional(), aliases: z.array(z.string()).optional() }))
+      .input(z.object({ name: z.string().min(1), title: z.string().optional(), clinicId: z.number().optional(), userId: z.number().optional(), aliases: z.array(z.string()).optional(), letterName: z.string().max(120).nullish() }))
       .mutation(async ({ input, ctx }) => {
         requireRole(ctx, ["admin"]);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        await db.insert(providers).values(input);
+        await db.insert(providers).values({ ...input, letterName: input.letterName?.trim() || null });
         return { success: true };
       }),
     update: protectedProcedure
-      .input(z.object({ id: z.number(), name: z.string().min(1), title: z.string().optional(), clinicId: z.number().optional(), userId: z.number().optional(), aliases: z.array(z.string()).optional() }))
+      .input(z.object({ id: z.number(), name: z.string().min(1), title: z.string().optional(), clinicId: z.number().optional(), userId: z.number().optional(), aliases: z.array(z.string()).optional(), letterName: z.string().max(120).nullish() }))
       .mutation(async ({ input, ctx }) => {
         requireRole(ctx, ["admin"]);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        const { id, ...updateData } = input;
-        await db.update(providers).set(updateData).where(eq(providers.id, id));
+        const { id, letterName, ...updateData } = input;
+        // Left out = unchanged (older screens don't send it); empty = cleared.
+        await db.update(providers).set({ ...updateData, ...(letterName !== undefined ? { letterName: letterName?.trim() || null } : {}) }).where(eq(providers.id, id));
         return { success: true };
       }),
     remove: protectedProcedure.input(z.number()).mutation(async ({ input, ctx }) => {

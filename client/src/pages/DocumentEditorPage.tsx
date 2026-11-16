@@ -17,7 +17,7 @@ import { FieldBox } from "@/components/documents/FieldBox";
 import { FillDialog } from "@/components/documents/FillDialog";
 import { Pages } from "@/components/documents/PdfPages";
 import { FieldPanel, MultiPanel, PagesPanel, PatientPanel, SignersPanel, ToolPalette, ViewSummary, WhoPanel, officeLine } from "@/components/documents/editorPanels";
-import { STAMP_GALLERY, logoKindOf, logoSize, stampSize } from "@shared/stamps";
+import { PRACTICE_FAX, PRACTICE_PHONE, STAMP_GALLERY, logoKindOf, logoSize, officeShortName, stampSize } from "@shared/stamps";
 import { PALETTE, useTouchScreen, type Doc, type SigMap, type ToolChoice } from "@/components/documents/editorShared";
 import { addPagesFromFile, isDocFile } from "@/components/documents/uploadFiles";
 import { openPdf, type PageViewport, type PdfDoc } from "@/lib/pdf";
@@ -280,7 +280,7 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
       id: newFieldId(), type: tool.type, page, x, y: top - h, w, h, assignee, required: tool.type === "signature" || tool.type === "initials",
       value: tool.type === "mark" ? tool.value ?? "check" : preset ? preset.word : tool.type === "date" && assignee === "preparer" ? todayStr() : null,
       ...(preset ? { color: preset.color, design: { kind: preset.kind, date: preset.kind === "plain" ? null : todayStr(), by: preset.kind === "signed" ? doc.myName : null, place: preset.kind === "dated" || preset.kind === "seal" ? officeLine(office?.name) : null } } : {}),
-      ...(logoKind ? { design: { kind: logoKind, place: office?.name ?? null, address: office?.address ?? null, phone: office?.phone ?? null } } : {}),
+      ...(logoKind ? { design: { kind: logoKind, place: officeShortName(office?.name), address: office?.address ?? null, phone: PRACTICE_PHONE, fax: PRACTICE_FAX } } : {}),
     }, pages[page]);
     change((fs) => [...fs, f]);
     if (STICKY_TOOLS.includes(tool.type)) setSelected([]);
@@ -472,9 +472,11 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
       refetch();
     } catch (e) { toast.error((e as Error).message); }
   };
-  const download = async () => {
-    try { downloadPdf(await fileM.mutateAsync({ id: doc.id, which: "final" }), `${doc.title} (signed).pdf`); } catch (e) { toast.error((e as Error).message); }
+  /** "final" = with the certificate page (the record); "copy" = the pages alone, to hand to the patient, an employer or a school. */
+  const download = async (which: "final" | "copy") => {
+    try { downloadPdf(await fileM.mutateAsync({ id: doc.id, which }), `${doc.title}${which === "copy" ? "" : " (signed)"}.pdf`); } catch (e) { toast.error((e as Error).message); }
   };
+  const excuseNote = doc.fileName === "excuse-note.pdf";
 
   const myMissing = mode === "sign" ? missingFor(fields, me) : mode === "edit" ? missingFor(fields, "preparer") : [];
   const sel = selected.length === 1 ? fields.find((f) => f.id === selected[0]) ?? null : null;
@@ -527,7 +529,17 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
           {mode === "sign" && (
             <Btn size="sm" disabled={busy} onClick={doFinishSigning}>{finishSigning.isPending ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />} Finish signing</Btn>
           )}
-          {doc.status === "completed" && <Btn size="sm" onClick={download}><Download size={13} /> Download signed PDF</Btn>}
+          {doc.status === "completed" && (excuseNote ? (
+            <>
+              <Btn size="sm" variant="ghost" onClick={() => void download("final")} title="With the signature certificate page, for the record">With certificate</Btn>
+              <Btn size="sm" onClick={() => void download("copy")} title="The note alone, to give to the patient, employer or school"><Download size={13} /> Download the note</Btn>
+            </>
+          ) : (
+            <>
+              <Btn size="sm" variant="ghost" onClick={() => void download("copy")} title="The signed pages without the certificate page, to share outside the practice">Without certificate page</Btn>
+              <Btn size="sm" onClick={() => void download("final")}><Download size={13} /> Download signed PDF</Btn>
+            </>
+          ))}
         </div>
       </div>
 

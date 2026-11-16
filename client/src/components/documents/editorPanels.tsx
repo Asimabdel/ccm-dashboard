@@ -18,12 +18,14 @@ import { AI_WHO_LABELS, type AiWho } from "@shared/docSuggest";
 import type { BoxColor, Doc, ToolChoice } from "./editorShared";
 import { StampArt } from "./StampArt";
 import {
-  LOGO_KINDS, LOGO_LABELS, STAMP_GALLERY, STAMP_KINDS, STAMP_KIND_LABELS, logoKindOf, logoSize, stampKindOf, stampSize, type LogoKind, type MarkDesign, type StampKind,
+  LOGO_KINDS, LOGO_LABELS, PRACTICE_FAX, PRACTICE_PHONE, STAMP_GALLERY, STAMP_KINDS, STAMP_KIND_LABELS, logoKindOf, logoSize, officeShortName, stampKindOf, stampSize,
+  type LogoKind, type MarkDesign, type StampKind,
 } from "@shared/stamps";
 
 const todayYmd = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
 /** The office line a stamp shows by default: "MyPCP Dr · Katy Family Medicine". */
-export const officeLine = (name: string | null | undefined) => (name ? `MyPCP Dr · ${name}` : "MyPCP Dr");
+/** A stamp's office line: "MyPCP Dr · Katy" (office names already start with "MyPCP Dr - "). */
+export const officeLine = (name: string | null | undefined) => { const short = officeShortName(name); return short ? `MyPCP Dr · ${short}` : "MyPCP Dr"; };
 
 /** Stamps and the logo, drawn as they will print: pick one, then click on the page. */
 function StampGallery({ tool, onTool, myName }: { tool: ToolChoice | null; onTool: (t: ToolChoice | null) => void; myName: string }) {
@@ -268,7 +270,7 @@ function StampSettings({ f, doc, onChange }: { f: DocField; doc: Doc; onChange: 
   );
 }
 
-/** The logo: the mark alone, with "MyPCP Dr", or a letterhead with an office's name, address and phone. */
+/** The logo: the mark alone, with "MyPCP Dr", or a letterhead with a provider (or office), the address, phone and fax. */
 function LogoSettings({ f, doc, onChange }: { f: DocField; doc: Doc; onChange: (p: Partial<DocField>) => void }) {
   const d = f.design ?? {};
   const kind = logoKindOf(d);
@@ -285,24 +287,56 @@ function LogoSettings({ f, doc, onChange }: { f: DocField; doc: Doc; onChange: (
       </div>
       {kind === "letterhead" && (
         <>
+          {doc.letterProviders.length > 0 && (
+            <label className={sub}>Provider
+              <select className={cn(inputCls, "mt-1 h-8 text-xs")} value={doc.letterProviders.find((p) => p.name === d.who)?.id ?? ""}
+                onChange={(e) => {
+                  const p = doc.letterProviders.find((x) => String(x.id) === e.target.value);
+                  if (!p) { set({ who: null }); return; }
+                  // The provider's own office comes with them.
+                  const o = doc.offices.find((x) => x.id === p.clinicId);
+                  set({ who: p.name, ...(o ? { place: officeShortName(o.name), address: o.address } : {}) });
+                }}>
+                <option value="">No provider (just the office)</option>
+                {doc.letterProviders.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </label>
+          )}
+          {d.who != null && (
+            <label className={sub}>Provider's name as printed
+              <input className={cn(inputCls, "mt-1 h-8 text-xs")} value={d.who ?? ""} maxLength={80} onChange={(e) => set({ who: e.target.value })} />
+            </label>
+          )}
           {doc.offices.length > 0 && (
             <label className={sub}>Office
-              <select className={cn(inputCls, "mt-1 h-8 text-xs")} value={doc.offices.find((o) => o.name === d.place)?.id ?? ""}
-                onChange={(e) => { const o = doc.offices.find((x) => String(x.id) === e.target.value); if (o) set({ place: o.name, address: o.address, phone: o.phone }); }}>
+              <select className={cn(inputCls, "mt-1 h-8 text-xs")} value={doc.offices.find((o) => officeShortName(o.name) === d.place)?.id ?? ""}
+                onChange={(e) => { const o = doc.offices.find((x) => String(x.id) === e.target.value); if (o) set({ place: officeShortName(o.name), address: o.address }); }}>
                 <option value="">Pick an office…</option>
                 {doc.offices.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
               </select>
             </label>
           )}
-          <label className={sub}>Office name
-            <input className={cn(inputCls, "mt-1 h-8 text-xs")} value={d.place ?? ""} maxLength={80} onChange={(e) => set({ place: e.target.value })} />
-          </label>
+          {!d.who && (
+            <label className={sub}>Office name
+              <input className={cn(inputCls, "mt-1 h-8 text-xs")} value={d.place ?? ""} maxLength={80} onChange={(e) => set({ place: e.target.value })} />
+            </label>
+          )}
           <label className={sub}>Address
             <input className={cn(inputCls, "mt-1 h-8 text-xs")} value={d.address ?? ""} maxLength={140} onChange={(e) => set({ address: e.target.value })} />
           </label>
-          <label className={sub}>Phone
-            <input className={cn(inputCls, "mt-1 h-8 text-xs")} value={d.phone ?? ""} maxLength={40} onChange={(e) => set({ phone: e.target.value })} />
-          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <label className={sub}>Phone
+              <input className={cn(inputCls, "mt-1 h-8 text-xs")} value={d.phone ?? ""} maxLength={40} onChange={(e) => set({ phone: e.target.value })} />
+            </label>
+            <label className={sub}>Fax
+              <input className={cn(inputCls, "mt-1 h-8 text-xs")} value={d.fax ?? ""} maxLength={40} onChange={(e) => set({ fax: e.target.value })} />
+            </label>
+          </div>
+          {(d.phone !== PRACTICE_PHONE || d.fax !== PRACTICE_FAX) && (
+            <button type="button" className="text-left text-[11px] font-semibold text-brand hover:underline" onClick={() => set({ phone: PRACTICE_PHONE, fax: PRACTICE_FAX })}>
+              Use the main phone and fax ({PRACTICE_PHONE} · fax {PRACTICE_FAX})
+            </button>
+          )}
         </>
       )}
     </>

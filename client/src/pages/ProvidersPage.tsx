@@ -13,8 +13,8 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-type ProviderForm = { id?: number; name: string; title: string; clinicId: string; aliases: string };
-const EMPTY: ProviderForm = { name: "", title: "", clinicId: "", aliases: "" };
+type ProviderForm = { id?: number; name: string; title: string; clinicId: string; aliases: string; letterName: string };
+const EMPTY: ProviderForm = { name: "", title: "", clinicId: "", aliases: "", letterName: "" };
 
 export default function ProvidersPage() {
   const { user, loading } = useAuth({ redirectOnUnauthenticated: true });
@@ -47,7 +47,7 @@ export default function ProvidersPage() {
   const submit = () => {
     if (!form.name.trim()) { toast.error("Provider name is required."); return; }
     const aliases = form.aliases.split(",").map((a) => a.trim()).filter(Boolean);
-    const payload = { name: form.name.trim(), title: form.title || undefined, clinicId: form.clinicId ? Number(form.clinicId) : undefined, aliases };
+    const payload = { name: form.name.trim(), title: form.title || undefined, clinicId: form.clinicId ? Number(form.clinicId) : undefined, aliases, letterName: form.letterName.trim() || null };
     if (form.id) update.mutate({ id: form.id, ...payload }); else create.mutate(payload);
   };
 
@@ -87,6 +87,7 @@ export default function ProvidersPage() {
                   <tr key={r.provider.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60">
                     <td className="px-5 py-3">
                       <p className="font-semibold text-slate-800 flex items-center gap-2"><span className="w-8 h-8 rounded-xl bg-emerald-50 flex items-center justify-center"><Stethoscope size={15} className="text-emerald-600" /></span>{r.provider.name}</p>
+                      {r.provider.letterName && <p className="ml-10 text-xs text-slate-500">On letters: {r.provider.letterName}</p>}
                     </td>
                     <td className="px-5 py-3 text-slate-500">{r.provider.title || "—"}</td>
                     <td className="px-5 py-3 text-slate-500">{r.clinicName ? <span className="inline-flex items-center gap-1.5"><Building2 size={13} className="text-slate-400" /> {r.clinicName}{r.location ? ` · ${r.location}` : ""}</span> : "—"}</td>
@@ -97,7 +98,7 @@ export default function ProvidersPage() {
                     </td>
                     <td className="px-5 py-3 text-right">
                       <div className="inline-flex items-center gap-1">
-                        <button onClick={() => openEdit({ id: r.provider.id, name: r.provider.name, title: r.provider.title || "", clinicId: r.provider.clinicId ? String(r.provider.clinicId) : "", aliases: (r.provider.aliases || []).join(", ") })} className="p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"><Pencil size={15} /></button>
+                        <button onClick={() => openEdit({ id: r.provider.id, name: r.provider.name, title: r.provider.title || "", clinicId: r.provider.clinicId ? String(r.provider.clinicId) : "", aliases: (r.provider.aliases || []).join(", "), letterName: r.provider.letterName || "" })} className="p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"><Pencil size={15} /></button>
                         <button onClick={() => setRemoveTarget({ id: r.provider.id, name: r.provider.name })} className="p-2 rounded-lg text-rose-400 hover:text-rose-600 hover:bg-rose-50 transition"><Trash2 size={15} /></button>
                       </div>
                     </td>
@@ -120,6 +121,11 @@ export default function ProvidersPage() {
           <div className="space-y-3">
             <div><label className="block text-xs font-medium text-slate-500 mb-1.5">Name *</label><input className={field} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Dr. Jane Smith" /></div>
             <div><label className="block text-xs font-medium text-slate-500 mb-1.5">Title</label><input className={field} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="MD, Internal Medicine" /></div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1.5">Name on letters</label>
+              <input className={field} value={form.letterName} maxLength={120} onChange={(e) => setForm({ ...form, letterName: e.target.value })} placeholder="Jane Smith, MD" />
+              <p className="text-[11px] text-slate-400 mt-1">How the name prints on this provider's letterhead and excuse notes.</p>
+            </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1.5">Also known as (aliases)</label>
               <input className={field} value={form.aliases} onChange={(e) => setForm({ ...form, aliases: e.target.value })} placeholder="Sudad, Dr. Sudad" />

@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { cleanFields, type DocPage } from "../shared/documents";
 import {
-  STAMP_GALLERY, cleanDesign, fitSize, logoPrims, logoSize, roundedRectPath, stampDate, stampPrims, stampSize, textWidth, type Prim,
+  PRACTICE_FAX, PRACTICE_PHONE, STAMP_GALLERY, cleanDesign, fitSize, letterContact, logoPrims, logoSize, officeShortName, roundedRectPath, stampDate, stampPrims, stampSize, textWidth,
+  type Prim,
 } from "../shared/stamps";
 
 const letter: DocPage = { w: 612, h: 792, rotate: 0 };
@@ -99,7 +100,8 @@ describe("Documents editor: stamps", () => {
     expect(cleanDesign("stamp", { kind: "fancy", date: "tomorrow" })).toEqual({ kind: "plain", date: null, by: null, place: null });
     expect(cleanDesign("stamp", null)).toEqual({ kind: "plain", date: null, by: null, place: null });
     expect(cleanDesign("logo", { kind: "letterhead", place: "Katy Family Medicine", address: "1234 Katy Fwy", phone: "281-555-0101", date: "2026-11-16" }))
-      .toEqual({ kind: "letterhead", place: "Katy Family Medicine", address: "1234 Katy Fwy", phone: "281-555-0101" });
+      .toEqual({ kind: "letterhead", who: null, place: "Katy Family Medicine", address: "1234 Katy Fwy", phone: "281-555-0101", fax: null });
+    expect(cleanDesign("logo", { kind: "letterhead", who: "Dr. Sarah Chen, MD", fax: "(555) 010-0199" })).toMatchObject({ who: "Dr. Sarah Chen, MD", fax: "(555) 010-0199" });
     // Saved with the box; other boxes never carry a design.
     const [s, l, t] = cleanFields([
       { id: "s", type: "stamp", page: 0, x: 1, y: 1, w: 132, h: 60, value: "RECEIVED", color: "green", design: { kind: "dated", date: "2026-11-16", place: "MyPCP Dr" } },
@@ -125,11 +127,29 @@ describe("Documents editor: logo", () => {
     inside(full, 150, 40);
     const head = logoPrims({ ...logoSize("letterhead"), design: { kind: "letterhead", place: "Katy Family Medicine", address: "1234 Katy Fwy, Katy, TX 77494", phone: "281-555-0101" } });
     expect(texts(head).map((t) => [t.text, t.color])).toEqual([
-      ["MyPCP Dr", "brand"], ["Katy Family Medicine", "dark"], ["1234 Katy Fwy, Katy, TX 77494  ·  281-555-0101", "muted"],
+      ["MyPCP Dr", "brand"], ["Katy Family Medicine", "dark"], ["1234 Katy Fwy, Katy, TX 77494", "muted"], ["PH: 281-555-0101", "muted"],
     ]);
-    inside(head, 300, 62);
+    inside(head, 330, 74);
+    // A provider's letterhead: their name instead of the office's, and the main phone and fax.
+    const theirs = logoPrims({ w: 400, h: 84, design: { kind: "letterhead", who: "Sarah Chen, MD", place: "Katy", address: "1234 Katy Fwy, Katy, TX 77494", phone: PRACTICE_PHONE, fax: PRACTICE_FAX } });
+    expect(texts(theirs).map((t) => t.text)).toEqual(["MyPCP Dr", "Sarah Chen, MD", "1234 Katy Fwy, Katy, TX 77494", "PH: (346) 707-8978     FAX: (313) 457-1003"]);
+    inside(theirs, 400, 84);
+    // Lines go down the page in order, without touching.
+    const t = texts(theirs);
+    for (let i = 1; i < t.length; i++) expect(t[i]!.y - t[i]!.size * 0.72).toBeGreaterThan(t[i - 1]!.y);
+    // Squeezed into a small box, it still fits.
+    inside(logoPrims({ w: 200, h: 40, design: { kind: "letterhead", who: "Sarah Chen, MD", address: "1234 Katy Fwy, Katy, TX 77494", phone: PRACTICE_PHONE, fax: PRACTICE_FAX } }), 200, 40);
     // With no office chosen yet, the letterhead is just the logo and the name.
     expect(texts(logoPrims({ w: 300, h: 62, design: { kind: "letterhead" } })).map((t) => t.text)).toEqual(["MyPCP Dr"]);
+    expect(letterContact({ phone: PRACTICE_PHONE })).toBe("PH: (346) 707-8978");
+    expect(letterContact({})).toBe("");
+  });
+  it("shortens office names for stamps and letterheads", () => {
+    expect(officeShortName("MyPCP Dr - Katy")).toBe("Katy");
+    expect(officeShortName("MyPCP Dr - Highland Knolls")).toBe("Highland Knolls");
+    expect(officeShortName("mypcp dr – Cypress")).toBe("Cypress");
+    expect(officeShortName("Katy Family Medicine")).toBe("Katy Family Medicine");
+    expect(officeShortName(null)).toBeNull();
   });
   it("makes a closed rounded box for the PDF", () => {
     const d = roundedRectPath(100, 40, 6);

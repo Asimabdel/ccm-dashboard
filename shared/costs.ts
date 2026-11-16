@@ -79,7 +79,11 @@ export function clinicKeywords(c: { name: string; address?: string | null }): st
   const suffix = c.name.split(/\s+-\s+/).slice(1).join(" ").trim();
   if (suffix) keys.add(words(suffix));
   const street = (c.address ?? "").split(",")[0]!.replace(/^\s*\d+\s*/, "").replace(/\b(ste|suite|unit|#)\b.*$/i, "").trim();
-  if (street) keys.add(words(street));
+  if (street) {
+    keys.add(words(street));
+    // "Lakeview Haven Dr" is also just "Lakeview Haven" in other people's text.
+    keys.add(words(street.replace(/\s+(dr|drive)\.?$/i, "")));
+  }
   return Array.from(keys).filter((k) => k.length >= 4);
 }
 

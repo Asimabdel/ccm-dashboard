@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
-import { CheckCircle2, Clock, FilePlus2, FileSignature, FileStack, Loader2, PenLine, Search, Stethoscope, Upload, UserRound, XCircle } from "lucide-react";
+import { CheckCircle2, Clock, FilePlus2, FileSignature, FileStack, FileText, Loader2, PenLine, Search, Stethoscope, Upload, UserRound, XCircle } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { useWorkspace } from "@/components/workspace/useWorkspace";
@@ -55,6 +55,7 @@ export default function DocumentsPage() {
   const uploaded = trpc.workspace.documents.uploaded.useMutation();
   const [useTemplate, setUseTemplate] = useState<{ id: number; title: string } | null>(null);
   const [sigSetup, setSigSetup] = useState<"signature" | "initials" | null>(null);
+  const [excuseOpen, setExcuseOpen] = useState(false);
 
   /** One or several files (PDFs, photos, scans) become ONE document: the first starts it, the rest are added as pages. */
   const upload = async (list: FileList | null) => {
@@ -99,6 +100,7 @@ export default function DocumentsPage() {
         actions={enabled ? (
           <div className="flex flex-wrap gap-2">
             <MySignatureButton onEdit={setSigSetup} />
+            <Btn variant="secondary" onClick={() => setExcuseOpen(true)}><FileText size={14} /> Excuse note</Btn>
             <Btn onClick={() => fileInput.current?.click()} disabled={uploading}>
               {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Upload PDF or photos
             </Btn>
@@ -180,6 +182,7 @@ export default function DocumentsPage() {
       </>
       )}
       <UseTemplateDialog template={useTemplate} onClose={() => setUseTemplate(null)} onCreated={(id) => navigate(`/documents/${id}`)} />
+      <ExcuseNoteDialog open={excuseOpen} onClose={() => setExcuseOpen(false)} onCreated={(id) => navigate(`/documents/${id}`)} />
       <MySignatureDialog kind={sigSetup} onClose={() => setSigSetup(null)} />
     </CCMDashboardLayout>
   );
@@ -215,12 +218,87 @@ function MySignatureDialog({ kind, onClose }: { kind: "signature" | "initials" |
 
 type Subject = RouterOutputs["workspace"]["documents"]["searchPatients"][number];
 
+/** Pick a patient by name (optional), or change the one picked. */
+function PatientPick({ open, picked, onPick, autoFocus = true }: { open: boolean; picked: Subject | null; onPick: (s: Subject | null) => void; autoFocus?: boolean }) {
+  const [q, setQ] = useState("");
+  useEffect(() => { if (open) setQ(""); }, [open]);
+  const search = trpc.workspace.documents.searchPatients.useQuery({ q: q.trim() }, { enabled: open && q.trim().length >= 2 && !picked });
+  if (picked) {
+    return (
+      <div className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
+        <span><b>{picked.name}</b>{picked.dob ? <span className="text-xs text-slate-500"> · DOB {picked.dob}</span> : null}</span>
+        <button type="button" className="text-xs font-semibold text-brand hover:underline" onClick={() => onPick(null)}>Change</button>
+      </div>
+    );
+  }
+  return (
+    <>
+      <input className={inputCls} placeholder="Search patients by name (optional)" value={q} onChange={(e) => setQ(e.target.value)} autoFocus={autoFocus} />
+      <ul className="max-h-56 space-y-1 overflow-y-auto">
+        {(search.data ?? []).map((s) => (
+          <li key={s.key}>
+            <button type="button" onClick={() => onPick(s)} className="w-full rounded-md px-2 py-1.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800">
+              <b>{s.name}</b> <span className="text-xs text-slate-500">{s.dob ? `DOB ${s.dob}` : ""}{s.clinicName ? ` · ${s.clinicName}` : ""}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+/** A work / school excuse note: pick the provider (their letterhead) and the patient, and it opens ready to fill in. */
+function ExcuseNoteDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (id: number) => void }) {
+  const { user } = useAuth();
+  const providers = trpc.workspace.documents.letterProviders.useQuery(undefined, { enabled: open });
+  const [providerId, setProviderId] = useState("");
+  const [picked, setPicked] = useState<Subject | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    setPicked(null);
+    // A provider making their own note starts with themselves (their full name begins the printed one).
+    const me = (user?.name ?? "").replace(/^\s*dr\.?\s+/i, "").trim().toLowerCase();
+    const mine = me.includes(" ") ? (providers.data ?? []).find((p) => p.name.toLowerCase().replace(/^\s*dr\.?\s+/i, "").startsWith(me)) : undefined;
+    setProviderId(mine ? String(mine.id) : "");
+  }, [open, providers.data, user?.name]);
+  const make = trpc.workspace.documents.excuseNote.useMutation({
+    onSuccess: (r) => { onClose(); if (r.coSigner) toast.success("Fill it in, then send it to the provider to sign."); onCreated(r.id); },
+    onError: (e) => toast.error(e.message),
+  });
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>New excuse note</DialogTitle>
+          <DialogDescription>A work or school note on the provider's letterhead. The patient's name, date of birth and today's date fill in; you add the dates and restrictions, and the provider signs.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 text-sm">
+          <label className="block text-xs font-semibold text-slate-500">Provider
+            <select className={cn(inputCls, "mt-1")} value={providerId} onChange={(e) => setProviderId(e.target.value)}>
+              <option value="">{providers.isLoading ? "Loading…" : "Pick the provider…"}</option>
+              {(providers.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </label>
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-slate-500">Patient</p>
+            <PatientPick open={open} picked={picked} onPick={setPicked} autoFocus={false} />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+            <Btn disabled={!providerId || make.isPending} onClick={() => make.mutate({ providerId: Number(providerId), subjectKey: picked?.key ?? null })}>
+              {make.isPending && <Loader2 size={14} className="animate-spin" />} Make the note
+            </Btn>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /** Start from a template, optionally for a patient (their name, DOB, phone… fill in where the template says). */
 function UseTemplateDialog({ template, onClose, onCreated }: { template: { id: number; title: string } | null; onClose: () => void; onCreated: (id: number) => void }) {
-  const [q, setQ] = useState("");
   const [picked, setPicked] = useState<Subject | null>(null);
-  useEffect(() => { if (template) { setQ(""); setPicked(null); } }, [template]);
-  const search = trpc.workspace.documents.searchPatients.useQuery({ q: q.trim() }, { enabled: !!template && q.trim().length >= 2 && !picked });
+  useEffect(() => { if (template) setPicked(null); }, [template]);
   const make = trpc.workspace.documents.fromTemplate.useMutation({ onSuccess: (r) => { onClose(); onCreated(r.id); }, onError: (e) => toast.error(e.message) });
   return (
     <Dialog open={!!template} onOpenChange={(o) => !o && onClose()}>
@@ -230,25 +308,7 @@ function UseTemplateDialog({ template, onClose, onCreated }: { template: { id: n
           <DialogDescription>Pick the patient it's for (optional): their details fill in wherever the template asks for them.</DialogDescription>
         </DialogHeader>
         <div className="space-y-3 text-sm">
-          {picked ? (
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
-              <span><b>{picked.name}</b>{picked.dob ? <span className="text-xs text-slate-500"> · DOB {picked.dob}</span> : null}</span>
-              <button type="button" className="text-xs font-semibold text-brand hover:underline" onClick={() => setPicked(null)}>Change</button>
-            </div>
-          ) : (
-            <>
-              <input className={inputCls} placeholder="Search patients by name (optional)" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
-              <ul className="max-h-56 space-y-1 overflow-y-auto">
-                {(search.data ?? []).map((s) => (
-                  <li key={s.key}>
-                    <button type="button" onClick={() => setPicked(s)} className="w-full rounded-md px-2 py-1.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800">
-                      <b>{s.name}</b> <span className="text-xs text-slate-500">{s.dob ? `DOB ${s.dob}` : ""}{s.clinicName ? ` · ${s.clinicName}` : ""}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
+          <PatientPick open={!!template} picked={picked} onPick={setPicked} />
           <div className="flex justify-end gap-2">
             <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
             <Btn disabled={make.isPending} onClick={() => template && make.mutate({ templateId: template.id, subjectKey: picked?.key ?? null })}>

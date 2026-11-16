@@ -80,6 +80,8 @@ export const providers = mysqlTable("providers", {
   aliases: json("aliases").$type<string[]>().default([]),
   /** NPI (added 2026-11-11 for Master Billing): filled the first time a payment file's rendering provider is matched by name. */
   npi: varchar("npi", { length: 10 }),
+  /** How the name prints on letterheads and excuse notes ("Sudad Al Hadad, MD"); added 2026-11-16. */
+  letterName: varchar("letterName", { length: 120 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 

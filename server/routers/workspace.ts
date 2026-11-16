@@ -849,7 +849,7 @@ export const workspaceRouter = router({
       const actor = await actorFor(ctx, "documents");
       return run(() => docs.getDocument(actor, input.id, docMeta(ctx)));
     }),
-    file: protectedProcedure.input(z.object({ id: z.number().int().positive(), which: z.enum(["source", "final"]) })).mutation(async ({ ctx, input }) => {
+    file: protectedProcedure.input(z.object({ id: z.number().int().positive(), which: z.enum(["source", "final", "copy"]) })).mutation(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "documents");
       return run(() => docs.fileFor(actor, input.id, input.which, docMeta(ctx)));
     }),
@@ -959,6 +959,16 @@ export const workspaceRouter = router({
     fromTemplate: protectedProcedure.input(z.object({ templateId: z.number().int().positive(), subjectKey: z.string().max(120).nullish() })).mutation(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "documents");
       return run(() => docs.newFromTemplate(actor, input.templateId, input.subjectKey ?? null));
+    }),
+    /** Providers to pick for an excuse note (how each name prints on letters). */
+    letterProviders: protectedProcedure.query(async ({ ctx }) => {
+      await actorFor(ctx, "documents");
+      return (await docs.letterProviders()).map((p) => ({ id: p.id, name: p.name, clinicId: p.clinicId }));
+    }),
+    /** A work / school excuse note on the provider's letterhead, optionally for a patient. */
+    excuseNote: protectedProcedure.input(z.object({ providerId: z.number().int().positive(), subjectKey: z.string().max(120).nullish() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return run(() => docs.newExcuseNote(actor, { providerId: input.providerId, subjectKey: input.subjectKey ?? null }));
     }),
     mySignature: protectedProcedure.query(async ({ ctx }) => {
       const actor = await actorFor(ctx, "documents");
