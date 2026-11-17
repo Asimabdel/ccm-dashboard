@@ -637,6 +637,9 @@ export async function callContext(actor: WorkspaceActor, patientId: number) {
   for (const s of recent) for (const k of s.keys as string[]) if (!lastCovered.has(k)) lastCovered.set(k, s.createdAt);
   const progress = row ? goalProgress(await goalCalls(patientId)) : {};
   const talk = (key: string | null) => (key ? approved.get(key)?.entry.talkingPoints ?? null : null);
+  // One question per condition (its main one, listed first), after the check-in questions everyone gets;
+  // add-ons (a complication or a combination) repeat their condition's topics, so they ask nothing extra.
+  const oneQuestion = (key: string | null, kind: "condition" | "addon") => (kind === "addon" ? [] : talk(key)?.ask.slice(0, 1) ?? []);
 
   const sections: {
     id: string; key: string | null; label: string; kind: "condition" | "addon"; diagnosis: string; onPlan: boolean;
@@ -649,14 +652,14 @@ export async function callContext(actor: WorkspaceActor, patientId: number) {
     sections.push({
       id, key: p.key, label: p.problem || p.diagnosis || (p.key ? itemLabel(p.key) : "Problem"), kind: p.kind ?? "condition", diagnosis: p.diagnosis, onPlan: true,
       goals: p.goals.filter((g) => g.trim()).map((g) => { const pr = progress[goalIdOf(id, g)]; return { goalId: goalIdOf(id, g), goal: g, latest: pr?.latest ?? null, flag: !!pr?.flag }; }),
-      ask: tp?.ask ?? [], teach: tp?.teach ?? [], lastCovered: p.key ? lastCovered.get(p.key) ?? null : null,
+      ask: oneQuestion(p.key, p.kind ?? "condition"), teach: tp?.teach ?? [], lastCovered: p.key ? lastCovered.get(p.key) ?? null : null,
     });
   }
   const onPlan = new Set(problems.map((p) => p.key).filter(Boolean));
   for (const c of conditions) {
     if (onPlan.has(c.key)) continue;
     const tp = talk(c.key);
-    sections.push({ id: c.key, key: c.key, label: c.label, kind: c.kind, diagnosis: c.diagnosis, onPlan: false, goals: [], ask: tp?.ask ?? [], teach: tp?.teach ?? [], lastCovered: lastCovered.get(c.key) ?? null });
+    sections.push({ id: c.key, key: c.key, label: c.label, kind: c.kind, diagnosis: c.diagnosis, onPlan: false, goals: [], ask: oneQuestion(c.key, c.kind), teach: tp?.teach ?? [], lastCovered: lastCovered.get(c.key) ?? null });
   }
   return {
     plan: row ? { status: statusOf(row), signedByName: row.signedByName, signedAt: row.signedAt, reviewedThisMonth: row.lastReviewedMonth === month, summary: planGoalSummary(problems, progress) } : null,
