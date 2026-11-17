@@ -39,7 +39,11 @@ export const ccmNotesRouter = router({
           reviewed: z.boolean().optional(),
           problems: z.array(z.string().max(200)).max(40).optional(),
           educationCovered: z.array(z.string().max(120)).max(40).optional(),
+          /** Care-plan goals checked with the patient on this call (what the patient reported). */
+          goals: z.array(z.object({ problem: z.string().max(400), goal: z.string().max(600), status: z.string().max(20), value: z.string().max(120).optional() })).max(80).optional(),
         }).optional(),
+        /** The condition-shaped part of the call: readings and each condition's questions (shared/ccmCall). */
+        callExtras: z.record(z.string(), z.unknown()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -52,6 +56,10 @@ export const ccmNotesRouter = router({
       const isBhi = input.program === "bhi";
       const a = input.bhiAssessment;
       const cp = input.carePlan;
+      const { GOAL_STATUS_LABELS } = await import("../../shared/carePlanProgress");
+      const { callExtrasText, cleanCallExtras } = await import("../../shared/ccmCall");
+      const extras = callExtrasText(cleanCallExtras(input.callExtras));
+      const goalLines = (cp?.goals ?? []).map((g) => `  - ${g.problem}: "${g.goal}" → ${GOAL_STATUS_LABELS[g.status as keyof typeof GOAL_STATUS_LABELS] ?? g.status}${g.value ? ` (patient reports: ${g.value})` : ""}`);
       const bhiPrompt = `Generate a professional, concise BHI (Behavioral Health Integration, CPT 99484) monthly care-management note based on the following patient call. The note must document behavioral-health care management, be clinically appropriate, and be suitable for the medical record.
 
 Patient: ${input.patientName}
@@ -108,22 +116,28 @@ Care Plan & Education:
 - Care plan problems: ${cp.problems?.length ? cp.problems.join("; ") : "None listed"}
 - Care plan reviewed with patient on this call: ${cp.reviewed ? "Yes" : "No"}
 - Condition education provided on this call: ${cp.educationCovered?.length ? cp.educationCovered.join(", ") : "None documented"}
+- Care plan goals checked with the patient (status as reported by the patient and recorded by the coordinator):
+${goalLines.length ? goalLines.join("\n") : "  None documented"}
+` : ""}${extras.length ? `
+Condition-specific check-in (the patient's answers as recorded):
+${extras.map((l) => `- ${l}`).join("\n")}
 ` : ""}
 Generate a structured clinical note with the following sections:
 1. CHIEF COMPLAINT/REASON FOR CONTACT
 2. HISTORY OF PRESENT ILLNESS
 3. VITAL SIGNS/MEASUREMENTS (if available)
 4. MEDICATION REVIEW
-5. ASSESSMENT
+5. ASSESSMENT (a factual summary of what the patient reported; never call a reading or result normal, acceptable, high, low, controlled or uncontrolled)
 6. PLAN/RECOMMENDATIONS
-7. FOLLOW-UP${cp ? "\n8. CARE PLAN REVIEW & PATIENT EDUCATION (state only what is documented above)" : ""}
+7. FOLLOW-UP${cp ? "\n8. CARE PLAN REVIEW & PATIENT EDUCATION (state only what is documented above; list each goal checked and its status)" : ""}
 
+Report only what is documented above. Do not add diagnoses, judge whether a result is good or bad beyond what was recorded, or recommend medication changes: those are the provider's decisions.
 The note should be professional, concise (300-500 words), and ready for inclusion in the patient's medical record. Begin directly with the first section heading — do NOT add a title, patient name, date, or "completed by" line, as those are added separately at the top of the note.`;
 
       const prompt = isBhi ? bhiPrompt : ccmPrompt;
       const systemContent = isBhi
         ? "You are an experienced behavioral-health documentation specialist. Generate professional, clinically appropriate Behavioral Health Integration (BHI) care-management notes based on call summaries and validated rating scales (PHQ-9, GAD-7). Notes must be well-organized, concise, and suitable for the medical record."
-        : "You are an experienced medical documentation specialist. Generate professional, clinically appropriate CCM notes based on call summaries. Ensure notes are well-organized, concise, and suitable for medical records.";
+        : "You are an experienced medical documentation specialist. Generate professional, clinically appropriate CCM notes based on call summaries. Ensure notes are well-organized, concise, and suitable for medical records. Document only what was reported: do not interpret readings or results, diagnose, or recommend treatment changes; those are the provider's decisions.";
 
       try {
         const response = await invokeLLM({

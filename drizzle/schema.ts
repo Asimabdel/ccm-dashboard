@@ -290,6 +290,11 @@ export const ccmNotes = mysqlTable("ccmNotes", {
   // conditions' teaching points were covered (condition keys). Added 2026-10-01.
   carePlanReviewed: boolean("carePlanReviewed").default(false),
   educationCovered: json("educationCovered").$type<string[]>(),
+  // CCM: the care-plan goals checked with the patient on this call (shared/carePlanProgress GoalCheck[]),
+  // and the condition-shaped part of the call: readings + each condition's questions (shared/ccmCall CallExtras).
+  // Added 2026-11-17.
+  goalChecks: json("goalChecks").$type<unknown[]>(),
+  callExtras: json("callExtras").$type<Record<string, unknown>>(),
 
   timeSpentMinutes: int("timeSpentMinutes").default(0),
   createdAt: timestamp("createdAt").defaultNow().notNull(),

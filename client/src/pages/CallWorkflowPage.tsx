@@ -11,7 +11,9 @@ import {
 import { phq9Severity, gad7Severity, bhiCompliance } from "@/lib/ccm";
 import { MedRefillPanel } from "@/components/MedRefillPanel";
 import { PhoneLink } from "@/components/phone/PhoneLink";
-import { CallCarePlanCard } from "@/components/careplan/CallCarePlanCard";
+import { CallConditionsCard, callConditionPayload, type CallConditionState, type GoalEntry } from "@/components/careplan/CallConditionsCard";
+import { CORE_QUESTIONS, cleanCallExtras } from "@shared/ccmCall";
+import { cleanGoalChecks } from "@shared/carePlanProgress";
 
 type Responses = {
   howFeeling: string; newSymptoms: string; medicationAdherence: string; refillsNeeded: string;
@@ -83,9 +85,9 @@ export default function CallWorkflowPage() {
   const [carePlanUpdated, setCarePlanUpdated] = useState(false);
   const [bhiRisk, setBhiRisk] = useState(false);
 
-  // CCM: care plan reviewed + which conditions' teaching points were covered on this call.
-  const [planReviewed, setPlanReviewed] = useState(false);
-  const [covered, setCovered] = useState<string[]>([]);
+  // CCM: condition by condition — care-plan goals checked, each condition's questions, readings, teaching
+  // covered, and whether the plan was reviewed with the patient on this call.
+  const [cond, setCond] = useState<CallConditionState>({ goals: {}, answers: {}, readings: {}, covered: [], reviewed: false });
   const callCtx = trpc.workspace.carePlans.forCall.useQuery({ patientId: patientId! }, { enabled: !!patientId && !isBhi, retry: false });
 
   // Minutes spent on this call — entered manually, logged onto the monthly task
@@ -115,8 +117,18 @@ export default function CallWorkflowPage() {
       if (n.behavioralStatus) setBehavioralStatus(n.behavioralStatus);
       if (n.carePlanUpdated) setCarePlanUpdated(true);
       if (n.bhiRiskFlag) setBhiRisk(true);
-      if (n.carePlanReviewed) setPlanReviewed(true);
-      if (Array.isArray(n.educationCovered)) setCovered(n.educationCovered as string[]);
+      // CCM condition part: goals, answers, readings (older notes only have the two reading columns).
+      const extras = cleanCallExtras(n.callExtras);
+      const goals: Record<string, GoalEntry> = {};
+      for (const g of cleanGoalChecks(n.goalChecks)) goals[g.goalId] = { problemId: g.problemId, problem: g.problem, goal: g.goal, status: g.status, value: g.value };
+      const answers: CallConditionState["answers"] = {};
+      for (const c of extras.conditions) answers[c.key] = Object.fromEntries(c.answers.map((x) => [x.q, x.a]));
+      setCond({
+        goals, answers,
+        readings: { ...extras.readings, ...(extras.readings.bp ? {} : n.bloodPressureReading ? { bp: n.bloodPressureReading } : {}), ...(extras.readings.sugar ? {} : n.bloodSugarReading ? { sugar: n.bloodSugarReading } : {}) },
+        covered: Array.isArray(n.educationCovered) ? (n.educationCovered as string[]) : [],
+        reviewed: !!n.carePlanReviewed,
+      });
       setHydrated(true);
     } else if (task.data && !existingNote.data && !hydrated && existingNote.isFetched) {
       setHydrated(true);
@@ -146,7 +158,8 @@ export default function CallWorkflowPage() {
   const set = (k: keyof Responses, v: string) => setResponses((r) => ({ ...r, [k]: v }));
   const p = patient.data?.patient;
   const conditions: string[] = (isBhi ? (p?.bhiConditions as string[]) : (p?.chronicConditions as string[])) || [];
-  const script = isBhi ? BHI_SCRIPT : SCRIPT;
+  // CCM: the check-in questions everyone gets (readings and each condition's questions are in the condition card).
+  const script = isBhi ? BHI_SCRIPT : (CORE_QUESTIONS as unknown as typeof SCRIPT);
 
   // BHI assessment fields sent to ccmNotes.save (empty object on CCM calls).
   const bhiFields = isBhi ? {
@@ -168,13 +181,19 @@ export default function CallWorkflowPage() {
   } : undefined;
 
   // CCM-only fields for ccmNotes.save and the AI note.
-  const ccmFields = isBhi ? {} : { carePlanReviewed: planReviewed, educationCovered: covered };
   const cc = callCtx.data;
+  const condPayload = callConditionPayload(cond, cc);
+  const ccmFields = isBhi ? {} : {
+    carePlanReviewed: cond.reviewed || condPayload.goalChecks.length > 0, educationCovered: cond.covered,
+    goalChecks: condPayload.goalChecks, callExtras: condPayload.callExtras,
+    bloodPressureReading: cond.readings.bp?.trim() ?? "", bloodSugarReading: cond.readings.sugar?.trim() ?? "",
+  };
   const carePlanForNote = isBhi || !cc ? undefined : {
     status: cc.plan?.status ?? "none",
-    reviewed: planReviewed,
-    problems: (cc.plan?.problems ?? []).map((x) => x.problem),
-    educationCovered: cc.conditions.filter((c) => covered.includes(c.key)).map((c) => c.label),
+    reviewed: cond.reviewed || condPayload.goalChecks.length > 0,
+    problems: cc.sections.filter((s) => s.onPlan).map((s) => s.label),
+    educationCovered: condPayload.coveredLabels,
+    goals: condPayload.goalChecks.map((g) => ({ problem: g.problem, goal: g.goal, status: g.status, value: g.value })),
   };
 
   const phqBand = phq9Severity(phq9 !== "" ? Number(phq9) : null);
@@ -308,10 +327,8 @@ export default function CallWorkflowPage() {
             </div>
           )}
 
-          {!isBhi && patientId && <CallCarePlanCard patientId={patientId} covered={covered} setCovered={setCovered} reviewed={planReviewed} setReviewed={setPlanReviewed} />}
-
           <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_28px_-18px_rgba(15,23,42,0.18)] p-6">
-            <div className="flex items-center gap-2 mb-5">{isBhi ? <Brain size={16} className="text-violet-500" /> : <Phone size={16} className="text-[hsl(17_68%_47%)]" />}<h3 className="font-bold text-slate-900">{isBhi ? "Behavioral Health Check-In" : "Call Script & Documentation"}</h3></div>
+            <div className="flex items-center gap-2 mb-5">{isBhi ? <Brain size={16} className="text-violet-500" /> : <Phone size={16} className="text-[hsl(17_68%_47%)]" />}<h3 className="font-bold text-slate-900">{isBhi ? "Behavioral Health Check-In" : "Check-in questions"}</h3></div>
             <div className="space-y-5">
               {script.map((q, i) => (
                 <div key={q.key}>
@@ -322,6 +339,8 @@ export default function CallWorkflowPage() {
               ))}
             </div>
           </div>
+
+          {!isBhi && patientId && <CallConditionsCard patientId={patientId} state={cond} setState={setCond} />}
 
           {/* Medication refill requests → provider */}
           {patientId && <MedRefillPanel patientId={patientId} ccmTaskId={taskId} providerName={patient.data?.provider?.name} />}
@@ -343,7 +362,7 @@ export default function CallWorkflowPage() {
           <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_28px_-18px_rgba(15,23,42,0.18)] p-6">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2"><Sparkles size={16} className="text-[hsl(280_60%_55%)]" /><h3 className="font-bold text-slate-900">{isBhi ? "BHI Documentation Note" : "CCM Documentation Note"}</h3></div>
-              <button disabled={genNote.isPending} onClick={() => genNote.mutate({ patientName: p?.name || "Patient", localDateTime: new Date().toLocaleString(undefined, { dateStyle: "long", timeStyle: "short" }), program: isBhi ? "bhi" : "ccm", responses, bhiAssessment, carePlan: carePlanForNote })}
+              <button disabled={genNote.isPending} onClick={() => genNote.mutate({ patientName: p?.name || "Patient", localDateTime: new Date().toLocaleString(undefined, { dateStyle: "long", timeStyle: "short" }), program: isBhi ? "bhi" : "ccm", responses: isBhi ? responses : { ...responses, bloodPressureReading: cond.readings.bp ?? "", bloodSugarReading: cond.readings.sugar ?? "" }, bhiAssessment, carePlan: carePlanForNote, callExtras: isBhi ? undefined : condPayload.callExtras })}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl bg-[hsl(280_60%_55%)] text-white text-sm font-semibold hover:brightness-110 active:scale-[0.97] transition disabled:opacity-50">
                 {genNote.isPending ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Generate with AI
               </button>

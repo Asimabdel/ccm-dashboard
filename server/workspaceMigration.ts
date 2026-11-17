@@ -1539,6 +1539,9 @@ const INTAKE_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: "documents", column: "patientSignedAt", ddl: "`patientSignedAt` datetime NULL AFTER `patientPacketId`" },
   { table: "documents", column: "patientSignerName", ddl: "`patientSignerName` varchar(160) NULL AFTER `patientSignedAt`" },
   { table: "documentSignatures", column: "signerName", ddl: "`signerName` varchar(160) NULL AFTER `userId`" },
+  // CCM call: care-plan goals checked, and the condition questions + readings (2026-11-17).
+  { table: "ccmNotes", column: "goalChecks", ddl: "`goalChecks` json NULL AFTER `educationCovered`" },
+  { table: "ccmNotes", column: "callExtras", ddl: "`callExtras` json NULL AFTER `goalChecks`" },
 ];
 async function upgradeIntake(db: Db): Promise<string[]> {
   const applied: string[] = [];

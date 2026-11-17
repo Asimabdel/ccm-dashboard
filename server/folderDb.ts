@@ -465,6 +465,22 @@ export async function addFileFromStorage(actor: WorkspaceActor, input: { subject
   return id;
 }
 
+/** File a PDF MyPCP made (e.g. a care plan) in a patient's folder. */
+export async function addGeneratedFile(actor: WorkspaceActor, input: { subjectKey: string; fileType: PatientFileType; title: string; fileName: string; bytes: Buffer; key: string }) {
+  const { care } = await assertFolder(actor, input.subjectKey, "files");
+  if (input.bytes.length > MAX_PATIENT_FILE_BYTES) throw new WorkspaceError("Files can be up to 25 MB.");
+  await putBytes(input.key, input.bytes, "application/pdf");
+  const res = await (await db()).insert(patientFiles).values({
+    subjectKey: input.subjectKey, patientId: pidOf(input.subjectKey), clinicId: care?.clinicId ?? null, fileType: input.fileType,
+    title: input.title.replace(/[\r\n<>]/g, " ").trim().slice(0, 255) || PATIENT_FILE_TYPES[input.fileType],
+    note: null, storageKey: input.key, fileName: input.fileName.slice(0, 255), mimeType: "application/pdf", sizeBytes: input.bytes.length,
+    status: "ready", uploadedByUserId: actor.id,
+  });
+  const id = (res as unknown as [{ insertId: number }])[0].insertId;
+  await audit(actor, "update_patient", { entityType: "patientFile", entityId: id, description: `Added to the patient's folder: ${PATIENT_FILE_TYPES[input.fileType]}` });
+  return id;
+}
+
 async function readyFile(actor: WorkspaceActor, id: number) {
   const [f] = await (await db()).select().from(patientFiles).where(and(eq(patientFiles.id, id), eq(patientFiles.status, "ready"), isNull(patientFiles.removedAt))).limit(1);
   if (!f) throw new WorkspaceError("That file wasn't found.", "NOT_FOUND");

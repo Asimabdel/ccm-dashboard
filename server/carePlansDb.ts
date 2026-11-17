@@ -14,9 +14,11 @@ import { randomBytes } from "node:crypto";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import {
-  ccmTasks, clinics, conditionContent, conditionContentHistory, educationSends, fhirResources, patientCarePlanSignatures,
+  ccmNotes, ccmTasks, clinics, conditionContent, conditionContentHistory, educationSends, fhirResources, patientCarePlanSignatures,
   patientCarePlans, patients, providers, users,
 } from "../drizzle/schema";
+import { cleanGoalChecks, goalIdOf, goalProgress, planGoalSummary, problemIdOf, reviewDueOf, type GoalCheck } from "../shared/carePlanProgress";
+import { readingsFor } from "../shared/ccmCall";
 import {
   DEFAULT_LIBRARY, ITEM_BY_KEY, LIBRARY_ITEMS, LIBRARY_KEYS, REVIEW_NOTES, itemLabel, resolveItems,
   type ConditionLibraryEntry, type LibraryLang, type ResolvedItem,
@@ -207,7 +209,7 @@ async function patientBasics(patientId: number) {
   const d = await db();
   const [p] = await d.select({
     id: patients.id, name: patients.name, clinicId: patients.clinicId, providerId: patients.providerId, staffId: patients.assignedStaffId,
-    ccm: patients.ccmEnrollmentStatus, apcmCarePlan: patients.apcmCarePlan, preferredLanguage: patients.preferredLanguage,
+    ccm: patients.ccmEnrollmentStatus, apcmCarePlan: patients.apcmCarePlan, preferredLanguage: patients.preferredLanguage, dateOfBirth: patients.dateOfBirth,
   }).from(patients).where(eq(patients.id, patientId)).limit(1);
   if (!p) throw new WorkspaceError("Patient not found.", "NOT_FOUND");
   const [prov] = p.providerId ? await d.select({ name: providers.name, title: providers.title, userId: providers.userId }).from(providers).where(eq(providers.id, p.providerId)).limit(1) : [];
@@ -223,11 +225,24 @@ function assertInClinic(actor: WorkspaceActor, clinicId: number | null) {
   if (actor.clinicIds && (clinicId == null || !actor.clinicIds.includes(clinicId))) throw new WorkspaceError("This patient isn't at your clinic.", "FORBIDDEN");
 }
 
+/** The care-plan goals checked on this patient's CCM calls (newest calls first; each note = one call). */
+async function goalCalls(patientId: number) {
+  const rows = await (await db()).select({ at: ccmNotes.createdAt, checks: ccmNotes.goalChecks }).from(ccmNotes)
+    .where(and(eq(ccmNotes.patientId, patientId), sql`${ccmNotes.goalChecks} IS NOT NULL`)).orderBy(desc(ccmNotes.createdAt)).limit(36);
+  return rows.map((r) => ({ at: r.at, checks: cleanGoalChecks(r.checks) as GoalCheck[] })).filter((r) => r.checks.length);
+}
+
 /** Everything the care-plan screen needs for one roster patient. */
 export async function planFor(actor: WorkspaceActor, patientId: number) {
   const p = await patientBasics(patientId);
   const d = await db();
   const [row] = await d.select().from(patientCarePlans).where(eq(patientCarePlans.patientId, patientId)).limit(1);
+  const progress = row ? goalProgress(await goalCalls(patientId)) : {};
+  // The copy the provider last signed (to show what changed since).
+  const [lastSigned] = row && row.signedVersion != null && row.signedVersion !== row.version
+    ? await d.select({ version: patientCarePlanSignatures.version, snapshot: patientCarePlanSignatures.snapshot, signedByName: patientCarePlanSignatures.signedByName, signedAt: patientCarePlanSignatures.signedAt })
+      .from(patientCarePlanSignatures).where(eq(patientCarePlanSignatures.planId, row.id)).orderBy(desc(patientCarePlanSignatures.signedAt)).limit(1)
+    : [];
   const items = await rosterItems(patientId);
   const approved = await approvedContent(items.map((c) => c.key));
   const onPlan = new Set(((row?.problems as PlanProblem[] | undefined) ?? []).map((x) => x.key).filter(Boolean));
@@ -239,8 +254,16 @@ export async function planFor(actor: WorkspaceActor, patientId: number) {
   return {
     patient: {
       id: p.id, name: p.name, ccm: p.ccm, providerName: p.providerName, coordinatorName: p.coordinatorName, clinicName: p.clinicName, clinicPhone: p.clinicPhone,
+      dob: p.dateOfBirth ? new Date(p.dateOfBirth).toISOString().slice(0, 10) : null,
       language: (langFromPreferred(p.preferredLanguage) === "es" ? "es" : "en") as LibraryLang,
     },
+    /** Each goal's results from the CCM calls (by goalIdOf), newest first. */
+    progress,
+    summary: row ? planGoalSummary(row.problems as PlanProblem[], progress) : null,
+    /** The copy the provider last signed, when the plan has changed since. */
+    lastSigned: lastSigned ? { version: lastSigned.version, signedByName: lastSigned.signedByName, signedAt: lastSigned.signedAt, plan: lastSigned.snapshot as { problems: PlanProblem[]; general: PlanGeneral } } : null,
+    /** The yearly provider review (a year after the last signature). */
+    reviewDue: reviewDueOf(row?.signedAt),
     /** The patient handouts for the items on the plan (the patient's copy uses their plain wording). */
     handouts: Object.fromEntries(Array.from(handoutContent.entries()).map(([k, v]) => [k, v.entry.education])),
     plan: row ? {
@@ -431,6 +454,8 @@ export async function planQueue(actor: WorkspaceActor, opts: { filter: PlanFilte
       provider: prov?.name ?? null, providerUserId: prov?.userId ?? null, coordinator: r.staffId ? staffName.get(r.staffId) ?? null : null,
       conditions: resolveItems(rosterNames(r)).filter((i) => i.kind === "condition").map((c) => c.label),
       status, signedByName: r.signedByName, signedAt: r.signedAt, lastReviewedMonth: r.lastReviewedMonth, updatedAt: r.planUpdatedAt,
+      /** The yearly provider review (a year after the last signature). */
+      reviewDue: reviewDueOf(r.signedAt),
     };
   });
   const counts = { to_sign: 0, none: 0, signed: 0, all: all.length };
@@ -593,26 +618,51 @@ export async function publicSent(code: string) {
 // CCM call
 // ---------------------------------------------------------------------------
 
-/** For the guided CCM call: the plan's state and each condition's approved teaching points. */
+/**
+ * For the guided CCM call, condition by condition: each section of the patient's care plan (its goals with
+ * how they went on earlier calls) joined with the condition's questions to ask and points to teach, then
+ * any condition on the record that isn't on the plan yet; and the readings their conditions call for.
+ */
 export async function callContext(actor: WorkspaceActor, patientId: number) {
   const conditions = await rosterItems(patientId);
-  const approved = await approvedContent(conditions.map((c) => c.key));
   const d = await db();
   const [row] = await d.select().from(patientCarePlans).where(eq(patientCarePlans.patientId, patientId)).limit(1);
+  const problems = (row?.problems as PlanProblem[] | undefined) ?? [];
+  const keys = Array.from(new Set([...conditions.map((c) => c.key), ...problems.map((p) => p.key).filter((k): k is string => !!k)]));
+  const approved = await approvedContent(keys);
   const month = localDateStr().slice(0, 7);
   const recent = await d.select({ keys: educationSends.conditionKeys, createdAt: educationSends.createdAt }).from(educationSends)
     .where(eq(educationSends.patientId, patientId)).orderBy(desc(educationSends.createdAt)).limit(40);
   const lastCovered = new Map<string, Date>();
   for (const s of recent) for (const k of s.keys as string[]) if (!lastCovered.has(k)) lastCovered.set(k, s.createdAt);
+  const progress = row ? goalProgress(await goalCalls(patientId)) : {};
+  const talk = (key: string | null) => (key ? approved.get(key)?.entry.talkingPoints ?? null : null);
+
+  const sections: {
+    id: string; key: string | null; label: string; kind: "condition" | "addon"; diagnosis: string; onPlan: boolean;
+    goals: { goalId: string; goal: string; latest: { status: string; value: string; at: string } | null; flag: boolean }[];
+    ask: string[]; teach: string[]; lastCovered: Date | null;
+  }[] = [];
+  for (const p of problems) {
+    const id = problemIdOf(p);
+    const tp = talk(p.key);
+    sections.push({
+      id, key: p.key, label: p.problem || p.diagnosis || (p.key ? itemLabel(p.key) : "Problem"), kind: p.kind ?? "condition", diagnosis: p.diagnosis, onPlan: true,
+      goals: p.goals.filter((g) => g.trim()).map((g) => { const pr = progress[goalIdOf(id, g)]; return { goalId: goalIdOf(id, g), goal: g, latest: pr?.latest ?? null, flag: !!pr?.flag }; }),
+      ask: tp?.ask ?? [], teach: tp?.teach ?? [], lastCovered: p.key ? lastCovered.get(p.key) ?? null : null,
+    });
+  }
+  const onPlan = new Set(problems.map((p) => p.key).filter(Boolean));
+  for (const c of conditions) {
+    if (onPlan.has(c.key)) continue;
+    const tp = talk(c.key);
+    sections.push({ id: c.key, key: c.key, label: c.label, kind: c.kind, diagnosis: c.diagnosis, onPlan: false, goals: [], ask: tp?.ask ?? [], teach: tp?.teach ?? [], lastCovered: lastCovered.get(c.key) ?? null });
+  }
   return {
-    plan: row ? {
-      status: statusOf(row), signedByName: row.signedByName, signedAt: row.signedAt, reviewedThisMonth: row.lastReviewedMonth === month,
-      problems: (row.problems as PlanProblem[]).map((p) => ({ key: p.key, problem: p.problem, goals: p.goals, selfManagement: p.selfManagement })),
-    } : null,
-    conditions: conditions.map((c) => {
-      const a = approved.get(c.key);
-      return { key: c.key, label: c.label, kind: c.kind, diagnosis: c.diagnosis, talkingPoints: a?.entry.talkingPoints ?? null, lastCovered: lastCovered.get(c.key) ?? null };
-    }),
+    plan: row ? { status: statusOf(row), signedByName: row.signedByName, signedAt: row.signedAt, reviewedThisMonth: row.lastReviewedMonth === month, summary: planGoalSummary(problems, progress) } : null,
+    sections,
+    /** The readings worth asking for, from the patient's conditions (blood pressure, blood sugar, weight). */
+    readings: readingsFor(keys),
   };
 }
 

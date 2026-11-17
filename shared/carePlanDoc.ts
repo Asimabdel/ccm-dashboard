@@ -83,21 +83,26 @@ export function emptyProblem(key: string | null, diagnosis: string, problem: str
   return { key, diagnosis, templateVersion: null, problem, expectedOutcome: "", goals: [], monitoring: [], interventions: [], selfManagement: [], symptomManagement: [], coordination: [] };
 }
 
+/** One section of the plan as plain text (copied on its own, or as part of the whole plan). */
+export function renderProblemText(p: PlanProblem, n: number): string[] {
+  const out = [`${n}. ${(p.problem || p.diagnosis).toUpperCase()}`];
+  if (p.diagnosis && p.diagnosis !== p.problem) out.push(`  Diagnosis: ${p.diagnosis}`);
+  if (p.expectedOutcome.trim()) out.push(`  Expected outcome: ${p.expectedOutcome.trim()}`);
+  for (const f of PLAN_LIST_FIELDS) {
+    const items = p[f].map((x) => x.trim()).filter(Boolean);
+    if (!items.length) continue;
+    out.push(`  ${PLAN_FIELD_LABELS[f]}:`);
+    for (const x of items) out.push(`    • ${x}`);
+  }
+  return out;
+}
+
 /** The plain-text copy of a plan (kept on the patient record, e.g. as the APCM care plan, and for notes). */
-export function renderPlanText(plan: { problems: PlanProblem[]; general: PlanGeneral }, who: { patientName: string; signedBy?: string | null; signedAt?: Date | string | null }): string {
-  const out: string[] = ["COMPREHENSIVE CARE PLAN (CHRONIC CARE MANAGEMENT)", `Patient: ${who.patientName}`, ""];
+export function renderPlanText(plan: { problems: PlanProblem[]; general: PlanGeneral }, who: { patientName: string; dob?: string | null; signedBy?: string | null; signedAt?: Date | string | null }): string {
+  const out: string[] = ["COMPREHENSIVE CARE PLAN (CHRONIC CARE MANAGEMENT)", `Patient: ${who.patientName}${who.dob ? ` (DOB ${who.dob})` : ""}`, ""];
   out.push("PROBLEM LIST");
   plan.problems.forEach((p, i) => out.push(`  ${i + 1}. ${p.problem}${p.diagnosis && p.diagnosis !== p.problem ? ` (${p.diagnosis})` : ""}`));
-  plan.problems.forEach((p, i) => {
-    out.push("", `${i + 1}. ${p.problem.toUpperCase()}`);
-    if (p.expectedOutcome.trim()) out.push(`  Expected outcome: ${p.expectedOutcome.trim()}`);
-    for (const f of PLAN_LIST_FIELDS) {
-      const items = p[f].map((x) => x.trim()).filter(Boolean);
-      if (!items.length) continue;
-      out.push(`  ${PLAN_FIELD_LABELS[f]}:`);
-      for (const x of items) out.push(`    • ${x}`);
-    }
-  });
+  plan.problems.forEach((p, i) => out.push("", ...renderProblemText(p, i + 1)));
   for (const k of Object.keys(GENERAL_LABELS) as (keyof PlanGeneral)[]) {
     const v = plan.general[k]?.trim();
     if (v) out.push("", `${GENERAL_LABELS[k].toUpperCase()}`, `  ${v}`);

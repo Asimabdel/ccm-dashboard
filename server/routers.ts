@@ -1106,12 +1106,22 @@ export const appRouter = router({
           // ---- CCM care plan + education on this call ----
           carePlanReviewed: z.boolean().optional(),
           educationCovered: z.array(z.string().max(40)).max(40).optional(),
+          // ---- CCM: care-plan goals checked + the condition questions and readings (cleaned below) ----
+          goalChecks: z.array(z.record(z.string(), z.unknown())).max(120).optional(),
+          callExtras: z.record(z.string(), z.unknown()).optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
         requireRole(ctx, ["admin", "staff"]);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+        const { cleanGoalChecks } = await import("../shared/carePlanProgress");
+        const { cleanCallExtras } = await import("../shared/ccmCall");
+        const goalChecks = input.goalChecks !== undefined ? cleanGoalChecks(input.goalChecks) : undefined;
+        const callExtras = input.callExtras !== undefined ? cleanCallExtras(input.callExtras) : undefined;
+        // The old reading columns hold 20 characters; the full wording is kept in callExtras.
+        const shortReading = (s: string | undefined) => (s === undefined ? undefined : s.trim().slice(0, 20));
 
         const existing = await getCCMNoteByTaskId(input.ccmTaskId);
         const noteData = {
@@ -1124,8 +1134,8 @@ export const appRouter = router({
           refillsNeeded: input.refillsNeeded,
           erHospitalizationSince: input.erHospitalizationSince,
           recentSpecialistVisits: input.recentSpecialistVisits,
-          bloodPressureReading: input.bloodPressureReading,
-          bloodSugarReading: input.bloodSugarReading,
+          bloodPressureReading: shortReading(input.bloodPressureReading),
+          bloodSugarReading: shortReading(input.bloodSugarReading),
           upcomingAppointments: input.upcomingAppointments,
           followUpNeeded: input.followUpNeeded,
           patientConcerns: input.patientConcerns,
@@ -1144,6 +1154,8 @@ export const appRouter = router({
           bhiRiskFlag: input.bhiRiskFlag || false,
           ...(input.carePlanReviewed !== undefined ? { carePlanReviewed: input.carePlanReviewed } : {}),
           ...(input.educationCovered !== undefined ? { educationCovered: input.educationCovered } : {}),
+          ...(goalChecks !== undefined ? { goalChecks } : {}),
+          ...(callExtras !== undefined ? { callExtras: callExtras as unknown as Record<string, unknown> } : {}),
         };
 
         let noteId: number;
@@ -1179,10 +1191,11 @@ export const appRouter = router({
         await db.update(patients).set({ lastCalledAt: new Date() }).where(eq(patients.id, input.patientId));
 
         // Care plan reviewed / condition teaching covered on this call → the plan and the patient's education log.
-        if (input.carePlanReviewed || input.educationCovered?.length) {
+        // Checking the plan's goals with the patient is reviewing the plan with them.
+        if (input.carePlanReviewed || input.educationCovered?.length || goalChecks?.length) {
           const { recordCallEducation } = await import("./carePlansDb");
           await recordCallEducation({ id: ctx.user.id, name: ctx.user.name ?? null, role: ctx.user.role, clinicIds: null }, {
-            patientId: input.patientId, ccmTaskId: input.ccmTaskId, covered: input.educationCovered ?? [], planReviewed: !!input.carePlanReviewed,
+            patientId: input.patientId, ccmTaskId: input.ccmTaskId, covered: input.educationCovered ?? [], planReviewed: !!input.carePlanReviewed || !!goalChecks?.length,
           });
         }
 

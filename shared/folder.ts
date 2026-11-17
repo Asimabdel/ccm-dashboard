@@ -28,6 +28,7 @@ export const PATIENT_FILE_TYPES = {
   test_result: "Test result (ABI-Q / PFT / RMR)",
   referral: "Referral",
   letter: "Letter",
+  care_plan: "Care plan",
   other: "Other",
 } as const;
 export type PatientFileType = keyof typeof PATIENT_FILE_TYPES;

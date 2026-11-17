@@ -1695,10 +1695,22 @@ export const workspaceRouter = router({
       const actor = await actorFor(ctx, "carePlans");
       return run(() => carePlans.signAllMine(actor, { deadline: Date.now() + 20_000 }));
     }),
-    /** The guided CCM call's card: plan state + each condition's teaching points. */
+    /** The guided CCM call, condition by condition: plan goals, questions to ask, points to teach, readings. */
     forCall: protectedProcedure.input(z.object({ patientId: z.number().int().positive() })).query(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "carePlans");
       return run(() => carePlans.callContext(actor, input.patientId));
+    }),
+    /** The plan as a PDF: the whole clinical plan, or the patient's copy (English / Spanish). */
+    pdf: protectedProcedure.input(z.object({ patientId: z.number().int().positive(), kind: z.enum(["full", "patient"]), lang: z.enum(["en", "es"]).optional() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "carePlans");
+      const { carePlanPdf } = await import("../carePlanPdf");
+      return run(async () => { const r = await carePlanPdf(actor, input.patientId, input); return { base64: r.bytes.toString("base64"), fileName: r.fileName }; });
+    }),
+    /** File that PDF in the patient's folder. */
+    saveToFolder: protectedProcedure.input(z.object({ patientId: z.number().int().positive(), kind: z.enum(["full", "patient"]), lang: z.enum(["en", "es"]).optional() })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "carePlans");
+      const { saveCarePlanToFolder } = await import("../carePlanPdf");
+      return run(() => saveCarePlanToFolder(actor, input.patientId, input));
     }),
   }),
 

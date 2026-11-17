@@ -80,7 +80,10 @@ export default function CarePlansPage() {
     { key: "signed", label: "Signed", n: c?.signed },
     { key: "library", label: "Condition library" },
   ];
-  const thisMonth = localDateStr().slice(0, 7);
+  const today = localDateStr();
+  const thisMonth = today.slice(0, 7);
+  // "Due soon" = within the next month.
+  const soon = (() => { const x = new Date(`${today}T12:00:00`); x.setMonth(x.getMonth() + 1); return x.toISOString().slice(0, 10); })();
 
   return (
     <CCMDashboardLayout title="Care plans" pageTitle={false}>
@@ -177,6 +180,11 @@ export default function CarePlansPage() {
                     <span className={cn("rounded-full px-2.5 py-0.5 text-xs font-semibold", PLAN_STATUS[r.status]!.cls)}>{PLAN_STATUS[r.status]!.label}</span>
                     {r.signedByName && <span className="text-xs text-slate-500"><PenLine size={12} className="mr-1 inline" />{r.signedByName} · {fmtShortDate(r.signedAt)}</span>}
                     {r.status !== "none" && <span className={cn("text-xs", r.lastReviewedMonth === thisMonth ? "text-emerald-700" : "text-slate-400")}>{r.lastReviewedMonth === thisMonth ? "Reviewed this month" : "Not reviewed this month"}</span>}
+                    {r.reviewDue && r.reviewDue <= soon && (
+                      <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", r.reviewDue < today ? "bg-rose-50 text-rose-700 ring-1 ring-rose-200 dark:bg-rose-500/10 dark:text-rose-200" : "bg-amber-50 text-amber-800 ring-1 ring-amber-200 dark:bg-amber-500/10 dark:text-amber-200")}>
+                        {r.reviewDue < today ? "Yearly review overdue" : `Yearly review due ${fmtShortDate(r.reviewDue)}`}
+                      </span>
+                    )}
                   </div>
                 </Link>
               ))}
