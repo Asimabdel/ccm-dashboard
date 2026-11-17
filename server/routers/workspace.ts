@@ -1624,20 +1624,12 @@ export const workspaceRouter = router({
       const { visitCostForPatient } = await import("../visitCostDb");
       return run(() => visitCostForPatient(actor, input.key));
     }),
-    /** The Copays & deductibles tab: a day's schedule with what to expect at check-in. */
-    schedule: protectedProcedure.input(z.object({ date: dateStr })).query(async ({ ctx, input }) => {
+    /** The Copays & deductibles search: what the picked patient will likely pay today, and what to say. */
+    answer: protectedProcedure.input(z.object({ key: patientKey })).query(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "eligibility");
-      const { visitCostSchedule } = await import("../visitCostDb");
-      return run(() => visitCostSchedule(actor, input.date));
+      const { visitCostAnswer } = await import("../visitCostDb");
+      return run(() => visitCostAnswer(actor, input.key));
     }),
-    /** The same tab: everyone with paid visits on file (people who work across every office). */
-    list: protectedProcedure
-      .input(z.object({ q: z.string().max(80).default(""), kind: z.enum(["all", "copay", "deductible", "coinsurance", "nothing", "info", "none"]).default("all"), page: z.number().int().min(1).max(1000).default(1) }))
-      .query(async ({ ctx, input }) => {
-        const actor = await actorFor(ctx, "eligibility");
-        const { visitCostList } = await import("../visitCostDb");
-        return run(() => visitCostList(actor, input));
-      }),
   }),
 
   /** Program approvals: patients whose diagnoses qualify them for CCM / BHI / RPM / APCM (approvers only). */

@@ -1,253 +1,178 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "wouter";
-import { Banknote, CalendarDays, ChevronLeft, ChevronRight, Search, Users } from "lucide-react";
+import { toast } from "sonner";
+import { Banknote, CalendarDays, Copy, Loader2, Search } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
-import { Btn, EmptyState, ErrorNote, Loading, PageHeader, Panel, inputCls } from "@/components/workspace/ui";
-import { useUrlParams, useWorkspace } from "@/components/workspace/useWorkspace";
+import { EmptyState, ErrorNote, Loading, PageHeader, Panel, fmtClock, fmtDob, inputCls } from "@/components/workspace/ui";
+import { useWorkspace } from "@/components/workspace/useWorkspace";
 import { chartHref } from "@/components/chart/ChartLookup";
-import { CollectChip, ESTIMATE_NOTE } from "@/components/billing/CollectChip";
+import { ESTIMATE_NOTE } from "@/components/billing/CollectChip";
 import { cn } from "@/lib/utils";
-import { addDays, localDateStr } from "@shared/workforce";
-import { shortDay, usd } from "@shared/visitCost";
+import { shortDay } from "@shared/visitCost";
+import { SURENESS_LABELS, type AnswerKind, type Sureness } from "@shared/visitCostAnswer";
 
-type DayRow = RouterOutputs["workspace"]["visitCost"]["schedule"]["rows"][number];
-type ListRow = RouterOutputs["workspace"]["visitCost"]["list"]["rows"][number];
-type Row = Pick<DayRow, "note" | "payer" | "copay" | "nothingOwed" | "deductible" | "coinsurancePct" | "coinsuranceCents" | "lastVisit" | "visits">;
-type Kind = "all" | "copay" | "deductible" | "coinsurance" | "nothing" | "info" | "none";
-
-const KIND_LABELS: Record<Kind, string> = { all: "Everyone", copay: "Copay", deductible: "Deductible", coinsurance: "Coinsurance", nothing: "Nothing to pay", info: "Other", none: "No estimate" };
-const time = (d: Date | string) => new Date(d).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Chicago" });
-const longDay = (ymd: string) => new Date(`${ymd}T12:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
-const visitsWord = (n: number) => `${n} visit${n === 1 ? "" : "s"}`;
-const patientHref = (r: { patientId: number | null; subjectKey: string }) => (r.patientId ? `/patients/${r.patientId}?tab=insurance` : chartHref(r.subjectKey));
+type Result = RouterOutputs["workspace"]["visitCost"]["answer"];
+interface Picked { key: string; name: string; dob: string | null }
 
 /**
- * Copays & deductibles (2026-11-17): what each patient will likely owe at check-in, read from what
- * insurance said on their past visits (the payment files in Master Billing). A day's schedule for the
- * front desk, and everyone with paid visits for people who work across every office.
+ * Copays & deductibles (2026-11-17): one search. Type a patient's name or date of birth, pick them, and
+ * see what they will likely pay for today's visit (from what insurance said on their past visits), with
+ * the line to read to them in English and Spanish.
  */
 export default function CopaysPage() {
   useAuth({ redirectOnUnauthenticated: true });
-  const { visitCost, loading, limitedToClinics } = useWorkspace();
-  const [params, setParams] = useUrlParams();
-  const view = params.get("view") === "all" && !limitedToClinics ? "all" : "day";
+  const { visitCost, loading } = useWorkspace();
+  const [picked, setPicked] = useState<Picked | null>(null);
   return (
     <CCMDashboardLayout title="Copays & deductibles" pageTitle={false}>
-      <PageHeader title="Copays & deductibles" subtitle="What each patient will likely owe at check-in, from what insurance said on their past visits." />
+      <PageHeader title="Copays & deductibles" subtitle="Search a patient to see what they'll likely pay today." />
       {loading ? <Loading /> : !visitCost ? (
         <Panel><EmptyState icon={Banknote} title="Not switched on for your role yet" body="An admin is checking these estimates first. They will show here once they are opened to the team." /></Panel>
       ) : (
-        <>
-          {!limitedToClinics && (
-            <div className="mb-5 flex gap-1 overflow-x-auto border-b border-slate-200 dark:border-slate-700" role="tablist">
-              {([{ k: "day", label: "Schedule", icon: CalendarDays }, { k: "all", label: "All patients", icon: Users }] as const).map((t) => (
-                <button key={t.k} role="tab" aria-selected={view === t.k} onClick={() => setParams({ view: t.k === "day" ? null : t.k })}
-                  className={cn("-mb-px flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium", view === t.k ? "border-brand text-slate-900 dark:text-slate-50" : "border-transparent text-slate-500 hover:text-slate-800")}>
-                  <t.icon size={15} /> {t.label}
-                </button>
-              ))}
-            </div>
+        <div className="mx-auto max-w-2xl space-y-5">
+          <PatientSearch onPick={setPicked} />
+          {picked ? <AnswerCard picked={picked} /> : (
+            <p className="text-center text-sm text-slate-500">Type a name (Maria Garcia) or a date of birth (3/15/1950), or both.</p>
           )}
-          {view === "all" ? <AllPatients /> : <DaySchedule />}
-        </>
+        </div>
       )}
     </CCMDashboardLayout>
   );
 }
 
-function Footer({ through }: { through: string | null | undefined }) {
-  return <p className="mt-3 text-xs text-slate-500">{ESTIMATE_NOTE}{through ? ` Insurance payments uploaded through ${shortDay(through)}.` : ""} Patients whose insurance has no payment files uploaded show no estimate.</p>;
-}
+// ---- The search box ----
 
-// ---- The cells both views share ----
-
-function CopayCell({ r }: { r: Row }) {
-  if (r.copay) {
-    return (
-      <>
-        <span className="font-semibold tabular-nums">{usd(r.copay.cents)}</span>
-        <span className="block text-[11px] text-slate-500">{r.copay.seenOn === r.copay.outOf ? `on ${r.copay.outOf === 1 ? "their last visit" : r.copay.outOf === 2 ? "both visits" : `all ${r.copay.outOf} visits`}` : `on ${r.copay.seenOn} of ${visitsWord(r.copay.outOf)}`}{r.copay.fromLastYear ? ", last year" : ""}</span>
-      </>
-    );
-  }
-  return <span className="text-slate-400">{r.visits ? "None" : "–"}</span>;
-}
-
-function DeductibleCell({ r }: { r: Row }) {
-  const d = r.deductible;
-  if (!d) return <span className="text-slate-400">{r.visits ? "Not applied" : "–"}</span>;
-  const label = d.state === "applies" ? "Not met" : d.state === "met" ? "Looks met" : `Applied in ${d.year - 1}`;
-  return (
-    <>
-      <span className={cn("font-semibold", d.state === "applies" ? "text-violet-700 dark:text-violet-300" : d.state === "met" ? "text-emerald-700 dark:text-emerald-300" : "text-slate-700 dark:text-slate-200")}>{label}</span>
-      <span className="block text-[11px] text-slate-500 tabular-nums">{usd(d.cents)} on {visitsWord(d.visits)}{d.state === "reset" ? "; starts over in January" : " this year"}</span>
-    </>
-  );
-}
-
-function CoinsuranceCell({ r }: { r: Row }) {
-  if (!r.coinsurancePct) return <span className="text-slate-400">–</span>;
-  return <><span className="font-semibold tabular-nums">{r.coinsurancePct}%</span>{r.coinsuranceCents ? <span className="block text-[11px] text-slate-500 tabular-nums">about {usd(r.coinsuranceCents)}</span> : null}</>;
-}
-
-function ExpectCell({ r }: { r: Row }) {
-  return r.note ? <CollectChip note={r.note} className="px-2 py-1 text-[11px]" /> : <span className="text-xs text-slate-400">No estimate</span>;
-}
-
-function BasedOnCell({ r }: { r: Row }) {
-  if (r.visits) return <>{visitsWord(r.visits)} paid<span className="block text-[11px] text-slate-500">latest {shortDay(r.lastVisit)}</span></>;
-  return <span className="text-slate-500">{r.note?.basis === "plan" ? "Others on the same plan" : "No paid visits on file"}</span>;
-}
-
-const th = "px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500";
-const td = "px-3 py-2.5 align-top text-sm";
-
-// ---- A day's schedule ----
-
-function DaySchedule() {
-  const [params, setParams] = useUrlParams();
-  const today = localDateStr();
-  const urlDate = params.get("date");
-  const date = urlDate && /^\d{4}-\d{2}-\d{2}$/.test(urlDate) ? urlDate : today;
-  const setDate = (d: string) => setParams({ date: d === today ? null : d });
-  const q = trpc.workspace.visitCost.schedule.useQuery({ date }, { retry: false, staleTime: 5 * 60_000 });
-  const rows = q.data?.rows ?? [];
-  const count = (f: (r: DayRow) => boolean) => rows.filter(f).length;
-  // What the front desk can expect to collect that day: the copays, and the visits a deductible or coinsurance leaves to the patient.
-  const expected = rows.reduce((s, r) => s + (r.note && r.note.kind !== "nothing" && r.note.cents ? r.note.cents : 0), 0);
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Btn variant="secondary" size="sm" onClick={() => setDate(addDays(date, -1))} aria-label="Previous day"><ChevronLeft size={15} /></Btn>
-        <input type="date" className={cn(inputCls, "w-auto")} value={date} onChange={(e) => e.target.value && setDate(e.target.value)} aria-label="Date" />
-        <Btn variant="secondary" size="sm" onClick={() => setDate(addDays(date, 1))} aria-label="Next day"><ChevronRight size={15} /></Btn>
-        {date !== today && <Btn variant="ghost" size="sm" onClick={() => setDate(today)}>Today</Btn>}
-        <span className="text-sm font-medium text-slate-600 dark:text-slate-300">{longDay(date)}{date === today ? " (today)" : ""}</span>
-      </div>
-      {q.isLoading ? <Loading /> : q.error ? <ErrorNote message={q.error.message} /> : rows.length === 0 ? (
-        <Panel><EmptyState icon={CalendarDays} title="Nobody booked that day" body="Patients show up here from the imported Practice Fusion schedule." /></Panel>
-      ) : (
-        <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-            <Tile label="Visits" value={String(rows.length)} />
-            <Tile label="Expect to collect" value={usd(expected)} hint="copays, deductibles and coinsurance" strong />
-            <Tile label="With a copay" value={String(count((r) => r.note?.kind === "copay" || !!r.copay))} />
-            <Tile label="Deductible not met" value={String(count((r) => r.note?.kind === "deductible"))} />
-            <Tile label="No estimate" value={String(count((r) => !r.note))} hint="new, or no payment files" />
-          </div>
-          <Panel bodyClassName="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[56rem]">
-                <thead className="border-b border-slate-200 dark:border-slate-700">
-                  <tr><th className={th}>Time</th><th className={th}>Patient</th><th className={th}>Insurance</th><th className={th}>Copay</th><th className={th}>Deductible</th><th className={th}>Coinsurance</th><th className={th}>Expect at check-in</th><th className={th}>Based on</th></tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {rows.map((r) => (
-                    <tr key={r.appointmentId} className={cn(r.status === "no_show" && "opacity-60")}>
-                      <td className={cn(td, "whitespace-nowrap tabular-nums text-slate-500")}>{time(r.startsAt)}</td>
-                      <td className={td}>
-                        <Link href={patientHref(r)} className="font-semibold hover:underline">{r.name}</Link>
-                        <span className="block text-[11px] text-slate-500">{[r.provider, r.clinic, r.visitType, r.status === "no_show" ? "no-show" : null].filter(Boolean).join(" · ")}</span>
-                      </td>
-                      <td className={cn(td, "text-slate-600 dark:text-slate-300")}>{r.payer ?? <span className="text-slate-400">–</span>}</td>
-                      <td className={td}><CopayCell r={r} /></td>
-                      <td className={td}><DeductibleCell r={r} /></td>
-                      <td className={td}><CoinsuranceCell r={r} /></td>
-                      <td className={td}><ExpectCell r={r} /></td>
-                      <td className={td}><BasedOnCell r={r} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Panel>
-        </>
-      )}
-      <Footer through={q.data?.through} />
-    </div>
-  );
-}
-
-function Tile({ label, value, hint, strong }: { label: string; value: string; hint?: string; strong?: boolean }) {
-  return (
-    <div className={cn("rounded-xl border px-4 py-3", strong ? "border-teal-200 bg-teal-50 dark:border-teal-900 dark:bg-teal-950/30" : "border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900")}>
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-0.5 text-2xl font-bold tabular-nums text-slate-900 dark:text-slate-50">{value}</p>
-      {hint && <p className="text-[11px] text-slate-500">{hint}</p>}
-    </div>
-  );
-}
-
-// ---- Everyone with paid visits ----
-
-function AllPatients() {
-  const [text, setText] = useState("");
+function PatientSearch({ onPick }: { onPick: (p: Picked) => void }) {
   const [q, setQ] = useState("");
-  const [kind, setKind] = useState<Kind>("all");
-  const [page, setPage] = useState(1);
-  // Search a moment after typing stops.
+  const [debounced, setDebounced] = useState("");
+  const [open, setOpen] = useState(false);
+  const [at, setAt] = useState(0);
+  const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    const t = setTimeout(() => { setQ(text.trim()); setPage(1); }, 300);
+    const t = setTimeout(() => setDebounced(q.trim()), 250);
     return () => clearTimeout(t);
-  }, [text]);
-  const list = trpc.workspace.visitCost.list.useQuery({ q, kind, page }, { retry: false, staleTime: 5 * 60_000, placeholderData: (prev) => prev });
-  const d = list.data;
-  const pages = d ? Math.max(1, Math.ceil(d.total / d.pageSize)) : 1;
+  }, [q]);
+  const results = trpc.workspace.directory.list.useQuery({ q: debounced, status: "all", sort: "name", page: 1 }, { enabled: debounced.length >= 2, placeholderData: (prev) => prev });
+  const rows = debounced.length >= 2 ? (results.data?.rows ?? []).slice(0, 8) : [];
+  useEffect(() => setAt(0), [debounced]);
+  const pick = (r: (typeof rows)[number]) => {
+    onPick({ key: r.key, name: r.name, dob: r.dob });
+    setQ("");
+    setDebounced("");
+    setOpen(false);
+    input.current?.blur();
+  };
+  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setAt((i) => Math.min(i + 1, Math.max(rows.length - 1, 0))); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setAt((i) => Math.max(i - 1, 0)); }
+    else if (e.key === "Enter" && rows[at]) { e.preventDefault(); pick(rows[at]!); }
+    else if (e.key === "Escape") setOpen(false);
+  };
+  const showList = open && debounced.length >= 2;
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[16rem] flex-1 sm:max-w-sm">
-          <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input className={cn(inputCls, "pl-9")} placeholder="Search by patient name" value={text} onChange={(e) => setText(e.target.value)} aria-label="Search by patient name" autoComplete="off" />
+    <div className="relative">
+      <Search size={20} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+      <input ref={input} autoFocus value={q} onChange={(e) => { setQ(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)} onKeyDown={onKey}
+        className={cn(inputCls, "rounded-2xl py-4 pl-12 text-lg shadow-sm")} placeholder="Patient name or date of birth" aria-label="Find a patient by name or date of birth" autoComplete="off" role="combobox" aria-expanded={showList} />
+      {showList && (
+        <div className="absolute z-20 mt-2 max-h-96 w-full overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-600 dark:bg-slate-800" role="listbox">
+          {results.isFetching && !rows.length && <p className="px-4 py-3 text-sm text-slate-400">Searching…</p>}
+          {!results.isFetching && !rows.length && <p className="px-4 py-3 text-sm text-slate-400">No patient matches. Try the last name, or the date of birth like 3/15/1950.</p>}
+          {rows.map((r, i) => (
+            <button type="button" key={r.key} role="option" aria-selected={i === at} onMouseDown={(e) => { e.preventDefault(); pick(r); }} onMouseEnter={() => setAt(i)}
+              className={cn("flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left", i === at ? "bg-slate-100 dark:bg-slate-700" : "")}>
+              <span className="min-w-0">
+                <span className="block truncate font-semibold text-slate-900 dark:text-slate-50">{r.name}</span>
+                <span className="block text-xs text-slate-500">{[r.dob ? `DOB ${fmtDob(r.dob)}` : null, r.clinicName].filter(Boolean).join(" · ")}</span>
+              </span>
+            </button>
+          ))}
         </div>
-        {(Object.keys(KIND_LABELS) as Kind[]).map((k) => (
-          <button key={k} type="button" onClick={() => { setKind(k); setPage(1); }}
-            className={cn("rounded-full border px-3 py-1 text-xs font-semibold", kind === k ? "border-brand bg-brand/5" : "border-slate-200 dark:border-slate-700")}>
-            {KIND_LABELS[k]}{d ? ` ${(d.counts[k] ?? 0).toLocaleString("en-US")}` : ""}
-          </button>
-        ))}
-      </div>
-      {list.isLoading ? <Loading /> : list.error ? <ErrorNote message={list.error.message} /> : !d || d.rows.length === 0 ? (
-        <Panel><EmptyState icon={Users} title="Nobody matches" body="Only patients with paid office visits in the uploaded payment files are listed here." /></Panel>
-      ) : (
-        <>
-          <Panel bodyClassName="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[52rem]">
-                <thead className="border-b border-slate-200 dark:border-slate-700">
-                  <tr><th className={th}>Patient</th><th className={th}>Insurance</th><th className={th}>Copay</th><th className={th}>Deductible</th><th className={th}>Coinsurance</th><th className={th}>Expect at check-in</th><th className={th}>Based on</th></tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {d.rows.map((r: ListRow) => (
-                    <tr key={r.subjectKey}>
-                      <td className={td}>
-                        <Link href={patientHref(r)} className="font-semibold hover:underline">{r.name}</Link>
-                        {r.dob && <span className="block text-[11px] text-slate-500">born {shortDay(r.dob)}</span>}
-                      </td>
-                      <td className={cn(td, "text-slate-600 dark:text-slate-300")}>{r.payer ?? <span className="text-slate-400">–</span>}</td>
-                      <td className={td}><CopayCell r={r} /></td>
-                      <td className={td}><DeductibleCell r={r} /></td>
-                      <td className={td}><CoinsuranceCell r={r} /></td>
-                      <td className={td}><ExpectCell r={r} /></td>
-                      <td className={td}><BasedOnCell r={r} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Panel>
-          <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600 dark:text-slate-300">
-            <span>{d.total.toLocaleString("en-US")} patient{d.total === 1 ? "" : "s"} · page {d.page} of {pages}</span>
-            <span className="flex gap-2">
-              <Btn variant="secondary" size="sm" disabled={d.page <= 1} onClick={() => setPage(d.page - 1)}><ChevronLeft size={15} /> Previous</Btn>
-              <Btn variant="secondary" size="sm" disabled={d.page >= pages} onClick={() => setPage(d.page + 1)}>Next <ChevronRight size={15} /></Btn>
-            </span>
-          </div>
-        </>
       )}
-      <Footer through={d?.through} />
+    </div>
+  );
+}
+
+// ---- The answer ----
+
+const TONES: Record<AnswerKind, { box: string; text: string }> = {
+  collect: { box: "border-teal-200 bg-teal-50 dark:border-teal-900 dark:bg-teal-950/40", text: "text-teal-800 dark:text-teal-200" },
+  nothing: { box: "border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/40", text: "text-emerald-800 dark:text-emerald-200" },
+  selfpay: { box: "border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40", text: "text-amber-900 dark:text-amber-200" },
+  unknown: { box: "border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/60", text: "text-slate-700 dark:text-slate-200" },
+};
+const SURE_TONES: Record<Sureness, string> = {
+  sure: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200",
+  likely: "bg-sky-100 text-sky-800 dark:bg-sky-900/50 dark:text-sky-200",
+  guess: "bg-amber-100 text-amber-900 dark:bg-amber-900/50 dark:text-amber-200",
+};
+
+function visitLine(r: Result): string {
+  const v = r.visit;
+  if (!v) return "No visit booked: this is for an office visit.";
+  const when = v.today ? `Today at ${fmtClock(v.startsAt)}` : `Next visit ${new Date(`${v.date}T12:00:00`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} at ${fmtClock(v.startsAt)}`;
+  return [when, v.type, v.provider, v.clinic].filter(Boolean).join(" · ");
+}
+
+function AnswerCard({ picked }: { picked: Picked }) {
+  const q = trpc.workspace.visitCost.answer.useQuery({ key: picked.key }, { retry: false, staleTime: 5 * 60_000 });
+  if (q.isLoading) return <Panel><p className="flex items-center gap-2 text-sm text-slate-500"><Loader2 size={15} className="animate-spin" /> Working out what {picked.name} pays…</p></Panel>;
+  if (q.error) return <ErrorNote message={q.error.message} />;
+  const r = q.data!;
+  const a = r.answer;
+  const tone = TONES[a.kind];
+  const insuranceTab = r.patient.patientId ? `/patients/${r.patient.patientId}?tab=insurance` : chartHref(r.patient.key);
+  return (
+    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
+      <div className="border-b border-slate-100 px-5 py-4 dark:border-slate-800">
+        <p className="text-lg font-bold text-slate-900 dark:text-slate-50">{r.patient.name ?? picked.name}{(r.patient.dob ?? picked.dob) && <span className="ml-2 text-sm font-normal text-slate-500">DOB {fmtDob(r.patient.dob ?? picked.dob)}</span>}</p>
+        <p className="mt-0.5 flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300"><CalendarDays size={14} className="shrink-0" /> {visitLine(r)}</p>
+      </div>
+
+      <div className={cn("m-4 rounded-xl border px-5 py-5", tone.box)}>
+        <div className="flex flex-wrap items-center gap-3">
+          <p className={cn("text-3xl font-extrabold tracking-tight sm:text-4xl", tone.text)}>{a.headline}</p>
+          {a.sure && <span className={cn("rounded-full px-2.5 py-1 text-xs font-bold", SURE_TONES[a.sure])} title="How sure: Sure = the same amount on every recent visit; Likely = most visits agree; Best guess = little to go on, or it may have changed.">{SURENESS_LABELS[a.sure]}</span>}
+        </div>
+        <ul className="mt-3 space-y-1 text-sm text-slate-700 dark:text-slate-200">
+          {a.why.map((w, i) => <li key={i}>{w}</li>)}
+        </ul>
+      </div>
+
+      <div className="px-5 pb-4">
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">What to say</p>
+        <div className="space-y-2">
+          <SayLine lang="English" text={a.say.en} />
+          <SayLine lang="Español" text={a.say.es} />
+        </div>
+      </div>
+
+      <div className="border-t border-slate-100 bg-slate-50/60 px-5 py-3 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-800/40">
+        <p>
+          {r.insurance ? `Insurance: ${r.insurance}. ` : ""}{ESTIMATE_NOTE}{r.through ? ` Payments uploaded through ${shortDay(r.through)}.` : ""}{" "}
+          <Link href={insuranceTab} className="font-semibold text-brand hover:underline">See their past visits</Link>
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function SayLine({ lang, text }: { lang: string; text: string }) {
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`${lang} line copied`);
+    } catch {
+      toast.error("Couldn't copy. Select the text instead.");
+    }
+  };
+  return (
+    <div className="flex items-start gap-3 rounded-xl border border-slate-200 px-3 py-2.5 dark:border-slate-700">
+      <span className="mt-0.5 w-14 shrink-0 text-[11px] font-semibold uppercase text-slate-400">{lang}</span>
+      <p className="flex-1 text-sm text-slate-800 dark:text-slate-100">"{text}"</p>
+      <button type="button" onClick={copy} className="shrink-0 rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800" aria-label={`Copy the ${lang} line`}><Copy size={14} /></button>
     </div>
   );
 }

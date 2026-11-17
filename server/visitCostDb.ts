@@ -5,15 +5,15 @@
 import { gunzipSync } from "node:zlib";
 import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { appointments, appSettings, billClaims, billLines, clinics, coverageOnFile, fhirResources } from "../drizzle/schema";
+import { appointments, appSettings, billClaims, billLines, clinics, coverageOnFile, fhirResources, patients } from "../drizzle/schema";
 import type { BillAdjustment } from "../shared/masterBilling";
 import {
   coverageInfo, EXPECTED_CODES, medianCents, payerFamily, personCost, personNote, planCopay, planDeductibleLikely, planKeys, planNote, planStat, sameMemberId, visitsOf,
-  type CollectKind, type CollectNote, type CostLine, type PersonCost, type PlanMember, type PlanStat, type PlanTier,
+  type CollectNote, type CostLine, type PersonCost, type PlanMember, type PlanStat, type PlanTier,
 } from "../shared/visitCost";
+import { visitAnswer } from "../shared/visitCostAnswer";
 import { addDays } from "../shared/payments";
 import { localDateStr } from "../shared/workforce";
-import { nameKey } from "../shared/workspace";
 import { audit, subjectCare, subjectKeyFor, WorkspaceError, type WorkspaceActor } from "./workspaceDb";
 import { people } from "./masterBillingDb";
 
@@ -59,6 +59,8 @@ interface Built {
   /** Any of a person's keys (roster, schedule, Practice Fusion) → their one main key. */
   main: (key: string) => string;
   persons: Map<string, PersonCost>;
+  /** Each person's latest wellness visit in the payment files, and what insurance left to them. */
+  wellness: Map<string, { date: string; owesCents: number }>;
   coverage: Map<string, OnFile[]>;
   plans: Map<string, PlanStat>;
   /** Insurance → office visit code → what it usually allows. */
@@ -129,9 +131,13 @@ async function build(): Promise<Built> {
     }
   }
   const persons = new Map<string, PersonCost>();
+  const wellness = new Map<string, { date: string; owesCents: number }>();
   for (const [key, lines] of Array.from(byPerson.entries())) {
-    const pc = personCost(visitsOf(lines), today);
+    const visits = visitsOf(lines);
+    const pc = personCost(visits, today);
     if (pc) persons.set(key, pc);
+    const w = visits.find((v) => v.kind === "wellness" && v.date <= today);
+    if (w) wellness.set(key, { date: w.date, owesCents: w.dayOwesCents });
   }
   const allowed = new Map<string, Map<string, Median>>();
   for (const [payer, codes] of Array.from(prices.entries())) {
@@ -177,7 +183,7 @@ async function build(): Promise<Built> {
 
   const [last] = await d.select({ through: sql<string | null>`MAX(${billClaims.lastPaidDate})` }).from(billClaims).where(isNull(billClaims.supersededBy));
   const through = last?.through ? (last.through > today ? today : last.through) : null;
-  return { at: Date.now(), today, main, persons, coverage, plans, allowed, through, lines: rows.length, coverageRecords: covRows.length };
+  return { at: Date.now(), today, main, persons, wellness, coverage, plans, allowed, through, lines: rows.length, coverageRecords: covRows.length };
 }
 
 async function built(): Promise<Built> {
@@ -315,84 +321,55 @@ export async function visitCostCounts() {
 }
 
 // ---------------------------------------------------------------------------
-// The "Copays & deductibles" tab: a day's schedule, or everyone with paid visits
+// The Copays & deductibles search: one patient, one answer for today's visit
 // ---------------------------------------------------------------------------
 
-/** One patient's line: the note, and the copay / deductible / coinsurance behind it. */
-function costRow(b: Built, key: string) {
-  const m = b.main(key);
-  const pc = b.persons.get(m) ?? null;
-  const cov = pc ? null : pickCoverage(b.coverage.get(m), null);
-  const d = pc?.deductible ?? null;
-  return {
-    note: noteFor(b, key),
-    payer: pc?.payer ?? cov?.payer ?? null,
-    copay: pc?.copay ? { cents: pc.copay.cents, seenOn: pc.copay.seenOn, outOf: pc.copay.outOf, fromLastYear: pc.copay.fromLastYear } : null,
-    nothingOwed: pc?.nothingOwed ?? false,
-    deductible: d && d.state !== "none"
-      ? { state: d.state, year: d.year, visits: d.state === "reset" ? d.visitsLastYear : d.visitsThisYear, cents: d.state === "reset" ? d.centsLastYear : d.centsThisYear, lastOwedCents: d.lastOwedCents }
-      : null,
-    coinsurancePct: pc?.coinsurancePct ?? null,
-    coinsuranceCents: pc?.coinsuranceCents ?? null,
-    lastVisit: pc?.lastVisit ?? null,
-    /** Paid office visits the numbers come from (0 = none on file). */
-    visits: pc?.lookedAt ?? 0,
-  };
-}
-
-const NOT_YET = "Copays & deductibles isn't switched on for your role yet.";
-
-/** A day's schedule (in clinics the person can see), each patient with what to expect at check-in. Cancelled visits are left out. */
-export async function visitCostSchedule(actor: WorkspaceActor, date: string) {
-  if (!(await maySee(actor))) throw new WorkspaceError(NOT_YET, "FORBIDDEN");
-  const d = await db();
-  const [appts, clinicRows, b] = await Promise.all([
-    d.select({
-      id: appointments.id, patientId: appointments.patientId, patientName: appointments.patientName, dob: appointments.dateOfBirth, clinicId: appointments.clinicId,
-      providerName: appointments.providerName, startsAt: appointments.startsAt, visitType: appointments.visitType, status: appointments.status,
-    }).from(appointments).where(eq(appointments.date, date)).orderBy(asc(appointments.startsAt)),
-    d.select({ id: clinics.id, name: clinics.name }).from(clinics),
-    built(),
-  ]);
-  const clinicName = new Map(clinicRows.map((c) => [c.id, c.name]));
-  const rows = appts
-    .filter((a) => a.status !== "cancelled" && (!actor.clinicIds || (a.clinicId != null && actor.clinicIds.includes(a.clinicId))))
-    .map((a) => {
-      const key = subjectKeyFor(a.patientId, a.patientName, a.dob);
-      return {
-        appointmentId: a.id, startsAt: a.startsAt, subjectKey: key, patientId: a.patientId, name: a.patientName, provider: a.providerName,
-        clinic: a.clinicId != null ? clinicName.get(a.clinicId) ?? null : null, visitType: a.visitType, status: a.status, ...costRow(b, key),
-      };
-    });
-  await audit(actor, "view_schedule", { entityType: "visitCost", description: `Copays & deductibles for ${date} (${rows.length} visits)` });
-  return { date, today: b.today, through: b.through, everyone: actor.clinicIds === null, rows };
-}
-
-export const COST_LIST_KINDS = ["all", "copay", "deductible", "coinsurance", "nothing", "info", "none"] as const;
-export type CostListKind = (typeof COST_LIST_KINDS)[number];
-const LIST_PAGE = 50;
-
 /**
- * Everyone with paid office visits on file, by name, 50 a page: for people who work across every
- * office (the schedule view is the one limited by clinic).
+ * What the picked patient will likely pay for today's visit (or their next booked one), with what to
+ * say to them. Like the Patients directory, anyone who may use the page can look up any patient.
  */
-export async function visitCostList(actor: WorkspaceActor, input: { q: string; kind: CostListKind; page: number }) {
-  if (!(await maySee(actor))) throw new WorkspaceError(NOT_YET, "FORBIDDEN");
-  if (actor.clinicIds !== null) throw new WorkspaceError("The all-patients list is for people who work across every office. Use the schedule view.", "FORBIDDEN");
+export async function visitCostAnswer(actor: WorkspaceActor, key: string) {
+  if (!(await maySee(actor))) throw new WorkspaceError("Copays & deductibles isn't switched on for your role yet.", "FORBIDDEN");
+  const d = await db();
   const b = await built();
   const { index } = await people();
-  const all = Array.from(b.persons.keys()).map((key) => {
-    const person = index.byKey.get(key);
-    return { subjectKey: key, patientId: person?.patientId ?? null, name: person?.name ?? "(name not on file)", dob: person?.dob ?? null, ...costRow(b, key) };
+  const person = index.byKey.get(key) ?? null;
+  const keys = new Set(person?.keys ?? [key]);
+  const m = b.main(key);
+  const pc = b.persons.get(m) ?? null;
+  const cov = pickCoverage(b.coverage.get(m), pc);
+
+  // Their visit today, else the next one booked (cancelled visits don't count).
+  const upcoming = await d.select({
+    date: appointments.date, startsAt: appointments.startsAt, patientId: appointments.patientId, patientName: appointments.patientName, dob: appointments.dateOfBirth,
+    visitType: appointments.visitType, reason: appointments.reason, status: appointments.status, providerName: appointments.providerName, clinicId: appointments.clinicId,
+  }).from(appointments).where(and(gte(appointments.date, b.today))).orderBy(asc(appointments.startsAt));
+  const visit = upcoming.find((a) => a.status !== "cancelled" && keys.has(subjectKeyFor(a.patientId, a.patientName, a.dob))) ?? null;
+  const clinicName = visit?.clinicId ? (await d.select({ name: clinics.name }).from(clinics).where(eq(clinics.id, visit.clinicId)).limit(1))[0]?.name ?? null : null;
+
+  // The insurance we go by: their latest paid claim, else Practice Fusion's insurance list, else the roster.
+  let insurance: string | null = pc?.payer ?? null;
+  let insuranceFrom: "claim" | "chart" | "roster" | null = insurance ? "claim" : null;
+  if (!insurance && cov?.payer) { insurance = cov.payer; insuranceFrom = "chart"; }
+  const patientId = person?.patientId ?? (/^p:(\d+)$/.exec(key) ? Number(key.slice(2)) : null);
+  if (!insurance && patientId) {
+    const [row] = await d.select({ insurance: patients.insurance }).from(patients).where(eq(patients.id, patientId)).limit(1);
+    if (row?.insurance?.trim()) { insurance = row.insurance.trim(); insuranceFrom = "roster"; }
+  }
+
+  const payerKey = pc?.payerKey ?? cov?.payerKey ?? "";
+  const seenBefore = !!pc || Array.from(person?.visitDays ?? []).some((day) => day < b.today);
+  const answer = visitAnswer({
+    today: b.today, pc, planNote: pc ? null : noteFor(b, key), insurance, insuranceFrom,
+    visit: visit ? { date: visit.date, type: visit.visitType, reason: visit.reason } : null,
+    seenBefore, newVisitCents: payerKey ? expected(b, payerKey, "newPatient")?.cents ?? null : null, lastWellness: b.wellness.get(m) ?? null,
   });
-  const kindOf = (r: { note: CollectNote | null }): CollectKind | "none" => r.note?.kind ?? "none";
-  const counts: Record<string, number> = { all: all.length };
-  for (const r of all) counts[kindOf(r)] = (counts[kindOf(r)] ?? 0) + 1;
-  const words = nameKey(input.q).split(" ").filter(Boolean);
-  const found = all
-    .filter((r) => (input.kind === "all" || kindOf(r) === input.kind) && (!words.length || words.every((w) => nameKey(r.name).includes(w))))
-    .sort((x, y) => x.name.localeCompare(y.name));
-  const page = Math.max(1, Math.min(input.page, Math.max(1, Math.ceil(found.length / LIST_PAGE))));
-  await audit(actor, "view_patient", { entityType: "visitCost", description: `Copays & deductibles: all patients, page ${page}${words.length ? " (searched by name)" : ""}` });
-  return { total: found.length, page, pageSize: LIST_PAGE, counts, through: b.through, rows: found.slice((page - 1) * LIST_PAGE, page * LIST_PAGE) };
+  await audit(actor, "view_patient", { entityType: "visitCost", description: "Copays & deductibles: looked up what a patient pays today" });
+  return {
+    answer,
+    patient: { key, patientId, name: person?.name ?? null, dob: person?.dob ?? null },
+    visit: visit ? { date: visit.date, startsAt: visit.startsAt, today: visit.date === b.today, type: visit.visitType, provider: visit.providerName, clinic: clinicName } : null,
+    insurance,
+    through: b.through,
+  };
 }

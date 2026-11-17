@@ -22,7 +22,7 @@ if (!/@(127\.0\.0\.1|localhost)[:/]/.test(url)) {
 
 type Adj = { group: string; code: string; cents: number };
 interface Visit { daysAgo: number; code?: string; allowed: number; paid: number; pr?: [string, number][]; owes?: number }
-interface Person { payer: string; filing: string; memberId: string; group?: string; plan?: string; visits: Visit[] }
+interface Person { payer: string; filing: string; memberId: string; group?: string; plan?: string; visits: Visit[]; visitType?: string }
 
 const BCBS = "BCBS OF TEXAS";
 const copay25 = (daysAgo: number, code = "99214"): Visit => ({ daysAgo, code, allowed: code === "99204" ? 16500 : 12800, paid: (code === "99204" ? 16500 : 12800) - 2500, pr: [["3", 2500]] });
@@ -42,6 +42,10 @@ const PEOPLE: Person[] = [
   { payer: "Blue Cross Blue Shield of Texas", filing: "BL", memberId: "HDX800100208", group: "HD9000", plan: "Blue Saver HSA", visits: [] },
   { payer: BCBS, filing: "BL", memberId: "HDX800100209", group: "HD9000", plan: "Blue Saver HSA", visits: [deductible(50, "99204"), deductible(12)] },
   { payer: BCBS, filing: "BL", memberId: "HDX800100210", group: "HD9000", plan: "Blue Saver HSA", visits: [deductible(70, "99204"), deductible(33), { daysAgo: 5, allowed: 12800, paid: 6240, pr: [["1", 5000], ["2", 1560]] }] },
+  // A plan the practice no longer takes: the answer is the self-pay price.
+  { payer: "HUMANA GOLD PLUS", filing: "16", memberId: "H55500111", visits: [{ daysAgo: 45, allowed: 11000, paid: 11000 }, { daysAgo: 150, allowed: 11000, paid: 11000 }] },
+  // Booked for an annual wellness visit, with a $25 copay on office visits.
+  { payer: BCBS, filing: "BL", memberId: "ZGP800100212", visits: [copay25(30), copay25(120)], visitType: "Annual Wellness" },
 ];
 /** Extra new-patient visits (no patient attached) so the insurance has a usual new-visit price. */
 const EXTRA_NEW = 3;
@@ -101,7 +105,7 @@ async function main() {
     startsAt.setMinutes(startsAt.getMinutes() + i * 20);
     await db.insert(appointments).values({
       clinicId: pt.clinicId, patientId: pt.id, patientName: pt.name, dateOfBirth: pt.dateOfBirth, providerId: pt.providerId, providerName: pt.providerId ? provs.get(pt.providerId) ?? null : null,
-      date: today, startsAt, visitType: p.visits.length ? "Follow Up" : "New Patient", reason: "Made-up visit for the copay estimates", externalKey: `vcseed-${pt.id}-${today}`,
+      date: today, startsAt, visitType: p.visitType ?? (p.visits.length ? "Follow Up" : "New Patient"), reason: "Made-up visit for the copay estimates", externalKey: `vcseed-${pt.id}-${today}`,
     });
   }
   const bcbs = PEOPLE[0]!;
