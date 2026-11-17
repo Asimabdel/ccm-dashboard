@@ -35,6 +35,8 @@ const ENUM_ADDITIONS: { table: string; column: string; values: string[] }[] = [
   { table: "auditLogs", column: "action", values: ["view_zocdoc", "import_zocdoc"] },
   // Added 2026-11-15: Costs in Master Billing (owner only).
   { table: "auditLogs", column: "action", values: ["view_costs", "set_cost"] },
+  // Added 2026-11-17: Plan copays in Master Billing (owner only).
+  { table: "auditLogs", column: "action", values: ["set_plan_copay"] },
 ];
 
 export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
@@ -1370,6 +1372,47 @@ export const WORKSPACE_STATEMENTS: { label: string; sql: string }[] = [
     \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT \`practiceCosts_clinicId_fk\` FOREIGN KEY (\`clinicId\`) REFERENCES \`clinics\`(\`id\`),
     CONSTRAINT \`practiceCosts_createdByUserId_fk\` FOREIGN KEY (\`createdByUserId\`) REFERENCES \`users\`(\`id\`))` },
+  // Copays & deductibles (added 2026-11-17): what the AI read off insurance card photos.
+  { label: "insuranceCardReads", sql: `CREATE TABLE IF NOT EXISTS \`insuranceCardReads\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`subjectKey\` varchar(120) NOT NULL,
+    \`source\` varchar(10) NOT NULL,
+    \`sourceId\` int NOT NULL,
+    \`status\` varchar(12) NOT NULL,
+    \`payer\` varchar(160),
+    \`planName\` varchar(160),
+    \`planType\` varchar(30),
+    \`memberId\` varchar(60),
+    \`groupNumber\` varchar(60),
+    \`pcpCopayCents\` int,
+    \`specialistCopayCents\` int,
+    \`urgentCareCopayCents\` int,
+    \`erCopayCents\` int,
+    \`deductibleCents\` int,
+    \`coinsurancePct\` int,
+    \`highDeductible\` boolean NOT NULL DEFAULT false,
+    \`photoAt\` datetime,
+    \`readByUserId\` int,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    UNIQUE INDEX \`insuranceCardReads_source_unique\` (\`source\`, \`sourceId\`),
+    INDEX \`insuranceCardReads_subject_idx\` (\`subjectKey\`),
+    CONSTRAINT \`insuranceCardReads_readByUserId_fk\` FOREIGN KEY (\`readByUserId\`) REFERENCES \`users\`(\`id\`))` },
+  // Plan copays in Master Billing (owner only, added 2026-11-17): what a plan charges, as the owner confirmed it.
+  { label: "planCopays", sql: `CREATE TABLE IF NOT EXISTS \`planCopays\` (
+    \`id\` int AUTO_INCREMENT PRIMARY KEY,
+    \`planKey\` varchar(200) NOT NULL,
+    \`payerName\` varchar(160),
+    \`planName\` varchar(160),
+    \`groupNumber\` varchar(60),
+    \`answer\` varchar(12) NOT NULL,
+    \`copayCents\` int,
+    \`coinsurancePct\` int,
+    \`note\` varchar(255),
+    \`updatedByUserId\` int,
+    \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+    \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE INDEX \`planCopays_planKey_unique\` (\`planKey\`),
+    CONSTRAINT \`planCopays_updatedByUserId_fk\` FOREIGN KEY (\`updatedByUserId\`) REFERENCES \`users\`(\`id\`))` },
 ];
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;

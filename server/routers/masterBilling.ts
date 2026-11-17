@@ -242,6 +242,36 @@ export const masterBillingRouter = router({
     return zocdocImportsList();
   }),
 
+  /** Plan copays: what each plan charges for an office visit, as the owner confirms it (used for new patients). */
+  planCopays: protectedProcedure.query(async ({ ctx }) => {
+    const actor = await owner(ctx);
+    const { planCopayTable } = await import("../visitCostDb");
+    return run(() => planCopayTable(actor));
+  }),
+  savePlanCopay: protectedProcedure
+    .input(z.object({
+      key: z.string().max(200).nullish(), payerName: z.string().max(160).nullish(), planName: z.string().max(160).nullish(), groupNumber: z.string().max(60).nullish(),
+      answer: z.enum(["copay", "deductible", "nothing", "coinsurance"]), copayCents: z.number().int().min(0).max(50_000).nullish(), coinsurancePct: z.number().int().min(1).max(99).nullish(), note: z.string().max(255).nullish(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const actor = await owner(ctx);
+      const { savePlanCopay } = await import("../visitCostDb");
+      return run(() => savePlanCopay(actor, input));
+    }),
+  removePlanCopay: protectedProcedure.input(z.object({ key: z.string().max(200) })).mutation(async ({ ctx, input }) => {
+    const actor = await owner(ctx);
+    const { removePlanCopay } = await import("../visitCostDb");
+    return run(() => removePlanCopay(actor, input.key));
+  }),
+  /** Read a few waiting insurance card photos with the AI; the page calls it until none are left. */
+  readWaitingCards: protectedProcedure.mutation(async ({ ctx }) => {
+    const actor = await owner(ctx);
+    const [{ readWaitingCards }, { invalidateVisitCost }] = await Promise.all([import("../insuranceCardDb"), import("../visitCostDb")]);
+    const out = await run(() => readWaitingCards(actor));
+    if (out.read) invalidateVisitCost();
+    return out;
+  }),
+
   /** Pick the patient (null = match again; `none` = the patient isn't in MyPCP, leave it unmatched). */
   linkPatient: protectedProcedure.input(z.object({ claimId: z.number().int().positive(), subjectKey: subjectKey.nullable(), none: z.boolean().optional() }))
     .mutation(async ({ ctx, input }) => run(async () => mb.linkPatient(await owner(ctx), input.claimId, input.subjectKey, input.none === true))),

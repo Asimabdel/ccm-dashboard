@@ -493,6 +493,8 @@ export const auditLogs = mysqlTable("auditLogs", {
     // Costs in Master Billing (owner only), added 2026-11-15
     "view_costs",
     "set_cost",
+    // Plan copays in Master Billing (owner only), added 2026-11-17
+    "set_plan_copay",
   ]).notNull(),
   entityType: varchar("entityType", { length: 50 }),
   entityId: int("entityId"),
@@ -2512,3 +2514,59 @@ export const zocdocBookings = mysqlTable("zocdocBookings", {
   dateIdx: index("zocdocBookings_date_idx").on(t.appointmentDate),
   subjectIdx: index("zocdocBookings_subject_idx").on(t.subjectKey),
 }));
+
+/**
+ * What the AI read off an insurance card photo (2026-11-17), for the Copays & deductibles answer:
+ * from the health history form's card photo (source "intake", intakeFiles.id) or one staff put in the
+ * patient's folder / snapped at the desk (source "folder", patientFiles.id). Amounts in cents.
+ */
+export const insuranceCardReads = mysqlTable("insuranceCardReads", {
+  id: int("id").autoincrement().primaryKey(),
+  subjectKey: varchar("subjectKey", { length: 120 }).notNull(),
+  /** intake | folder */
+  source: varchar("source", { length: 10 }).notNull(),
+  sourceId: int("sourceId").notNull(),
+  /** read | not_card | failed */
+  status: varchar("status", { length: 12 }).notNull(),
+  payer: varchar("payer", { length: 160 }),
+  planName: varchar("planName", { length: 160 }),
+  planType: varchar("planType", { length: 30 }),
+  memberId: varchar("memberId", { length: 60 }),
+  groupNumber: varchar("groupNumber", { length: 60 }),
+  pcpCopayCents: int("pcpCopayCents"),
+  specialistCopayCents: int("specialistCopayCents"),
+  urgentCareCopayCents: int("urgentCareCopayCents"),
+  erCopayCents: int("erCopayCents"),
+  deductibleCents: int("deductibleCents"),
+  coinsurancePct: int("coinsurancePct"),
+  highDeductible: boolean("highDeductible").default(false).notNull(),
+  /** When the photo itself was taken / uploaded. */
+  photoAt: datetime("photoAt"),
+  /** Who pressed read (null = read automatically). */
+  readByUserId: int("readByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  oneRead: uniqueIndex("insuranceCardReads_source_unique").on(t.source, t.sourceId),
+  subjectIdx: index("insuranceCardReads_subject_idx").on(t.subjectKey),
+}));
+
+/**
+ * The owner's plan copay table (Master Billing → Plan copays, 2026-11-17): what a plan charges for an
+ * office visit, as Asim confirmed it. Used for patients with no visits of their own yet.
+ */
+export const planCopays = mysqlTable("planCopays", {
+  id: int("id").autoincrement().primaryKey(),
+  /** shared/visitCost.ts planKeys: "g|<group>" / "g|<insurer>|<group>", "n|<insurer>|<plan>", "p|<insurer>". */
+  planKey: varchar("planKey", { length: 200 }).notNull().unique(),
+  payerName: varchar("payerName", { length: 160 }),
+  planName: varchar("planName", { length: 160 }),
+  groupNumber: varchar("groupNumber", { length: 60 }),
+  /** copay | deductible | nothing | coinsurance */
+  answer: varchar("answer", { length: 12 }).notNull(),
+  copayCents: int("copayCents"),
+  coinsurancePct: int("coinsurancePct"),
+  note: varchar("note", { length: 255 }),
+  updatedByUserId: int("updatedByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});

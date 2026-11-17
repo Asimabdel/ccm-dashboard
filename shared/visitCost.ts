@@ -279,7 +279,8 @@ export interface CollectNote {
   /** The amount to expect at check-in, when there is one. */
   cents: number | null;
   /** own = this patient's past visits; plan = other patients on the same plan. */
-  basis: "own" | "plan";
+  /** own = their past visits; plan = other patients on the same plan; card = their insurance card; table = the owner's plan copay table. */
+  basis: "own" | "plan" | "card" | "table";
 }
 
 const visitsWord = (n: number) => `${n} visit${n === 1 ? "" : "s"}`;

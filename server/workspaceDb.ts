@@ -278,6 +278,7 @@ type AuditAction =
   | "import_zocdoc"
   | "view_costs"
   | "set_cost"
+  | "set_plan_copay"
   | "export_data";
 
 export async function audit(actor: WorkspaceActor, action: AuditAction, opts: { entityType?: string; entityId?: number; description?: string } = {}) {

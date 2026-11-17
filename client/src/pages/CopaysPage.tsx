@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
-import { Banknote, CalendarDays, Copy, Loader2, Search } from "lucide-react";
+import { Banknote, CalendarDays, Camera, Copy, CreditCard, Loader2, Search } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
@@ -10,7 +10,8 @@ import { useWorkspace } from "@/components/workspace/useWorkspace";
 import { chartHref } from "@/components/chart/ChartLookup";
 import { ESTIMATE_NOTE } from "@/components/billing/CollectChip";
 import { cn } from "@/lib/utils";
-import { shortDay } from "@shared/visitCost";
+import { shrinkImage } from "@/lib/shrinkImage";
+import { shortDay, usd } from "@shared/visitCost";
 import { SURENESS_LABELS, type AnswerKind, type Sureness } from "@shared/visitCostAnswer";
 
 type Result = RouterOutputs["workspace"]["visitCost"]["answer"];
@@ -118,6 +119,13 @@ function visitLine(r: Result): string {
 
 function AnswerCard({ picked }: { picked: Picked }) {
   const q = trpc.workspace.visitCost.answer.useQuery({ key: picked.key }, { retry: false, staleTime: 5 * 60_000 });
+  const read = trpc.workspace.visitCost.readCard.useMutation({ onSettled: () => { void q.refetch(); } });
+  const tried = useRef<string | null>(null);
+  // A card photo nobody has read yet: read it now, then show the answer again.
+  useEffect(() => {
+    const c = q.data?.card;
+    if (c?.state === "unread" && c.canRead && tried.current !== picked.key) { tried.current = picked.key; read.mutate({ key: picked.key }); }
+  }, [q.data?.card?.state, picked.key]); // eslint-disable-line react-hooks/exhaustive-deps
   if (q.isLoading) return <Panel><p className="flex items-center gap-2 text-sm text-slate-500"><Loader2 size={15} className="animate-spin" /> Working out what {picked.name} pays…</p></Panel>;
   if (q.error) return <ErrorNote message={q.error.message} />;
   const r = q.data!;
@@ -129,6 +137,7 @@ function AnswerCard({ picked }: { picked: Picked }) {
       <div className="border-b border-slate-100 px-5 py-4 dark:border-slate-800">
         <p className="text-lg font-bold text-slate-900 dark:text-slate-50">{r.patient.name ?? picked.name}{(r.patient.dob ?? picked.dob) && <span className="ml-2 text-sm font-normal text-slate-500">DOB {fmtDob(r.patient.dob ?? picked.dob)}</span>}</p>
         <p className="mt-0.5 flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300"><CalendarDays size={14} className="shrink-0" /> {visitLine(r)}</p>
+        <CardLine r={r} reading={read.isPending} patientKey={r.patient.key} onSnapped={() => { void q.refetch(); }} />
       </div>
 
       <div className={cn("m-4 rounded-xl border px-5 py-5", tone.box)}>
@@ -156,6 +165,37 @@ function AnswerCard({ picked }: { picked: Picked }) {
         </p>
       </div>
     </section>
+  );
+}
+
+/** Their insurance card: what the AI read off it, and a button to take a new photo of the front. */
+function CardLine({ r, reading, patientKey, onSnapped }: { r: Result; reading: boolean; patientKey: string; onSnapped: () => void }) {
+  const input = useRef<HTMLInputElement>(null);
+  const snap = trpc.workspace.visitCost.snapCard.useMutation({
+    onSuccess: (out) => { toast.success(out.status === "read" ? "Card saved and read" : out.status === "not_card" ? "Saved, but that photo doesn't look like an insurance card" : "Card saved to their folder"); onSnapped(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const c = r.card;
+  const pick = async (file: File | undefined) => {
+    if (!file) return;
+    try { snap.mutate({ key: patientKey, dataUrl: await shrinkImage(file) }); } catch { toast.error("That photo couldn't be opened. Try again."); }
+    if (input.current) input.current.value = "";
+  };
+  const busy = reading || snap.isPending;
+  const read = c.read;
+  const text = busy ? (snap.isPending ? "Saving and reading the card…" : "Reading their insurance card…")
+    : read ? [`Card (${shortDay(c.photoDate)})`, read.payer, read.planName, read.groupNumber ? `group ${read.groupNumber}` : null, read.pcpCopayCents != null ? `PCP ${usd(read.pcpCopayCents)}` : "no copay printed", read.highDeductible ? "HSA / high deductible" : null].filter(Boolean).join(" · ")
+    : c.state === "not_card" ? `The card photo (${shortDay(c.photoDate)}) doesn't look like an insurance card.`
+    : c.state === "unread" ? `Card photo from ${shortDay(c.photoDate)}${c.canRead ? "" : " (AI reading isn't set up here)"}.`
+    : "No insurance card photo on file.";
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+      <span className="flex min-w-0 items-center gap-1.5">{busy ? <Loader2 size={14} className="shrink-0 animate-spin" /> : <CreditCard size={14} className="shrink-0" />} <span className="min-w-0">{text}</span></span>
+      <input ref={input} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => void pick(e.target.files?.[0])} />
+      <button type="button" disabled={busy} onClick={() => input.current?.click()} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+        <Camera size={13} /> {c.state === "none" ? "Snap card" : "New card photo"}
+      </button>
+    </div>
   );
 }
 

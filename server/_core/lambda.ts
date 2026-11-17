@@ -405,6 +405,11 @@ export const handler = async (event: any, context: any) => {
     return visitCostCounts();
   }
   // Who sees those estimates: admins only (the start) or everyone with the usual access (IAM-only). { everyone: true | false } changes it.
+  // Insurance card photos and what the AI read off them (IAM-only; counts only, no patient details).
+  if (event && event.__job === "card-read-counts" && !event.requestContext && !event.version) {
+    const { cardReadCounts } = await import("../insuranceCardDb");
+    return cardReadCounts();
+  }
   if (event && event.__job === "visit-cost-audience" && !event.requestContext && !event.version) {
     const { visitCostAudienceJob } = await import("../visitCostDb");
     return visitCostAudienceJob({ everyone: typeof event.everyone === "boolean" ? event.everyone : undefined });

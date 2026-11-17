@@ -5,13 +5,14 @@
 import { gunzipSync } from "node:zlib";
 import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { appointments, appSettings, billClaims, billLines, clinics, coverageOnFile, fhirResources, patients } from "../drizzle/schema";
+import { appointments, appSettings, billClaims, billLines, clinics, coverageOnFile, fhirResources, patients, planCopays } from "../drizzle/schema";
 import type { BillAdjustment } from "../shared/masterBilling";
 import {
-  coverageInfo, EXPECTED_CODES, medianCents, payerFamily, personCost, personNote, planCopay, planDeductibleLikely, planKeys, planNote, planStat, sameMemberId, visitsOf,
+  coverageInfo, EXPECTED_CODES, medianCents, payerFamily, personCost, personNote, planCopay, planDeductibleLikely, planKeys, planNote, planStat, sameMemberId, shortDay, usd, visitsOf,
   type CollectNote, type CostLine, type PersonCost, type PlanMember, type PlanStat, type PlanTier,
 } from "../shared/visitCost";
-import { visitAnswer } from "../shared/visitCostAnswer";
+import { visitAnswer, type CardInput, type OwnerPlanInput } from "../shared/visitCostAnswer";
+import { cardReadingAvailable, cardStatus, latestCardReads, type CardRead } from "./insuranceCardDb";
 import { addDays } from "../shared/payments";
 import { localDateStr } from "../shared/workforce";
 import { audit, subjectCare, subjectKeyFor, WorkspaceError, type WorkspaceActor } from "./workspaceDb";
@@ -50,7 +51,9 @@ export async function visitCostAudienceJob(input: { everyone?: boolean }) {
 }
 
 /** A patient's insurance as Practice Fusion (or an insurance check) has it. */
-interface OnFile { payer: string | null; payerKey: string; memberId: string | null; group: string | null; plan: string | null; active: boolean; start: string | null; order: number | null }
+interface OnFile { payer: string | null; payerKey: string; memberId: string | null; group: string | null; plan: string | null; active: boolean; start: string | null; order: number | null; fromCard?: boolean }
+/** A plan's display name: insurer, plan name, group number. */
+interface PlanLabel { payer: string | null; plan: string | null; group: string | null }
 interface Median { cents: number; n: number }
 
 interface Built {
@@ -63,6 +66,11 @@ interface Built {
   wellness: Map<string, { date: string; owesCents: number }>;
   coverage: Map<string, OnFile[]>;
   plans: Map<string, PlanStat>;
+  /** Each person's newest card reading (as of the build). */
+  cards: Map<string, CardRead>;
+  /** Plan key → how to show it, and what the cards on that plan print. */
+  labels: Map<string, PlanLabel>;
+  cardStats: Map<string, { cards: number; copays: number[]; highDeductible: number }>;
   /** Insurance → office visit code → what it usually allows. */
   allowed: Map<string, Map<string, Median>>;
   /** The latest payment date in the uploaded files. */
@@ -85,7 +93,10 @@ const unpack = (raw: string | null): unknown => {
 /** The insurance record to go by: the one the latest claim was paid under; with no claims, the active primary one. */
 function pickCoverage(list: OnFile[] | undefined, pc: PersonCost | null): OnFile | null {
   if (!list?.length) return null;
-  if (pc) return list.find((c) => sameMemberId(c.memberId, pc.memberId)) ?? list.find((c) => !!c.payerKey && c.payerKey === pc.payerKey) ?? null;
+  // A card the AI read beats Practice Fusion's list (whose group field is different for nearly everyone).
+  const ordered = [...list.filter((c) => c.fromCard), ...list.filter((c) => !c.fromCard)];
+  if (pc) return ordered.find((c) => sameMemberId(c.memberId, pc.memberId)) ?? ordered.find((c) => !!c.payerKey && c.payerKey === pc.payerKey) ?? null;
+  if (ordered[0]?.fromCard) return ordered[0];
   const active = list.filter((c) => c.active);
   const pool = active.length ? active : list;
   return pool.slice().sort((a, b) => (a.order ?? 9) - (b.order ?? 9) || (b.start ?? "").localeCompare(a.start ?? ""))[0] ?? null;
@@ -166,6 +177,25 @@ async function build(): Promise<Built> {
   for (const c of await d.select().from(coverageOnFile)) {
     add(c.subjectKey, { payer: c.payerName, payerKey: payerFamily(c.payerName), memberId: c.memberId, group: c.groupNumber, plan: null, active: true, start: null, order: null });
   }
+  // Insurance cards the AI read: the most exact plan (group number and plan name as printed).
+  const cards = new Map<string, CardRead>();
+  const labels = new Map<string, PlanLabel>();
+  const cardStats = new Map<string, { cards: number; copays: number[]; highDeductible: number }>();
+  for (const r of await latestCardReads()) {
+    const k = main(r.subjectKey);
+    if (cards.has(k)) continue;
+    cards.set(k, r);
+    const payerKey = payerFamily(r.payer);
+    add(r.subjectKey, { payer: r.payer, payerKey, memberId: r.memberId, group: r.groupNumber, plan: r.planName, active: true, start: r.photoAt ? r.photoAt.toISOString().slice(0, 10) : null, order: 0, fromCard: true });
+    for (const pk of planKeys(payerKey, r.groupNumber, r.planName)) {
+      if (!labels.has(pk.key)) labels.set(pk.key, { payer: r.payer, plan: pk.tier === "payer" ? null : r.planName, group: pk.tier === "group" ? r.groupNumber : null });
+      const s = cardStats.get(pk.key) ?? { cards: 0, copays: [], highDeductible: 0 };
+      s.cards++;
+      if (r.pcpCopayCents != null) s.copays.push(r.pcpCopayCents);
+      if (r.highDeductible) s.highDeductible++;
+      cardStats.set(pk.key, s);
+    }
+  }
 
   // What each plan's patients paid: same group number, same plan name, same insurance.
   const members = new Map<string, { tier: PlanTier; list: PlanMember[] }>();
@@ -176,6 +206,7 @@ async function build(): Promise<Built> {
     for (const k of planKeys(pc.payerKey, cov?.group, cov?.plan)) {
       const m = members.get(k.key);
       if (m) m.list.push(member); else members.set(k.key, { tier: k.tier, list: [member] });
+      if (!labels.has(k.key)) labels.set(k.key, { payer: cov?.payer ?? pc.payer, plan: k.tier === "payer" ? null : cov?.plan ?? null, group: k.tier === "group" ? cov?.group ?? null : null });
     }
   }
   const plans = new Map<string, PlanStat>();
@@ -183,7 +214,46 @@ async function build(): Promise<Built> {
 
   const [last] = await d.select({ through: sql<string | null>`MAX(${billClaims.lastPaidDate})` }).from(billClaims).where(isNull(billClaims.supersededBy));
   const through = last?.through ? (last.through > today ? today : last.through) : null;
-  return { at: Date.now(), today, main, persons, wellness, coverage, plans, allowed, through, lines: rows.length, coverageRecords: covRows.length };
+  return { at: Date.now(), today, main, persons, wellness, coverage, plans, cards, labels, cardStats, allowed, through, lines: rows.length, coverageRecords: covRows.length };
+}
+
+/** After a card is read or the owner changes the table: work everything out again on the next look. */
+export function invalidateVisitCost() {
+  cache = null;
+  ownerCache = null;
+}
+
+// ---- The owner's plan copay table ----
+type OwnerRow = typeof planCopays.$inferSelect;
+let ownerCache: { at: number; rows: Map<string, OwnerRow> } | null = null;
+async function ownerRows(): Promise<Map<string, OwnerRow>> {
+  if (ownerCache && Date.now() - ownerCache.at < 30_000) return ownerCache.rows;
+  const rows = new Map((await (await db()).select().from(planCopays)).map((r) => [r.planKey, r]));
+  ownerCache = { at: Date.now(), rows };
+  return rows;
+}
+const labelText = (l: PlanLabel | null | undefined, key: string) => {
+  if (!l) return key.split("|").slice(1).join(" ");
+  const name = [l.plan, l.group ? `group ${l.group}` : null].filter(Boolean).join(", ");
+  return name ? `${name} (${l.payer ?? "insurance"})` : `${l.payer ?? "this insurance"}, any plan`;
+};
+/** The owner's row for this plan, most exact first (group number, plan name, insurance). */
+function ownerFor(rows: Map<string, OwnerRow>, keys: { key: string }[]): OwnerPlanInput | null {
+  for (const k of keys) {
+    const r = rows.get(k.key);
+    if (r) return { answer: r.answer as OwnerPlanInput["answer"], copayCents: r.copayCents, coinsurancePct: r.coinsurancePct, label: labelText({ payer: r.payerName, plan: r.planName, group: r.groupNumber }, r.planKey) };
+  }
+  return null;
+}
+const cardInput = (r: CardRead | null | undefined): CardInput | null => (r && r.status === "read" ? {
+  payer: r.payer, planName: r.planName, planType: r.planType, pcpCopayCents: r.pcpCopayCents, highDeductible: r.highDeductible, photoDate: r.photoAt ? r.photoAt.toISOString().slice(0, 10) : null,
+} : null);
+/** The plan keys to look a patient up by: their card first, then the insurance on file. */
+function keysFor(card: CardRead | null | undefined, pc: PersonCost | null, cov: OnFile | null) {
+  const fromCard = card && card.status === "read" ? planKeys(payerFamily(card.payer), card.groupNumber, card.planName) : [];
+  const payerKey = pc?.payerKey ?? cov?.payerKey ?? "";
+  const seen = new Set(fromCard.map((k) => k.key));
+  return [...fromCard, ...planKeys(payerKey, cov?.group, cov?.plan).filter((k) => !seen.has(k.key))];
 }
 
 async function built(): Promise<Built> {
@@ -212,14 +282,24 @@ function expected(b: Built, payerKey: string, kind: keyof typeof EXPECTED_CODES)
   return EXPECTED_CODES[kind].map((code) => ({ code, ...(codes.get(code) ?? { cents: 0, n: 0 }) })).filter((x) => x.n > 0).sort((x, y) => y.n - x.n)[0] ?? null;
 }
 
-function noteFor(b: Built, key: string): CollectNote | null {
+function noteFor(b: Built, key: string, owners?: Map<string, OwnerRow>): CollectNote | null {
   const m = b.main(key);
   const pc = b.persons.get(m);
   if (pc) return personNote(pc);
-  // No paid visits on file: go by other patients on the same plan.
+  // No paid visits on file: their card, then the owner's plan table, then other patients on the same plan.
+  const card = b.cards.get(m);
   const cov = pickCoverage(b.coverage.get(m), null);
   if (!cov?.payerKey) return null;
   const price = expected(b, cov.payerKey, "newPatient") ?? expected(b, cov.payerKey, "established");
+  const when = card?.photoAt ? ` (photo from ${shortDay(card.photoAt.toISOString().slice(0, 10))})` : "";
+  if (card?.highDeductible) return { kind: "deductible", basis: "card", cents: price?.cents ?? null, label: `Deductible plan (card)${price ? `: about ${usd(price.cents)}` : ""}`, detail: `Their insurance card${when} shows an HSA / high-deductible plan: they pay the full visit until the deductible is met.` };
+  if (card && card.pcpCopayCents != null) return card.pcpCopayCents
+    ? { kind: "copay", basis: "card", cents: card.pcpCopayCents, label: `Copay ${usd(card.pcpCopayCents)} (card)`, detail: `Printed on their insurance card${when}: ${usd(card.pcpCopayCents)} office visit copay.` }
+    : { kind: "nothing", basis: "card", cents: 0, label: "No copay (card)", detail: `Their insurance card${when} shows a $0 office visit copay.` };
+  const owner = owners ? ownerFor(owners, keysFor(card, null, cov)) : null;
+  if (owner?.answer === "copay" && owner.copayCents != null) return { kind: owner.copayCents ? "copay" : "nothing", basis: "table", cents: owner.copayCents, label: owner.copayCents ? `Copay ${usd(owner.copayCents)} (plan table)` : "No copay (plan table)", detail: `Your plan copay table: ${owner.label}.` };
+  if (owner?.answer === "nothing") return { kind: "nothing", basis: "table", cents: 0, label: "No copay (plan table)", detail: `Your plan copay table: ${owner.label}.` };
+  if (owner?.answer === "deductible") return { kind: "deductible", basis: "table", cents: price?.cents ?? null, label: `Deductible plan (plan table)${price ? `: about ${usd(price.cents)}` : ""}`, detail: `Your plan copay table: ${owner.label}: the deductible comes first.` };
   return planNote(planFor(b, cov.payerKey, cov.group, cov.plan), price?.cents ?? null);
 }
 
@@ -230,13 +310,13 @@ export async function visitCostForDay(actor: WorkspaceActor, date: string): Prom
   const rows = await d.select({ patientId: appointments.patientId, patientName: appointments.patientName, dob: appointments.dateOfBirth, clinicId: appointments.clinicId })
     .from(appointments).where(eq(appointments.date, date));
   if (!rows.length) return {};
-  const b = await built();
+  const [b, owners] = await Promise.all([built(), ownerRows()]);
   const out: Record<string, CollectNote> = {};
   for (const r of rows) {
     if (actor.clinicIds && (r.clinicId == null || !actor.clinicIds.includes(r.clinicId))) continue;
     const key = subjectKeyFor(r.patientId, r.patientName, r.dob);
     if (out[key]) continue;
-    const note = noteFor(b, key);
+    const note = noteFor(b, key, owners);
     if (note) out[key] = note;
   }
   return out;
@@ -260,7 +340,7 @@ export async function visitCostForPatient(actor: WorkspaceActor, key: string) {
     ? [...EXPECTED_CODES.established, ...EXPECTED_CODES.newPatient].map((code) => ({ code, ...(b.allowed.get(payerKey)?.get(code) ?? { cents: 0, n: 0 }) })).filter((x) => x.n > 0)
     : [];
   return {
-    note: noteFor(b, key),
+    note: noteFor(b, key, await ownerRows()),
     through: b.through,
     insurance: pc || cov ? { payer: pc?.payer ?? cov?.payer ?? null, group: cov?.group ?? null, plan: cov?.plan ?? null } : null,
     own: pc,
@@ -337,7 +417,13 @@ export async function visitCostAnswer(actor: WorkspaceActor, key: string) {
   const keys = new Set(person?.keys ?? [key]);
   const m = b.main(key);
   const pc = b.persons.get(m) ?? null;
-  const cov = pickCoverage(b.coverage.get(m), pc);
+  // Their newest card photo, read fresh (it may have just been snapped or read).
+  const cardNow = await cardStatus(key);
+  const card = cardNow.read && cardNow.read.status === "read" ? cardNow.read : null;
+  const cardAsCoverage: OnFile | null = card ? { payer: card.payer, payerKey: payerFamily(card.payer), memberId: card.memberId, group: card.groupNumber, plan: card.planName, active: true, start: null, order: 0, fromCard: true } : null;
+  const cov = pickCoverage([...(cardAsCoverage ? [cardAsCoverage] : []), ...(b.coverage.get(m) ?? []).filter((c) => !c.fromCard)], pc);
+  const cardIn = cardInput(card);
+  const cardNewer = !!cardIn && (!pc || !cardIn.photoDate || cardIn.photoDate > pc.lastVisit);
 
   // Their visit today, else the next one booked (cancelled visits don't count).
   const upcoming = await d.select({
@@ -348,8 +434,8 @@ export async function visitCostAnswer(actor: WorkspaceActor, key: string) {
   const clinicName = visit?.clinicId ? (await d.select({ name: clinics.name }).from(clinics).where(eq(clinics.id, visit.clinicId)).limit(1))[0]?.name ?? null : null;
 
   // The insurance we go by: their latest paid claim, else Practice Fusion's insurance list, else the roster.
-  let insurance: string | null = pc?.payer ?? null;
-  let insuranceFrom: "claim" | "chart" | "roster" | null = insurance ? "claim" : null;
+  let insurance: string | null = cardNewer && card?.payer ? card.payer : pc?.payer ?? null;
+  let insuranceFrom: "card" | "claim" | "chart" | "roster" | null = insurance ? (cardNewer && card?.payer ? "card" : "claim") : null;
   if (!insurance && cov?.payer) { insurance = cov.payer; insuranceFrom = "chart"; }
   const patientId = person?.patientId ?? (/^p:(\d+)$/.exec(key) ? Number(key.slice(2)) : null);
   if (!insurance && patientId) {
@@ -357,12 +443,18 @@ export async function visitCostAnswer(actor: WorkspaceActor, key: string) {
     if (row?.insurance?.trim()) { insurance = row.insurance.trim(); insuranceFrom = "roster"; }
   }
 
-  const payerKey = pc?.payerKey ?? cov?.payerKey ?? "";
+  const payerKey = (cardNewer && cardAsCoverage?.payerKey) || pc?.payerKey || cov?.payerKey || "";
   const seenBefore = !!pc || Array.from(person?.visitDays ?? []).some((day) => day < b.today);
+  const planKeysNow = keysFor(card, pc, cov);
+  const owner = ownerFor(await ownerRows(), planKeysNow);
+  // What other patients on the same plan paid (their card's group number / plan name first).
+  const newPrice = payerKey ? expected(b, payerKey, "newPatient")?.cents ?? null : null;
+  const followPrice = payerKey ? expected(b, payerKey, "established")?.cents ?? null : null;
+  const stat = planKeysNow.map((k) => b.plans.get(k.key)).find((s) => s && (planCopay(s) || planDeductibleLikely(s))) ?? null;
   const answer = visitAnswer({
-    today: b.today, pc, planNote: pc ? null : noteFor(b, key), insurance, insuranceFrom,
+    today: b.today, pc, planNote: planNote(stat, newPrice ?? followPrice), insurance, insuranceFrom,
     visit: visit ? { date: visit.date, type: visit.visitType, reason: visit.reason } : null,
-    seenBefore, newVisitCents: payerKey ? expected(b, payerKey, "newPatient")?.cents ?? null : null, lastWellness: b.wellness.get(m) ?? null,
+    seenBefore, newVisitCents: newPrice, followUpVisitCents: followPrice, lastWellness: b.wellness.get(m) ?? null, card: cardIn, ownerPlan: owner,
   });
   await audit(actor, "view_patient", { entityType: "visitCost", description: "Copays & deductibles: looked up what a patient pays today" });
   return {
@@ -371,5 +463,83 @@ export async function visitCostAnswer(actor: WorkspaceActor, key: string) {
     visit: visit ? { date: visit.date, startsAt: visit.startsAt, today: visit.date === b.today, type: visit.visitType, provider: visit.providerName, clinic: clinicName } : null,
     insurance,
     through: b.through,
+    card: {
+      state: !cardNow.photo ? "none" : !cardNow.read ? "unread" : cardNow.read.status,
+      canRead: cardReadingAvailable(),
+      photoDate: cardNow.photo?.at ? cardNow.photo.at.toISOString().slice(0, 10) : null,
+      read: card ? { payer: card.payer, planName: card.planName, groupNumber: card.groupNumber, pcpCopayCents: card.pcpCopayCents, specialistCopayCents: card.specialistCopayCents, highDeductible: card.highDeductible } : null,
+    },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Master Billing → Plan copays: the owner teaches what each plan charges
+// ---------------------------------------------------------------------------
+
+export const PLAN_ANSWERS = ["copay", "deductible", "nothing", "coinsurance"] as const;
+export type PlanAnswer = (typeof PLAN_ANSWERS)[number];
+
+/** Every plan worth an answer: seen on 2+ patients' payments, on a card the AI read, or already answered. */
+export async function planCopayTable(actor: WorkspaceActor) {
+  const [b, owners] = await Promise.all([built(), ownerRows()]);
+  const keys = new Set<string>([...Array.from(b.plans.entries()).filter(([, s]) => s.patients >= 2).map(([k]) => k), ...Array.from(b.cardStats.keys()), ...Array.from(owners.keys())]);
+  const tierOf = (k: string) => (k.startsWith("g|") ? "group" : k.startsWith("n|") ? "plan" : "payer") as PlanTier;
+  const counts = (xs: number[]) => {
+    const m = new Map<number, number>();
+    for (const x of xs) m.set(x, (m.get(x) ?? 0) + 1);
+    return Array.from(m.entries()).map(([cents, n]) => ({ cents, patients: n })).sort((x, y) => y.patients - x.patients);
+  };
+  const rows = Array.from(keys).map((key) => {
+    const stat = b.plans.get(key) ?? null;
+    const cs = b.cardStats.get(key) ?? null;
+    const o = owners.get(key) ?? null;
+    const label = b.labels.get(key) ?? (o ? { payer: o.payerName, plan: o.planName, group: o.groupNumber } : null);
+    const suggestion = stat ? planCopay(stat) : null;
+    return {
+      key, tier: tierOf(key), payer: label?.payer ?? null, plan: label?.plan ?? null, group: label?.group ?? null,
+      patients: stat?.patients ?? 0, claimCopays: stat?.copays.slice(0, 4) ?? [], deductiblePatients: stat?.deductiblePatients ?? 0,
+      suggestion: suggestion ? { kind: suggestion.cents ? "copay" : "nothing", cents: suggestion.cents } : stat && planDeductibleLikely(stat) ? { kind: "deductible", cents: null } : null,
+      cards: cs?.cards ?? 0, cardCopays: counts(cs?.copays ?? []).slice(0, 4), cardHighDeductible: cs?.highDeductible ?? 0,
+      answer: o ? { answer: o.answer as PlanAnswer, copayCents: o.copayCents, coinsurancePct: o.coinsurancePct, note: o.note, updatedAt: o.updatedAt } : null,
+    };
+  }).sort((x, y) => Number(!!x.answer) - Number(!!y.answer) || (y.patients + y.cards) - (x.patients + x.cards) || (x.payer ?? "").localeCompare(y.payer ?? ""));
+  const { waitingCardCount } = await import("./insuranceCardDb");
+  await audit(actor, "view_master_billing", { entityType: "planCopays", description: `Plan copays (${rows.length} plans)` });
+  return { rows: rows.slice(0, 400), total: rows.length, answered: rows.filter((r) => r.answer).length, cardsWaiting: await waitingCardCount(), canRead: cardReadingAvailable() };
+}
+
+const KEY_RE = /^(g|n|p)\|.{1,190}$/;
+
+/** Save the owner's answer for a plan (an existing key, or a new plan typed in by name). */
+export async function savePlanCopay(actor: WorkspaceActor, input: { key?: string | null; payerName?: string | null; planName?: string | null; groupNumber?: string | null; answer: PlanAnswer; copayCents?: number | null; coinsurancePct?: number | null; note?: string | null }) {
+  let key = input.key?.trim() || null;
+  if (key && !KEY_RE.test(key)) throw new WorkspaceError("That plan isn't recognized.");
+  if (!key) {
+    const payerKey = payerFamily(input.payerName);
+    if (!payerKey) throw new WorkspaceError("Type the insurance name.");
+    key = planKeys(payerKey, input.groupNumber, input.planName)[0]!.key;
+  }
+  if (input.answer === "copay" && (input.copayCents == null || input.copayCents < 0 || input.copayCents > 50_000)) throw new WorkspaceError("Type the copay amount.");
+  if (input.answer === "coinsurance" && (!input.coinsurancePct || input.coinsurancePct < 1 || input.coinsurancePct > 99)) throw new WorkspaceError("Type the coinsurance percent (1 to 99).");
+  const b = await built();
+  const label = b.labels.get(key);
+  const values = {
+    planKey: key, payerName: (input.payerName?.trim() || label?.payer || null)?.slice(0, 160) ?? null, planName: (input.planName?.trim() || label?.plan || null)?.slice(0, 160) ?? null,
+    groupNumber: (input.groupNumber?.trim() || label?.group || null)?.slice(0, 60) ?? null, answer: input.answer,
+    copayCents: input.answer === "copay" ? input.copayCents ?? null : null, coinsurancePct: input.answer === "coinsurance" ? input.coinsurancePct ?? null : null,
+    note: input.note?.trim().slice(0, 255) || null, updatedByUserId: actor.id,
+  };
+  const { planKey: _k, ...set } = values;
+  await (await db()).insert(planCopays).values(values).onDuplicateKeyUpdate({ set });
+  invalidateVisitCost();
+  await audit(actor, "set_plan_copay", { entityType: "planCopays", description: `Plan copays: set ${input.answer}${values.copayCents != null ? ` ${usd(values.copayCents)}` : ""} for ${labelText({ payer: values.payerName, plan: values.planName, group: values.groupNumber }, key)}` });
+  return { key };
+}
+
+export async function removePlanCopay(actor: WorkspaceActor, key: string) {
+  if (!KEY_RE.test(key)) throw new WorkspaceError("That plan isn't recognized.");
+  await (await db()).delete(planCopays).where(eq(planCopays.planKey, key));
+  invalidateVisitCost();
+  await audit(actor, "set_plan_copay", { entityType: "planCopays", description: "Plan copays: removed an answer" });
+  return { ok: true };
 }

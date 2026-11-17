@@ -1630,6 +1630,24 @@ export const workspaceRouter = router({
       const { visitCostAnswer } = await import("../visitCostDb");
       return run(() => visitCostAnswer(actor, input.key));
     }),
+    /** Read this patient's newest insurance card photo with the AI (the search asks when it hasn't been read yet). */
+    readCard: protectedProcedure.input(z.object({ key: patientKey })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "eligibility");
+      const [{ visitCostAllowed, invalidateVisitCost }, { readPatientCard }] = await Promise.all([import("../visitCostDb"), import("../insuranceCardDb")]);
+      if (!(await visitCostAllowed(actor.role))) throw new TRPCError({ code: "FORBIDDEN", message: "Copays & deductibles isn't switched on for your role yet." });
+      const read = await run(() => readPatientCard(actor, input.key));
+      invalidateVisitCost();
+      return { status: read.status };
+    }),
+    /** The front desk's "Snap card": a photo of the card's front goes in the patient's folder and is read right away. */
+    snapCard: protectedProcedure.input(z.object({ key: patientKey, dataUrl: z.string().max(5_200_000) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "eligibility");
+      const [{ visitCostAllowed, invalidateVisitCost }, { snapCard }] = await Promise.all([import("../visitCostDb"), import("../insuranceCardDb")]);
+      if (!(await visitCostAllowed(actor.role))) throw new TRPCError({ code: "FORBIDDEN", message: "Copays & deductibles isn't switched on for your role yet." });
+      const out = await run(() => snapCard(actor, input.key, input.dataUrl));
+      invalidateVisitCost();
+      return { saved: out.saved, status: out.read?.status ?? null };
+    }),
   }),
 
   /** Program approvals: patients whose diagnoses qualify them for CCM / BHI / RPM / APCM (approvers only). */

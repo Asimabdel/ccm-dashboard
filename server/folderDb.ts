@@ -466,14 +466,15 @@ export async function addFileFromStorage(actor: WorkspaceActor, input: { subject
 }
 
 /** File a PDF MyPCP made (e.g. a care plan) in a patient's folder. */
-export async function addGeneratedFile(actor: WorkspaceActor, input: { subjectKey: string; fileType: PatientFileType; title: string; fileName: string; bytes: Buffer; key: string }) {
+export async function addGeneratedFile(actor: WorkspaceActor, input: { subjectKey: string; fileType: PatientFileType; title: string; fileName: string; bytes: Buffer; key: string; mimeType?: string }) {
   const { care } = await assertFolder(actor, input.subjectKey, "files");
   if (input.bytes.length > MAX_PATIENT_FILE_BYTES) throw new WorkspaceError("Files can be up to 25 MB.");
-  await putBytes(input.key, input.bytes, "application/pdf");
+  const mimeType = input.mimeType ?? "application/pdf";
+  await putBytes(input.key, input.bytes, mimeType);
   const res = await (await db()).insert(patientFiles).values({
     subjectKey: input.subjectKey, patientId: pidOf(input.subjectKey), clinicId: care?.clinicId ?? null, fileType: input.fileType,
     title: input.title.replace(/[\r\n<>]/g, " ").trim().slice(0, 255) || PATIENT_FILE_TYPES[input.fileType],
-    note: null, storageKey: input.key, fileName: input.fileName.slice(0, 255), mimeType: "application/pdf", sizeBytes: input.bytes.length,
+    note: null, storageKey: input.key, fileName: input.fileName.slice(0, 255), mimeType, sizeBytes: input.bytes.length,
     status: "ready", uploadedByUserId: actor.id,
   });
   const id = (res as unknown as [{ insertId: number }])[0].insertId;
