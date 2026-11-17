@@ -58,6 +58,19 @@ export function fieldsAfterOrder(fields: DocField[], order: number[]): DocField[
 }
 
 /** What kind of file is this, from its first bytes? (A PDF's marker can sit a little way in.) */
+/**
+ * White-out for real. A white box drawn on top of a page only hides what is under it: the words (or the scanned
+ * picture) are still inside the file and can be copied out. Before a document is finished or sent, every page with
+ * white-out on it is replaced by a picture of that page with the white-out painted in, so what was covered is gone.
+ * These are the pages that need it, in order.
+ */
+export const whiteoutPages = (fields: { type: string; page: number }[]): number[] =>
+  Array.from(new Set(fields.filter((f) => f.type === "whiteout").map((f) => f.page))).sort((a, b) => a - b);
+
+/** The page picture has the page's shape (within 2%), so it lands exactly where the page was. */
+export const pictureFitsPage = (imgW: number, imgH: number, pageW: number, pageH: number) =>
+  imgW > 0 && imgH > 0 && pageW > 0 && pageH > 0 && Math.abs((imgW / imgH) / (pageW / pageH) - 1) <= 0.02;
+
 export function sniffFile(bytes: Uint8Array): "pdf" | "jpeg" | "png" | null {
   if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpeg";
   if (bytes.length > 7 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "png";

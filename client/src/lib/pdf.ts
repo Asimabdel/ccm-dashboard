@@ -5,6 +5,7 @@ import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
+export const AnnotationMode = pdfjs.AnnotationMode;
 export type PdfDoc = pdfjs.PDFDocumentProxy;
 export type PageViewport = ReturnType<pdfjs.PDFPageProxy["getViewport"]>;
 

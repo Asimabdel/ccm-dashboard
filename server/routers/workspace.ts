@@ -884,6 +884,11 @@ export const workspaceRouter = router({
       const actor = await actorFor(ctx, "documents");
       return run(() => docs.addPagesFinish(actor, input.id, input.part, input.fileName));
     }),
+    /** White-out for real: a picture of the page with the white-out painted in replaces the page (uploaded like an added page). */
+    applyWhiteout: protectedProcedure.input(z.object({ id: z.number().int().positive(), part: z.string().max(40), page: z.number().int().min(0).max(500) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "documents");
+      return run(() => docs.applyWhiteout(actor, input.id, input.part, input.page));
+    }),
     save: protectedProcedure
       .input(z.object({
         id: z.number().int().positive(),

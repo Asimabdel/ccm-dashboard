@@ -194,7 +194,7 @@ export function FieldPanel({ f, doc, onChange, onDelete, onCopy, onEveryPage, is
           ))}
         </div>
       )}
-      {f.type === "whiteout" && <p className="text-[11px] text-slate-500">Covers what is under it with white. Add a Text box on top to write something new there.</p>}
+      {f.type === "whiteout" && <p className="text-[11px] text-slate-500">Covers what is under it with white. When you finish or send, what's under it is removed from the PDF for good (that page becomes a picture). Add a Text box on top to write something new there.</p>}
       {!markup && (
         <label className="flex items-center gap-2 text-xs">
           <input type="checkbox" className="size-4 accent-teal-700" checked={!!f.required} onChange={(e) => onChange({ required: e.target.checked })} /> Required

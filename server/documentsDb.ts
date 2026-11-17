@@ -24,10 +24,11 @@ import { AI_PAGE_PROMPT, boxesFromAi, parseAiFields } from "../shared/docSuggest
 import { excuseNoteLayout, letterNameOf } from "../shared/excuseNote";
 import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
 import {
-  MAX_DOC_PAGES, TURNS, contentTurn, fieldsAfterOrder, fieldsAfterRemove, fieldsAfterTurn, imagePageLayout, movedOrder, sniffFile, turnedPage, type PageChange,
+  MAX_DOC_PAGES, TURNS, contentTurn, fieldsAfterOrder, fieldsAfterRemove, fieldsAfterTurn, imagePageLayout, movedOrder, pictureFitsPage, sniffFile, turnedPage, whiteoutPages, type PageChange,
 } from "../shared/docPages";
 import { localDateStr } from "../shared/workforce";
 import { MAX_PDF_BYTES, exists, getBytes, onS3, putBytes, readTarget, uploadTarget } from "./docStore";
+import { dropUnreachableObjects, replacePageWithPicture } from "./pdfClean";
 import { WorkspaceError, audit, createTask, loadScheduleSubjects, notifyTask, subjectCare, type WorkspaceActor } from "./workspaceDb";
 
 async function db() {
@@ -276,6 +277,8 @@ async function loadForPages(a: WorkspaceActor, id: number) {
 
 /** Write the changed PDF under a new name and point the document (pages, boxes, fingerprint) at it. */
 async function storePages(a: WorkspaceActor, doc: DocRow, pdf: PDFDocument, fields: DocField[], what: string) {
+  // A removed, turned or replaced page must really be gone from the file, not just unused inside it.
+  await dropUnreachableObjects(pdf);
   const bytes = Buffer.from(await pdf.save({ updateFieldAppearances: false }));
   if (bytes.length > MAX_PDF_BYTES) throw new WorkspaceError(`That would make the PDF too big (max ${MAX_PDF_BYTES / 1024 / 1024} MB).`);
   // The page list is read back from the file that was just written (the library's own list can be out of
@@ -396,6 +399,33 @@ export async function addPagesFinish(a: WorkspaceActor, id: number, part: string
   const added = pdf.getPageCount() - before;
   const r = await storePages(a, doc, pdf, fieldsOf(doc), `${added} page${added === 1 ? "" : "s"} added from "${name}"`);
   return { ...r, added };
+}
+
+/**
+ * White-out for real (one page). The browser draws the page (without the fill-in boxes) with the white-out
+ * painted in and sends that picture (uploaded like an added page). It replaces the page: what was under the
+ * white-out, words or a scanned picture, is gone from the file instead of only covered. The page keeps its size,
+ * turn and box positions; its other printed words become part of the picture (they can't be searched or copied).
+ */
+export async function applyWhiteout(a: WorkspaceActor, id: number, part: string, page: number) {
+  if (!PART_RE.test(part)) throw new WorkspaceError("The page picture didn't arrive. Please try again.");
+  const { doc, pdf } = await loadForPages(a, id);
+  if (!Number.isInteger(page) || page < 0 || page >= pdf.getPageCount()) throw new WorkspaceError("That page isn't in this document.");
+  const fields = fieldsOf(doc);
+  if (!whiteoutPages(fields).includes(page)) throw new WorkspaceError("There's no white-out on that page.");
+  let bytes: Buffer;
+  try { bytes = await getBytes(partKey(id, part)); } catch { throw new WorkspaceError("The page picture didn't arrive. Please try again."); }
+  const kind = sniffFile(bytes);
+  if (kind !== "jpeg" && kind !== "png") throw new WorkspaceError("The page picture didn't arrive. Please try again.");
+  const cb = pdf.getPage(page).getCropBox();
+  let img: PDFImage;
+  try { img = kind === "png" ? await pdf.embedPng(bytes) : await pdf.embedJpg(bytes); } catch { throw new WorkspaceError("The page picture couldn't be read. Nothing was changed."); }
+  if (!pictureFitsPage(img.width, img.height, cb.width, cb.height)) throw new WorkspaceError("The page picture didn't match the page. Nothing was changed.");
+  // Same size, same visible area and the same turn as the old page, so every box stays exactly where it was.
+  // (storePages then drops the old page's words and pictures from the file.)
+  replacePageWithPicture(pdf, page, img, (old) => dropFormFieldsOn(pdf, old));
+  const kept = fields.filter((f) => !(f.type === "whiteout" && f.page === page));
+  return storePages(a, doc, pdf, kept, `white-out applied on page ${page + 1}: what was under it was removed (the page is now a picture)`);
 }
 
 // ---------------------------------------------------------------------------
@@ -824,6 +854,9 @@ export async function sendOrFinish(a: WorkspaceActor, id: number, meta: ClientMe
   const fields = fieldsOf(doc);
   const missing = missingFor(fields, "preparer");
   if (missing.length) throw new WorkspaceError(`Fill in ${missing.length === 1 ? `"${missing[0]!.label || "the required box"}"` : `the ${missing.length} required boxes`} first.`);
+  // A white box on top only hides what's under it: the editor applies white-out for real before this (applyWhiteout).
+  const covered = whiteoutPages(fields);
+  if (covered.length) throw new WorkspaceError(`The white-out on page ${covered.map((p) => p + 1).join(", ")} hasn't been applied yet. Click the button again so MyPCP removes what's under it.`);
   const signers = await signersOf(id);
   const d = await db();
   if (!signers.length) {

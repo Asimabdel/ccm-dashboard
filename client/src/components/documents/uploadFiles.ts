@@ -50,9 +50,8 @@ export function blobToBase64(blob: Blob): Promise<string> {
 
 type Client = ReturnType<typeof trpc.useUtils>["client"];
 
-/** Add one more file (a PDF's pages, or a photo as one page) to the end of a draft document. */
-export async function addPagesFromFile(client: Client, id: number, file: File) {
-  const body = await prepareFile(file);
+/** Send a file (an extra PDF, a photo, a page picture) up for a draft document; returns its upload id. */
+export async function uploadPart(client: Client, id: number, body: Blob) {
   const s = await client.workspace.documents.addPagesStart.mutate({ id, size: body.size });
   if (s.upload.url) {
     const r = await fetch(s.upload.url, { method: "PUT", headers: { "Content-Type": "application/octet-stream" }, body });
@@ -60,5 +59,11 @@ export async function addPagesFromFile(client: Client, id: number, file: File) {
   } else {
     await client.workspace.documents.addPagesLocal.mutate({ id, part: s.part, base64: await blobToBase64(body) });
   }
-  return client.workspace.documents.addPagesFinish.mutate({ id, part: s.part, fileName: file.name });
+  return s.part;
+}
+
+/** Add one more file (a PDF's pages, or a photo as one page) to the end of a draft document. */
+export async function addPagesFromFile(client: Client, id: number, file: File) {
+  const part = await uploadPart(client, id, await prepareFile(file));
+  return client.workspace.documents.addPagesFinish.mutate({ id, part, fileName: file.name });
 }

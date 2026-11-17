@@ -19,8 +19,9 @@ import { Pages } from "@/components/documents/PdfPages";
 import { FieldPanel, MultiPanel, PagesPanel, PatientPanel, SignersPanel, ToolPalette, ViewSummary, WhoPanel, officeLine } from "@/components/documents/editorPanels";
 import { PRACTICE_FAX, PRACTICE_PHONE, STAMP_GALLERY, logoKindOf, logoSize, officeShortName, stampSize } from "@shared/stamps";
 import { PALETTE, useTouchScreen, type Doc, type SigMap, type ToolChoice } from "@/components/documents/editorShared";
-import { addPagesFromFile, isDocFile } from "@/components/documents/uploadFiles";
-import { openPdf, type PageViewport, type PdfDoc } from "@/lib/pdf";
+import { addPagesFromFile, isDocFile, uploadPart } from "@/components/documents/uploadFiles";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AnnotationMode, openPdf, type PageViewport, type PdfDoc } from "@/lib/pdf";
 import { downloadPdf } from "@/lib/pdfDownload";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -28,7 +29,7 @@ import { DOC_STATUS_LABELS, FIELD_DEFAULT_SIZE, isFilled, isMarkup, missingFor, 
 import {
   alignFields, duplicateFields, editTextBoxes, emptyHistory, fillOrder, keepOnPage, newFieldId, nudgeFields, redo, remember, repeatOnPages, snapMove, undo, type AlignHow, type History,
 } from "@shared/docEdit";
-import type { PageChange } from "@shared/docPages";
+import { whiteoutPages, type PageChange } from "@shared/docPages";
 import { AI_WHO, suggestBoxes, textRunAt, whoOfLabel, type PageText } from "@shared/docSuggest";
 
 const MAX_BOXES = 600;
@@ -453,10 +454,63 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
   const cancel = trpc.workspace.documents.cancel.useMutation();
   const asTemplate = trpc.workspace.documents.saveAsTemplate.useMutation();
   const fromTemplate = trpc.workspace.documents.fromTemplate.useMutation();
-  const busy = send.isPending || finishSigning.isPending || cancel.isPending;
-  const doSend = async () => {
+  // --- white-out for real: a white box on top only hides what's under it (it could still be copied out of the
+  // PDF). Before finishing or sending, each page with white-out becomes a picture of the page with the white-out
+  // painted in, so what was covered is gone from the file. ---
+  const applyWhiteoutM = trpc.workspace.documents.applyWhiteout.useMutation();
+  const [whiteoutAsk, setWhiteoutAsk] = useState<number[] | null>(null);
+  const [whiteoutBusy, setWhiteoutBusy] = useState<string | null>(null);
+  const busy = send.isPending || finishSigning.isPending || cancel.isPending || !!whiteoutBusy;
+  /** The page drawn without its fill-in boxes (they print later), at about 200 dpi, with the white-out painted in. */
+  const whiteoutPicture = async (i: number, covers: DocField[]): Promise<Blob> => {
+    const page = await pdf!.getPage(i + 1);
+    // Drawn upright as stored (the page keeps its own turn), so box positions match the picture exactly.
+    const base = page.getViewport({ scale: 1, rotation: 0 });
+    const vp = page.getViewport({ scale: Math.min(3, 2200 / Math.max(base.width, base.height)), rotation: 0 });
+    const c = document.createElement("canvas");
+    c.width = Math.round(vp.width);
+    c.height = Math.round(vp.height);
+    const ctx = c.getContext("2d")!;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, c.width, c.height);
+    await page.render({ canvasContext: ctx, viewport: vp, intent: "print", annotationMode: AnnotationMode.DISABLE }).promise;
+    ctx.fillStyle = "#fff";
+    for (const f of covers) {
+      const [x1, y1] = vp.convertToViewportPoint(f.x, f.y + f.h) as [number, number];
+      const [x2, y2] = vp.convertToViewportPoint(f.x + f.w, f.y) as [number, number];
+      ctx.fillRect(Math.floor(Math.min(x1, x2)) - 1, Math.floor(Math.min(y1, y2)) - 1, Math.ceil(Math.abs(x2 - x1)) + 2, Math.ceil(Math.abs(y2 - y1)) + 2);
+    }
+    const blob = await new Promise<Blob | null>((res) => c.toBlob(res, "image/jpeg", 0.92));
+    if (!blob) throw new Error("This browser couldn't draw the page.");
+    return blob;
+  };
+  /** Apply every white-out, page by page. Returns false if it didn't finish (the editor then reloads what's saved). */
+  const applyWhiteouts = async (): Promise<boolean> => {
+    const list = whiteoutPages(fieldsRef.current);
+    try {
+      for (let n = 0; n < list.length; n++) {
+        const p = list[n]!;
+        setWhiteoutBusy(`Removing what's under the white-out: page ${p + 1}${list.length > 1 ? ` (${n + 1} of ${list.length})` : ""}…`);
+        const part = await uploadPart(utils.client, doc.id, await whiteoutPicture(p, fieldsRef.current.filter((f) => f.type === "whiteout" && f.page === p)));
+        await applyWhiteoutM.mutateAsync({ id: doc.id, part, page: p });
+      }
+      return true;
+    } catch (e) {
+      toast.error(`The white-out couldn't be applied: ${(e as Error).message}`);
+      refetch();
+      return false;
+    } finally { setWhiteoutBusy(null); }
+  };
+  const doSend = async (whiteoutOk = false) => {
     try {
       await flush();
+      if (whiteoutPages(fieldsRef.current).length) {
+        // Required boxes first, so the white-out isn't applied to a document that can't go out yet.
+        const miss = missingFor(fieldsRef.current, "preparer");
+        if (miss.length) { toast.error(`Fill in ${miss.length === 1 ? `"${miss[0]!.label || "the required box"}"` : `the ${miss.length} required boxes`} first.`); goTo(miss[0]!); return; }
+        if (!whiteoutOk) { setWhiteoutAsk(whiteoutPages(fieldsRef.current)); return; }
+        if (!(await applyWhiteouts())) return;
+      }
       const r = await send.mutateAsync({ id: doc.id });
       toast.success(r.status === "completed" ? "Done. The signed PDF is ready." : "Sent. Each signer has a task to sign it.");
       void utils.workspace.documents.invalidate();
@@ -515,8 +569,8 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
                 if (!t) return;
                 try { await flush(); await asTemplate.mutateAsync({ id: doc.id, title: t }); toast.success("Saved as a template (see the Templates tab)."); } catch (e) { toast.error((e as Error).message); }
               }}><FileStack size={13} /> Save as template</Btn>
-              <Btn size="sm" disabled={busy} onClick={doSend}>
-                {send.isPending ? <Loader2 size={13} className="animate-spin" /> : doc.signers.length ? <Send size={13} /> : <CheckCircle2 size={13} />}
+              <Btn size="sm" disabled={busy} onClick={() => void doSend()}>
+                {send.isPending || whiteoutBusy ? <Loader2 size={13} className="animate-spin" /> : doc.signers.length ? <Send size={13} /> : <CheckCircle2 size={13} />}
                 {doc.signers.length ? "Send for signature" : "Finish & create PDF"}
               </Btn>
             </>
@@ -662,6 +716,28 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
         </div>
       </div>
 
+      {/* White-out for real: say what will happen before the pages are replaced. */}
+      <Dialog open={!!whiteoutAsk} onOpenChange={(o) => !o && setWhiteoutAsk(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Remove what's under the white-out?</DialogTitle>
+            <DialogDescription>
+              Right now the white-out only covers the words: they are still inside the PDF and could be copied out. MyPCP will remove them for good
+              on page {(whiteoutAsk ?? []).map((p) => p + 1).join(", ")}. {(whiteoutAsk ?? []).length === 1 ? "That page is" : "Those pages are"} then saved
+              as a picture of the page: it looks and prints the same, but its words can't be searched or copied anymore. This can't be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Btn variant="ghost" onClick={() => setWhiteoutAsk(null)}>Not now</Btn>
+            <Btn onClick={() => { setWhiteoutAsk(null); void doSend(true); }}>Remove it and {doc.signers.length ? "send" : "finish"}</Btn>
+          </div>
+        </DialogContent>
+      </Dialog>
+      {whiteoutBusy && (
+        <div className="fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
+          <p className="flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-lg"><Loader2 size={15} className="animate-spin" /> {whiteoutBusy}</p>
+        </div>
+      )}
       <FillDialog field={fillingField} onClose={() => setFilling(null)} onSave={(v) => { if (fillingField) fillValue(fillingField.id, v); }} />
       <SignatureDialog open={!!signing} kind={signing?.type === "initials" ? "initials" : "signature"}
         saved={(signing?.type === "initials" ? mySig.data?.initialsPng : mySig.data?.signaturePng) ?? null}
