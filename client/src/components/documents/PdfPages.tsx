@@ -18,20 +18,35 @@ interface PageProps {
   pageBar?: (page: number) => React.ReactNode;
 }
 
-export function Pages({ count, zoom, ...rest }: PageProps & { count: number; zoom: number }) {
+/** How wide the pages are drawn: a zoom level, or fitted to the space (the whole width, or a whole page in view). */
+export type PageFit = "width" | "page" | null;
+
+export function Pages({ count, zoom, fit = null, aspect = 792 / 612, className, ...rest }: PageProps & {
+  count: number; zoom: number; fit?: PageFit;
+  /** Height ÷ width of the first page (for "whole page"). */
+  aspect?: number;
+  className?: string;
+}) {
   const box = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
+  const [size, setSize] = useState({ w: 0, h: 0 });
   useEffect(() => {
     const el = box.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+    // The scrolling area around the pages (marked data-scroll) gives the height for "whole page".
+    const scroller = el.closest("[data-scroll]") as HTMLElement | null;
+    const measure = () => setSize({ w: el.clientWidth, h: scroller?.clientHeight ?? window.innerHeight });
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
-    setWidth(el.clientWidth);
+    if (scroller) ro.observe(scroller);
+    measure();
     return () => ro.disconnect();
   }, []);
-  const pageWidth = Math.max(280, Math.min(width - 8, 900) * zoom);
+  const width = size.w;
+  const pageWidth = fit === "width" ? Math.max(280, width - 24)
+    : fit === "page" ? Math.max(200, Math.min(width - 24, (size.h - 56) / aspect))
+      : Math.max(280, Math.min(width - 8, 900) * zoom);
   return (
-    <div ref={box} className="overflow-x-auto rounded-xl bg-slate-100 p-2 dark:bg-slate-900/60">
+    <div ref={box} className={className ?? "overflow-x-auto rounded-xl bg-slate-100 p-2 dark:bg-slate-900/60"}>
       {width > 0 && Array.from({ length: count }, (_, i) => <PdfPage key={i} index={i} width={pageWidth} {...rest} />)}
     </div>
   );
@@ -71,7 +86,7 @@ function PdfPage({ pdf, index, width, drawing, onPageClick, onDraw, onHover, ove
   return (
     <>
     {pageBar && <div className="mx-auto mb-1 flex items-center justify-between gap-2 px-1 text-xs" style={{ width: vp?.width ?? width }}>{pageBar(index)}</div>}
-    <div className={cn("relative mx-auto mb-3 shadow-sm", drawing && "touch-none")} style={{ background: "#fff", width: vp?.width ?? width, height: vp?.height, minHeight: vp ? undefined : width * 1.29 }}
+    <div data-page-index={index} className={cn("relative mx-auto mb-4 shadow-[0_1px_3px_rgba(15,23,42,0.12),0_8px_24px_-12px_rgba(15,23,42,0.18)]", drawing && "touch-none")} style={{ background: "#fff", width: vp?.width ?? width, height: vp?.height, minHeight: vp ? undefined : width * 1.29 }}
       onPointerEnter={() => onHover?.(index)}
       onPointerDown={(e) => {
         if (!vp || !drawing || !onThePage(e)) return;

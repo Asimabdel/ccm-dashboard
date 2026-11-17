@@ -694,7 +694,7 @@ export async function getDocument(a: WorkspaceActor, id: number, meta: ClientMet
       png: `data:image/png;base64,${s.png}`, name: s.onBehalfOf ? onBehalfNames.get(s.onBehalfOf) ?? "Provider" : s.name, signedAt: s.signedAt,
       appliedBy: s.onBehalfOf ? s.name : null,
     }])),
-    events: events.map(({ e, name }) => ({ at: e.at, type: e.type, detail: e.detail, name })),
+    events: events.map(({ e, name }) => ({ at: e.at, type: e.type, detail: e.detail, name, userId: e.userId })),
   };
 }
 

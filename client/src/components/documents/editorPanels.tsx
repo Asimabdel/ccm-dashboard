@@ -28,7 +28,7 @@ const todayYmd = () => new Date().toLocaleDateString("en-CA", { timeZone: "Ameri
 export const officeLine = (name: string | null | undefined) => { const short = officeShortName(name); return short ? `MyPCP Dr · ${short}` : "MyPCP Dr"; };
 
 /** Stamps and the logo, drawn as they will print: pick one, then click on the page. */
-function StampGallery({ tool, onTool, myName }: { tool: ToolChoice | null; onTool: (t: ToolChoice | null) => void; myName: string }) {
+export function StampGallery({ tool, onTool, myName }: { tool: ToolChoice | null; onTool: (t: ToolChoice | null) => void; myName: string }) {
   const sample: MarkDesign = { date: todayYmd(), by: myName || "Your name", place: "MyPCP Dr" };
   const pick = (t: ToolChoice) => onTool(sameTool(tool, t) ? null : t);
   // Previews sit on white, like the page (inline colours: dark mode recolours bg-white / text-slate-*).
@@ -65,16 +65,16 @@ function StampGallery({ tool, onTool, myName }: { tool: ToolChoice | null; onToo
   );
 }
 
-const FILL_TOOLS: (ToolChoice & { label: string; icon: React.ElementType })[] = [
+export const FILL_TOOLS: (ToolChoice & { label: string; icon: React.ElementType })[] = [
   { type: "text", label: "Text", icon: Type }, { type: "date", label: "Date", icon: CalendarDays }, { type: "checkbox", label: "Checkbox", icon: SquareCheck },
   { type: "signature", label: "Signature", icon: Signature }, { type: "initials", label: "Initials", icon: TextCursorInput },
 ];
-const MARK_TOOLS: (ToolChoice & { label: string; icon: React.ElementType })[] = [
+export const MARK_TOOLS: (ToolChoice & { label: string; icon: React.ElementType })[] = [
   { type: "edittext", label: "Edit text", icon: PencilLine },
   { type: "whiteout", label: "White-out", icon: Eraser }, { type: "highlight", label: "Highlight", icon: Highlighter }, { type: "mark", value: "check", label: "Check", icon: Check },
   { type: "mark", value: "x", label: "X", icon: X }, { type: "mark", value: "circle", label: "Circle", icon: Circle }, { type: "line", label: "Line", icon: Minus },
 ];
-const sameTool = (a: ToolChoice | null, b: ToolChoice) => !!a && a.type === b.type && (a.value ?? "") === (b.value ?? "");
+export const sameTool = (a: ToolChoice | null, b: ToolChoice) => !!a && a.type === b.type && (a.value ?? "") === (b.value ?? "");
 const panel = "rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800";
 const heading = "mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500";
 
@@ -410,7 +410,7 @@ export function PagesPanel({ count, busy, onAdd }: { count: number; busy: boolea
       </Btn>
       <input ref={input} type="file" multiple accept={DOC_FILE_ACCEPT} className="hidden"
         onChange={(e) => { const files = Array.from(e.target.files ?? []); e.target.value = ""; if (files.length) onAdd(files); }} />
-      <p className="mt-2 text-[11px] text-slate-500">They go at the end. Use the arrows above each page to move it, or turn or remove it there.</p>
+      <p className="mt-2 text-[11px] text-slate-500">They go at the end. To move a page, drag it in the page list on the left or use the arrows above it; turn or remove it there too.</p>
     </section>
   );
 }

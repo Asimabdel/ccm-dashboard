@@ -95,7 +95,11 @@ function ClinicPicker() {
  * App shell. `title` is shown as the page heading unless the page draws its own
  * header (`pageTitle={false}`); `clinicPicker` adds the clinic filter to the top bar.
  */
-export function CCMDashboardLayout({ children, title, clinicPicker = false, pageTitle = true }: { children: React.ReactNode; title?: string; clinicPicker?: boolean; pageTitle?: boolean }) {
+export function CCMDashboardLayout({ children, title, clinicPicker = false, pageTitle = true, focus = false }: {
+  children: React.ReactNode; title?: string; clinicPicker?: boolean; pageTitle?: boolean;
+  /** Full screen (the document editor): no side menu or top bar; sign-out on idle and Find anything still work. */
+  focus?: boolean;
+}) {
   // Browser tab: "Fax inbox · MyPCP".
   useEffect(() => { document.title = title ? `${title} · MyPCP` : "MyPCP"; }, [title]);
   const { user, logout, refresh } = useAuth();
@@ -352,6 +356,33 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
     </aside>
   );
 
+  // HIPAA idle session timeout warning (every page, full screen ones too).
+  const idleWarning = warning && (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm">
+      <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-100 dark:border-slate-700 p-6 max-w-sm w-full mx-4 shadow-xl">
+        <div className="flex items-center gap-2 text-amber-600 mb-2">
+          <Clock size={20} /> <span className="font-semibold">Session expiring</span>
+        </div>
+        <p className="text-sm text-slate-600 dark:text-slate-300">For the security of protected health information, you will be signed out in <span className="font-bold text-slate-900 dark:text-slate-50">{secondsLeft}s</span> due to inactivity.</p>
+        <div className="flex gap-2 mt-5">
+          <button onClick={stayLoggedIn} className="flex-1 px-4 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800">Stay signed in</button>
+          <button onClick={logoutNow} className="px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50">Sign out</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Full screen: the page draws everything itself.
+  if (focus) {
+    return (
+      <div className="h-[100dvh] overflow-hidden bg-slate-100 dark:bg-slate-900">
+        {children}
+        <CommandPalette />
+        {idleWarning}
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen bg-slate-50/60 dark:bg-slate-900">
       {/* Sidebar: fixed rail/full on desktop, off-canvas drawer on phones */}
@@ -487,22 +518,7 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
       </div>
 
       <CommandPalette />
-
-      {/* HIPAA idle session timeout warning */}
-      {warning && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm">
-          <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-100 dark:border-slate-700 p-6 max-w-sm w-full mx-4 shadow-xl">
-            <div className="flex items-center gap-2 text-amber-600 mb-2">
-              <Clock size={20} /> <span className="font-semibold">Session expiring</span>
-            </div>
-            <p className="text-sm text-slate-600 dark:text-slate-300">For the security of protected health information, you will be signed out in <span className="font-bold text-slate-900 dark:text-slate-50">{secondsLeft}s</span> due to inactivity.</p>
-            <div className="flex gap-2 mt-5">
-              <button onClick={stayLoggedIn} className="flex-1 px-4 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800">Stay signed in</button>
-              <button onClick={logoutNow} className="px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50">Sign out</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {idleWarning}
     </div>
   );
 }

@@ -8,15 +8,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "wouter";
 import { toast } from "sonner";
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, CheckCircle2, Download, FileStack, Loader2, Minus, Plus, Redo2, RotateCw, Send, Trash2, Undo2 } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, CheckCircle2, ChevronDown, Download, FileStack, FileText, Loader2, Maximize2, Minus, MoveHorizontal, PanelRight, Plus, Redo2, RotateCw, Send, Trash2, Undo2 } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { CCMDashboardLayout } from "@/components/CCMDashboardLayout";
 import { Btn, ErrorNote, Loading, inputCls } from "@/components/workspace/ui";
 import { SignatureDialog } from "@/components/documents/SignatureDialog";
 import { FieldBox } from "@/components/documents/FieldBox";
 import { FillDialog } from "@/components/documents/FillDialog";
-import { Pages } from "@/components/documents/PdfPages";
-import { FieldPanel, MultiPanel, PagesPanel, PatientPanel, SignersPanel, ToolPalette, ViewSummary, WhoPanel, officeLine } from "@/components/documents/editorPanels";
+import { Pages, type PageFit } from "@/components/documents/PdfPages";
+import { Thumbnails } from "@/components/documents/Thumbnails";
+import { DocHistory, DocProgress } from "@/components/documents/DocProgress";
+import { EditorToolbar } from "@/components/documents/EditorToolbar";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { FieldPanel, MultiPanel, PagesPanel, PatientPanel, SignersPanel, WhoPanel, officeLine } from "@/components/documents/editorPanels";
 import { PRACTICE_FAX, PRACTICE_PHONE, STAMP_GALLERY, logoKindOf, logoSize, officeShortName, stampSize } from "@shared/stamps";
 import { PALETTE, useTouchScreen, type Doc, type SigMap, type ToolChoice } from "@/components/documents/editorShared";
 import { addPagesFromFile, isDocFile, uploadPart } from "@/components/documents/uploadFiles";
@@ -42,9 +47,9 @@ export default function DocumentEditorPage() {
   const docId = Number(id);
   const q = trpc.workspace.documents.get.useQuery({ id: docId }, { enabled: !!user && docId > 0, refetchOnWindowFocus: false });
   return (
-    <CCMDashboardLayout title="Documents" pageTitle={false}>
+    <CCMDashboardLayout title={q.data?.title ?? "Documents"} pageTitle={false} focus>
       {q.isLoading && <Loading />}
-      {q.error && <ErrorNote message={q.error.message} />}
+      {q.error && <div className="p-6"><ErrorNote message={q.error.message} /></div>}
       {/* A new file (pages added, removed, moved, turned) starts the editor fresh on it. */}
       {q.data && <Editor key={`${q.data.id}:${q.data.status}:${q.data.mode}:${q.data.fileRev}`} doc={q.data} refetch={() => void q.refetch()} />}
     </CCMDashboardLayout>
@@ -291,8 +296,11 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
   // --- page tools: move, turn, remove a page; add pages from other files. The server rebuilds the PDF. ---
   const changePages = trpc.workspace.documents.changePages.useMutation();
   const [pageBusy, setPageBusy] = useState(false);
-  const pageChange = async (c: PageChange, confirmText?: string) => {
-    if (pageBusy || (confirmText && !window.confirm(confirmText))) return;
+  // A question before something that can't be undone (removing a page, cancelling the document), in a real window.
+  const [ask, setAsk] = useState<{ title: string; text: string; yes: string; danger?: boolean; run: () => void } | null>(null);
+  const pageChange = async (c: PageChange, confirmText?: string, confirmed = false) => {
+    if (pageBusy) return;
+    if (confirmText && !confirmed) { setAsk({ title: "Remove this page?", text: confirmText, yes: "Remove page", danger: true, run: () => void pageChange(c, confirmText, true) }); return; }
     setPageBusy(true);
     try {
       await flush();
@@ -536,42 +544,184 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
   const sel = selected.length === 1 ? fields.find((f) => f.id === selected[0]) ?? null : null;
   const fillingField = filling ? fields.find((f) => f.id === filling) ?? null : null;
   const pageCount = pdf?.numPages ?? pages.length;
-  const stepBtn = "px-2 py-1.5 disabled:opacity-30";
+  const stepBtn = "flex h-8 w-8 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent dark:text-slate-300 dark:hover:bg-slate-700";
   const pageBtn = "rounded-md p-1.5 text-slate-500 hover:bg-slate-200 hover:text-slate-900 disabled:opacity-30 disabled:hover:bg-transparent dark:hover:bg-slate-700 dark:hover:text-slate-100";
 
+  // --- the full-screen layout: page thumbnails · the pages · the side panel; zoom and fit ---
+  const scroller = useRef<HTMLDivElement>(null);
+  const [fit, setFit] = useState<PageFit>(null);
+  const [current, setCurrent] = useState(0);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [templateName, setTemplateName] = useState<string | null>(null);
+  const zoomBy = (d: number) => { setFit(null); setZoom((z) => Math.min(2.5, Math.max(0.5, +(z + d).toFixed(2)))); };
+  // Ctrl + mouse wheel zooms the pages (not the whole browser page).
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => { if (!e.ctrlKey && !e.metaKey) return; e.preventDefault(); zoomBy(e.deltaY < 0 ? 0.1 : -0.1); };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  /** Which page is in view (the one whose top passed a third of the way down). */
+  const onScroll = () => {
+    const sc = scroller.current;
+    if (!sc) return;
+    const line = sc.getBoundingClientRect().top + sc.clientHeight * 0.33;
+    let cur = 0;
+    sc.querySelectorAll<HTMLElement>("[data-page-index]").forEach((el) => { if (el.getBoundingClientRect().top <= line) cur = Number(el.dataset.pageIndex); });
+    setCurrent((c) => (c === cur ? c : cur));
+  };
+  const jumpTo = (i: number) => scroller.current?.querySelector(`[data-page-index="${i}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  const first = pages[0];
+  const aspect = first ? (first.rotate % 180 ? first.w / first.h : first.h / first.w) : 792 / 612;
+  const zoomLabel = fit === "width" ? "Fit width" : fit === "page" ? "Whole page" : `${Math.round(zoom * 100)}%`;
+  const saveTemplate = async (t: string) => {
+    try { await flush(); await asTemplate.mutateAsync({ id: doc.id, title: t }); toast.success("Saved as a template (see the Templates tab)."); } catch (e) { toast.error((e as Error).message); }
+  };
+  const cancelDoc = () => setAsk({
+    title: doc.isTemplate ? "Delete this template?" : "Cancel this document?",
+    text: doc.isTemplate ? "Documents already made from it stay as they are." : "Signers' tasks are closed and nobody can sign it anymore. It stays on file as cancelled.",
+    yes: doc.isTemplate ? "Delete template" : "Cancel document", danger: true,
+    run: async () => { try { await cancel.mutateAsync({ id: doc.id }); navigate("/documents"); } catch (e) { toast.error((e as Error).message); } },
+  });
+  const sectionCls = "rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800";
+  const sectionHead = "mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500";
+
+  // The side panel (right on big screens; a drawer on phones and tablets).
+  const history = doc.events.length > 0 && (
+    <details className={sectionCls} open={mode === "view"}>
+      <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-500">History</summary>
+      <div className="mt-3"><DocHistory doc={doc} /></div>
+    </details>
+  );
+  const side = mode === "edit" ? (
+    <>
+      {selected.length > 1 ? (
+        <>
+          <button type="button" className="text-xs font-semibold text-brand hover:underline dark:text-teal-300" onClick={() => setSelected([])}>← Back to the document</button>
+          <MultiPanel count={selected.length} onAlign={(how: AlignHow) => change((fs) => alignFields(fs, selected, how, pages))} onCopy={copySelected} onDelete={removeSelected}
+            signers={doc.signers}
+            onAssign={doc.isTemplate ? undefined : (who) => change((fs) => fs.map((f) => (selected.includes(f.id) && !isMarkup(f.type) && f.assignee !== who ? { ...f, assignee: who, value: who === "preparer" ? f.value ?? null : null } : f)))} />
+        </>
+      ) : sel ? (
+        <>
+          <button type="button" className="text-xs font-semibold text-brand hover:underline dark:text-teal-300" onClick={() => setSelected([])}>← Back to the document</button>
+          <FieldPanel f={sel} doc={doc} isTemplate={doc.isTemplate} pageCount={pages.length}
+            onChange={(p) => update(sel.id, p, `panel:${sel.id}:${Object.keys(p).join(",")}`)} onDelete={removeSelected} onCopy={copySelected} onEveryPage={() => everyPage(sel.id)} />
+        </>
+      ) : (
+        <>
+          {myMissing.length > 0 && (
+            <p className="flex items-center justify-between gap-2 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+              <span>{myMissing.length} required box{myMissing.length === 1 ? "" : "es"} of yours still empty.</span>
+              {todo[0] && <button type="button" className="shrink-0 font-bold underline" onClick={() => { setPanelOpen(false); goTo(todo[0]!); }}>Show me</button>}
+            </p>
+          )}
+          {whoGroups.length > 0 && <WhoPanel groups={whoGroups} onPick={(ids) => { setTool(null); setSelected(ids); }} />}
+          {!doc.isTemplate && (
+            <SignersPanel doc={doc} fields={fields} colorOf={colorOf} onChanged={(ids) => {
+              // Boxes of someone removed go back to you (like the server does).
+              replaceFields(fieldsRef.current.map((f) => { const s = signerOf(f.assignee); return s && !ids.includes(s) ? { ...f, assignee: "preparer", value: null } : f; }));
+              if (signerOf(newAssignee) && !ids.includes(signerOf(newAssignee)!)) setNewAssignee("preparer");
+              refetch();
+            }} />
+          )}
+          {!doc.isTemplate && <PatientPanel doc={doc} onLinked={() => refetch()} onPrefilled={(fs) => replaceFields(fs)} flush={flush} />}
+          {!doc.isTemplate && doc.signers.length > 0 && (
+            <section className={sectionCls}>
+              <p className={sectionHead}>Message to signers (optional)</p>
+              <textarea className={cn(inputCls, "h-20 text-xs")} value={message} maxLength={1000} onChange={(e) => { setMessage(e.target.value); setDirty(true); }} />
+            </section>
+          )}
+          <PagesPanel count={pages.length} busy={pageBusy} onAdd={(files) => void addPages(files)} />
+          {history}
+          <button type="button" className="flex items-center gap-1 text-xs font-semibold text-red-600 hover:underline" disabled={cancel.isPending} onClick={cancelDoc}>
+            <Trash2 size={12} /> {doc.isTemplate ? "Delete template" : "Cancel document"}
+          </button>
+        </>
+      )}
+    </>
+  ) : mode === "sign" ? (
+    <>
+      <section className="rounded-xl border border-violet-200 bg-violet-50 p-3 dark:border-violet-900 dark:bg-violet-950/40">
+        <p className="font-semibold">Your part</p>
+        <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">{doc.creator ?? "A teammate"} sent you this to fill in and sign. Your boxes are highlighted. "Next box" takes you to each one.</p>
+        {doc.message && <p className="mt-2 rounded-md bg-white/70 p-2 text-xs italic dark:bg-slate-900/40">"{doc.message}"</p>}
+        <p className="mt-2 text-xs">{myMissing.length ? `${myMissing.length} required box${myMissing.length === 1 ? "" : "es"} left.` : "All your required boxes are done."}</p>
+        {(lastSig.signature || lastSig.initials) && (
+          <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">One tap now signs a box with the signature you just made. <button type="button" className="font-semibold underline" onClick={() => setLastSig({})}>Sign differently</button></p>
+        )}
+        {todo[0]
+          ? <Btn className="mt-3 w-full" onClick={() => { setPanelOpen(false); goTo(todo[0]!); }}>Next box <ArrowRight size={14} /></Btn>
+          : <Btn className="mt-3 w-full" disabled={busy} onClick={doFinishSigning}>{finishSigning.isPending && <Loader2 size={13} className="animate-spin" />} Finish signing</Btn>}
+      </section>
+      {history}
+    </>
+  ) : (
+    <>
+      <section className={sectionCls}>
+        {doc.status === "completed" ? (
+          <p className="flex items-start gap-2 text-sm font-semibold text-emerald-700 dark:text-emerald-300"><CheckCircle2 size={16} className="mt-0.5 shrink-0" /> Completed {doc.completedAt ? new Date(doc.completedAt).toLocaleString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}</p>
+        ) : <p className="text-sm font-semibold">{DOC_STATUS_LABELS[doc.status]}</p>}
+        <p className="mt-1 text-xs text-slate-500">{showFinal ? "You're looking at the signed PDF, with its certificate page at the end." : doc.status === "signing" ? "Out for signature. You can follow each signer in the line above." : ""}</p>
+        {doc.patientName && <p className="mt-2 text-xs text-slate-500">Patient: <b className="text-slate-700 dark:text-slate-200">{doc.patientName}</b></p>}
+        {doc.status === "completed" && (
+          <div className="mt-3 flex flex-col gap-1.5">
+            {excuseNote
+              ? <><Btn size="sm" onClick={() => void download("copy")}><Download size={13} /> Download the note</Btn><Btn size="sm" variant="secondary" onClick={() => void download("final")}>With certificate page</Btn></>
+              : <><Btn size="sm" onClick={() => void download("final")}><Download size={13} /> Download signed PDF</Btn><Btn size="sm" variant="secondary" onClick={() => void download("copy")}>Without certificate page</Btn></>}
+          </div>
+        )}
+      </section>
+      {history}
+    </>
+  );
+
   return (
-    <div className="-mx-2 sm:mx-0">
+    <div className="flex h-full flex-col">
       {/* Top bar */}
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Link href="/documents"><Btn size="sm" variant="ghost"><ArrowLeft size={14} /> Documents</Btn></Link>
+      <header className="flex h-14 shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-2 sm:px-3 dark:border-slate-700 dark:bg-slate-800">
+        <Link href="/documents" className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700" title="Back to Documents">
+          <ArrowLeft size={16} /><span className="hidden md:inline">Documents</span>
+        </Link>
+        <span className="hidden h-6 w-px shrink-0 bg-slate-200 sm:block dark:bg-slate-700" />
+        <span className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-brand sm:flex dark:text-teal-300"><FileText size={16} /></span>
         {mode === "edit" ? (
-          <input className={cn(inputCls, "h-9 max-w-md flex-1 font-semibold")} value={title} onChange={(e) => { setTitle(e.target.value); setDirty(true); }} maxLength={255} aria-label="Title" />
-        ) : <h1 className="min-w-0 flex-1 truncate text-lg font-semibold">{doc.title}</h1>}
-        {doc.isTemplate ? <span className="rounded-full bg-teal-50 px-2 py-0.5 text-[11px] font-semibold text-teal-800">Template</span>
-          : <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">{DOC_STATUS_LABELS[doc.status]}</span>}
-        {mode === "edit" && <span className="text-xs text-slate-500">{save.isPending ? "Saving…" : dirty ? "Unsaved" : "Saved"}</span>}
-        <div className="ms-auto flex flex-wrap items-center gap-1.5">
+          <input className="h-9 min-w-0 max-w-md flex-1 rounded-lg border border-transparent bg-transparent px-2 text-[15px] font-semibold text-slate-900 hover:border-slate-200 focus:border-brand/60 focus:outline-none focus:ring-2 focus:ring-brand/20 dark:text-slate-50 dark:hover:border-slate-600"
+            value={title} onChange={(e) => { setTitle(e.target.value); setDirty(true); }} maxLength={255} aria-label="Title" />
+        ) : <h1 className="min-w-0 flex-1 truncate px-1 text-[15px] font-semibold">{doc.title}</h1>}
+        {doc.isTemplate ? <span className="hidden shrink-0 rounded-full bg-teal-50 px-2 py-0.5 text-[11px] font-semibold text-teal-800 sm:inline dark:bg-teal-500/15 dark:text-teal-300">Template</span>
+          : <span className="hidden shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700 sm:inline dark:bg-slate-700 dark:text-slate-300">{DOC_STATUS_LABELS[doc.status]}</span>}
+        {mode === "edit" && <span className="hidden shrink-0 text-xs text-slate-500 lg:inline">{save.isPending ? "Saving…" : dirty ? "Unsaved" : "Saved"}</span>}
+        <div className="ms-auto flex shrink-0 items-center gap-1">
           {mode === "edit" && (
-            <div className="flex items-center rounded-lg border border-slate-200 dark:border-slate-700">
-              <button type="button" className={stepBtn} disabled={!hist.current.past.length} onClick={doUndo} title="Undo (Ctrl+Z)" aria-label="Undo"><Undo2 size={14} /></button>
-              <button type="button" className={stepBtn} disabled={!hist.current.future.length} onClick={doRedo} title="Redo (Ctrl+Y)" aria-label="Redo"><Redo2 size={14} /></button>
+            <div className="hidden items-center sm:flex">
+              <button type="button" className={stepBtn} disabled={!hist.current.past.length} onClick={doUndo} title="Undo (Ctrl+Z)" aria-label="Undo"><Undo2 size={15} /></button>
+              <button type="button" className={stepBtn} disabled={!hist.current.future.length} onClick={doRedo} title="Redo (Ctrl+Y)" aria-label="Redo"><Redo2 size={15} /></button>
             </div>
           )}
-          <div className="flex items-center rounded-lg border border-slate-200 dark:border-slate-700">
-            <button type="button" className="px-2 py-1.5" onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.25).toFixed(2)))} aria-label="Zoom out"><Minus size={14} /></button>
-            <span className="w-11 text-center text-xs tabular-nums">{Math.round(zoom * 100)}%</span>
-            <button type="button" className="px-2 py-1.5" onClick={() => setZoom((z) => Math.min(2.5, +(z + 0.25).toFixed(2)))} aria-label="Zoom in"><Plus size={14} /></button>
+          <div className="hidden items-center rounded-lg border border-slate-200 sm:flex dark:border-slate-700">
+            <button type="button" className={stepBtn} onClick={() => zoomBy(-0.25)} aria-label="Zoom out" title="Zoom out (Ctrl + mouse wheel)"><Minus size={14} /></button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button type="button" className="flex h-8 min-w-[72px] items-center justify-center gap-1 px-1.5 text-xs font-semibold tabular-nums hover:bg-slate-100 dark:hover:bg-slate-700" aria-label="Zoom">{zoomLabel}<ChevronDown size={12} /></button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-40">
+                <DropdownMenuItem onClick={() => setFit("width")}><MoveHorizontal size={14} className="mr-2" /> Fit width</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setFit("page")}><Maximize2 size={14} className="mr-2" /> Whole page</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                {[0.5, 0.75, 1, 1.25, 1.5, 2].map((z) => <DropdownMenuItem key={z} onClick={() => { setFit(null); setZoom(z); }}>{Math.round(z * 100)}%</DropdownMenuItem>)}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <button type="button" className={stepBtn} onClick={() => zoomBy(0.25)} aria-label="Zoom in" title="Zoom in (Ctrl + mouse wheel)"><Plus size={14} /></button>
           </div>
           {mode === "edit" && !doc.isTemplate && (
             <>
-              <Btn size="sm" variant="secondary" disabled={asTemplate.isPending} onClick={async () => {
-                const t = window.prompt("Template name", title);
-                if (!t) return;
-                try { await flush(); await asTemplate.mutateAsync({ id: doc.id, title: t }); toast.success("Saved as a template (see the Templates tab)."); } catch (e) { toast.error((e as Error).message); }
-              }}><FileStack size={13} /> Save as template</Btn>
+              <Btn size="sm" variant="secondary" className="hidden md:inline-flex" disabled={asTemplate.isPending} onClick={() => setTemplateName(title)}><FileStack size={13} /> Save as template</Btn>
               <Btn size="sm" disabled={busy} onClick={() => void doSend()}>
                 {send.isPending || whiteoutBusy ? <Loader2 size={13} className="animate-spin" /> : doc.signers.length ? <Send size={13} /> : <CheckCircle2 size={13} />}
-                {doc.signers.length ? "Send for signature" : "Finish & create PDF"}
+                <span className="hidden sm:inline">{doc.signers.length ? "Send for signature" : "Finish & create PDF"}</span><span className="sm:hidden">{doc.signers.length ? "Send" : "Finish"}</span>
               </Btn>
             </>
           )}
@@ -583,128 +733,67 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
           {mode === "sign" && (
             <Btn size="sm" disabled={busy} onClick={doFinishSigning}>{finishSigning.isPending ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />} Finish signing</Btn>
           )}
-          {doc.status === "completed" && (excuseNote ? (
-            <>
-              <Btn size="sm" variant="ghost" onClick={() => void download("final")} title="With the signature certificate page, for the record">With certificate</Btn>
-              <Btn size="sm" onClick={() => void download("copy")} title="The note alone, to give to the patient, employer or school"><Download size={13} /> Download the note</Btn>
-            </>
-          ) : (
-            <>
-              <Btn size="sm" variant="ghost" onClick={() => void download("copy")} title="The signed pages without the certificate page, to share outside the practice">Without certificate page</Btn>
-              <Btn size="sm" onClick={() => void download("final")}><Download size={13} /> Download signed PDF</Btn>
-            </>
-          ))}
+          {doc.status === "completed" && (
+            <Btn size="sm" onClick={() => void download(excuseNote ? "copy" : "final")}><Download size={13} /> <span className="hidden sm:inline">{excuseNote ? "Download the note" : "Download signed PDF"}</span></Btn>
+          )}
+          <button type="button" className={cn(stepBtn, "lg:hidden")} onClick={() => setPanelOpen(true)} aria-label="Details" title="Details"><PanelRight size={17} /></button>
         </div>
-      </div>
+      </header>
 
-      <div className="flex flex-col gap-4 lg:flex-row">
-        {/* Side panel */}
-        {mode !== "view" && (
-          <aside className="w-full shrink-0 space-y-3 text-sm lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)] lg:w-72 lg:overflow-y-auto">
-            {mode === "edit" ? (
-              <>
-                <ToolPalette tool={tool} onTool={(t) => { setTool(t); if (t) setSelected([]); }} isTemplate={doc.isTemplate} signers={doc.signers} newAssignee={newAssignee} onNewAssignee={setNewAssignee}
-                  onSuggest={() => void suggest("quick")} onAiRead={doc.aiReady ? () => void suggest("ai") : undefined} suggesting={suggesting} myName={doc.myName ?? ""} />
+      {mode === "edit" && (
+        <EditorToolbar tool={tool} onTool={(t) => { setTool(t); if (t) setSelected([]); }} isTemplate={doc.isTemplate} signers={doc.signers} newAssignee={newAssignee} onNewAssignee={setNewAssignee}
+          onSuggest={() => void suggest("quick")} onAiRead={doc.aiReady ? () => void suggest("ai") : undefined} suggesting={suggesting} myName={doc.myName ?? ""} />
+      )}
+      <DocProgress doc={doc} />
 
-                {whoGroups.length > 0 && <WhoPanel groups={whoGroups} onPick={(ids) => { setTool(null); setSelected(ids); }} />}
-
-                {selected.length > 1 ? (
-                  <MultiPanel count={selected.length} onAlign={(how: AlignHow) => change((fs) => alignFields(fs, selected, how, pages))} onCopy={copySelected} onDelete={removeSelected}
-                    signers={doc.signers}
-                    onAssign={doc.isTemplate ? undefined : (who) => change((fs) => fs.map((f) => (selected.includes(f.id) && !isMarkup(f.type) && f.assignee !== who ? { ...f, assignee: who, value: who === "preparer" ? f.value ?? null : null } : f)))} />
-                ) : sel ? (
-                  <FieldPanel f={sel} doc={doc} isTemplate={doc.isTemplate} pageCount={pages.length}
-                    onChange={(p) => update(sel.id, p, `panel:${sel.id}:${Object.keys(p).join(",")}`)} onDelete={removeSelected} onCopy={copySelected} onEveryPage={() => everyPage(sel.id)} />
-                ) : null}
-
-                <PagesPanel count={pages.length} busy={pageBusy} onAdd={(files) => void addPages(files)} />
-
-                {!doc.isTemplate && (
-                  <SignersPanel doc={doc} fields={fields} colorOf={colorOf} onChanged={(ids) => {
-                    // Boxes of someone removed go back to you (like the server does).
-                    replaceFields(fieldsRef.current.map((f) => { const s = signerOf(f.assignee); return s && !ids.includes(s) ? { ...f, assignee: "preparer", value: null } : f; }));
-                    if (signerOf(newAssignee) && !ids.includes(signerOf(newAssignee)!)) setNewAssignee("preparer");
-                    refetch();
-                  }} />
-                )}
-
-                {!doc.isTemplate && (
-                  <PatientPanel doc={doc} onLinked={() => refetch()} onPrefilled={(fs) => replaceFields(fs)} flush={flush} />
-                )}
-
-                {!doc.isTemplate && doc.signers.length > 0 && (
-                  <section className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
-                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Message to signers (optional)</p>
-                    <textarea className={cn(inputCls, "h-20 text-xs")} value={message} maxLength={1000} onChange={(e) => { setMessage(e.target.value); setDirty(true); }} />
-                  </section>
-                )}
-
-                {myMissing.length > 0 && (
-                  <p className="flex items-center justify-between gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-                    <span>{myMissing.length} required box{myMissing.length === 1 ? "" : "es"} of yours still empty.</span>
-                    {todo[0] && <button type="button" className="shrink-0 font-bold underline" onClick={() => goTo(todo[0]!)}>Show me</button>}
-                  </p>
-                )}
-                <button type="button" className="flex items-center gap-1 text-xs font-semibold text-red-600 hover:underline" disabled={cancel.isPending}
-                  onClick={async () => { if (!window.confirm(doc.isTemplate ? "Delete this template?" : "Cancel this document?")) return; try { await cancel.mutateAsync({ id: doc.id }); navigate("/documents"); } catch (e) { toast.error((e as Error).message); } }}>
-                  <Trash2 size={12} /> {doc.isTemplate ? "Delete template" : "Cancel document"}
-                </button>
-              </>
-            ) : (
-              <section className="rounded-xl border border-violet-200 bg-violet-50 p-3 dark:border-violet-900 dark:bg-violet-950/40">
-                <p className="font-semibold">Your part</p>
-                <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">{doc.creator ?? "A teammate"} sent you this to fill in and sign. Your boxes are highlighted. "Next box" takes you to each one.</p>
-                {doc.message && <p className="mt-2 rounded-md bg-white/70 p-2 text-xs italic dark:bg-slate-900/40">"{doc.message}"</p>}
-                <p className="mt-2 text-xs">{myMissing.length ? `${myMissing.length} required box${myMissing.length === 1 ? "" : "es"} left.` : "All your required boxes are done."}</p>
-                {(lastSig.signature || lastSig.initials) && (
-                  <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">One tap now signs a box with the signature you just made. <button type="button" className="font-semibold underline" onClick={() => setLastSig({})}>Sign differently</button></p>
-                )}
-                {todo[0]
-                  ? <Btn className="mt-3 w-full" onClick={() => goTo(todo[0]!)}>Next box <ArrowRight size={14} /></Btn>
-                  : <Btn className="mt-3 w-full" disabled={busy} onClick={doFinishSigning}>{finishSigning.isPending && <Loader2 size={13} className="animate-spin" />} Finish signing</Btn>}
-              </section>
-            )}
+      <div className="flex min-h-0 flex-1">
+        {/* Page thumbnails */}
+        {pdf && pageCount > 0 && (
+          <aside className="hidden w-[132px] shrink-0 overflow-y-auto border-r border-slate-200 bg-white md:block dark:border-slate-700 dark:bg-slate-800">
+            <Thumbnails pdf={pdf} count={pageCount} current={current} onJump={jumpTo}
+              onMove={mode === "edit" && !showFinal ? (from, to) => void pageChange({ op: "move", page: from, to }) : undefined} busy={pageBusy} />
           </aside>
         )}
 
-        {/* Pages */}
-        <div className="min-w-0 flex-1">
-          {mode === "view" && <ViewSummary doc={doc} />}
-          {!doc.hasFile && <ErrorNote message="This document has no PDF yet." />}
-          {pdfErr && <ErrorNote message={`The PDF couldn't be shown: ${pdfErr}`} />}
-          {doc.hasFile && !pdf && !pdfErr && <Loading label="Opening the PDF…" />}
-          {pdf && (
-            <Pages pdf={pdf} count={pageCount} zoom={zoom} drawing={mode === "edit" && !!tool}
-              onPageClick={() => setSelected([])} onDraw={place} onHover={(p) => { hoverPage.current = p; }}
-              pageBar={mode !== "edit" || showFinal ? undefined : (i) => (
-                <>
-                  <span className="font-semibold text-slate-500">Page {i + 1} of {pages.length}{pageBusy ? " · updating…" : ""}</span>
-                  <span className="flex items-center gap-0.5">
-                    <button type="button" className={pageBtn} disabled={pageBusy || i === 0} title="Move this page up" aria-label={`Move page ${i + 1} up`} onClick={() => void pageChange({ op: "move", page: i, to: i - 1 })}><ArrowUp size={14} /></button>
-                    <button type="button" className={pageBtn} disabled={pageBusy || i >= pages.length - 1} title="Move this page down" aria-label={`Move page ${i + 1} down`} onClick={() => void pageChange({ op: "move", page: i, to: i + 1 })}><ArrowDown size={14} /></button>
-                    <button type="button" className={pageBtn} disabled={pageBusy} title="Turn this page a quarter turn" aria-label={`Turn page ${i + 1}`} onClick={() => void pageChange({ op: "turn", page: i, turn: 90 })}><RotateCw size={14} /></button>
-                    <button type="button" className={cn(pageBtn, "hover:text-red-600")} disabled={pageBusy || pages.length <= 1} title="Remove this page" aria-label={`Remove page ${i + 1}`}
-                      onClick={() => void pageChange({ op: "remove", page: i }, `Remove page ${i + 1}? Any boxes on it go with it. This can't be undone.`)}><Trash2 size={14} /></button>
-                  </span>
-                </>
-              )}
-              overlay={(page, vp) => showFinal ? null : (
-                <>
-                  {fields.filter((f) => f.page === page).map((f) => (
-                    <FieldBox key={f.id} f={f} vp={vp} color={colorOf(f.assignee)} who={nameOf(f.assignee)} editable={mode === "edit"} inert={!!tool}
-                      fillable={canFill(f)} selected={selected.includes(f.id)} resizable={selected.length === 1 && selected[0] === f.id} flash={flash === f.id}
-                      tapToFill={touch} sig={f.value ? sigs[f.value] ?? null : null}
-                      onSelect={(add) => select(f.id, add)} onMoveStart={onMoveStart} onMove={(p, how, scale) => onMove(f, p, how, scale)} onMoveEnd={onMoveEnd}
-                      onValue={(v) => fillValue(f.id, v)} onSign={() => startSign(f)} onTapFill={() => setFilling(f.id)} />
-                  ))}
-                  {guides && guides.page === page && guides.x != null && <div className="pointer-events-none absolute inset-y-0 w-px bg-fuchsia-500" style={{ left: (vp.convertToViewportPoint(guides.x, 0) as number[])[0] }} />}
-                  {guides && guides.page === page && guides.y != null && <div className="pointer-events-none absolute inset-x-0 h-px bg-fuchsia-500" style={{ top: (vp.convertToViewportPoint(0, guides.y) as number[])[1] }} />}
-                </>
-              )} />
-          )}
+        {/* The pages */}
+        <div ref={scroller} data-scroll onScroll={onScroll} className="relative min-w-0 flex-1 overflow-auto">
+          <div className="px-2 py-4 sm:px-6">
+            {!doc.hasFile && <ErrorNote message="This document has no PDF yet." />}
+            {pdfErr && <ErrorNote message={`The PDF couldn't be shown: ${pdfErr}`} />}
+            {doc.hasFile && !pdf && !pdfErr && <Loading label="Opening the PDF…" />}
+            {pdf && (
+              <Pages pdf={pdf} count={pageCount} zoom={zoom} fit={fit} aspect={aspect} className="overflow-x-auto pb-16" drawing={mode === "edit" && !!tool}
+                onPageClick={() => setSelected([])} onDraw={place} onHover={(p) => { hoverPage.current = p; }}
+                pageBar={mode !== "edit" || showFinal ? undefined : (i) => (
+                  <>
+                    <span className="font-semibold text-slate-500">Page {i + 1} of {pages.length}{pageBusy ? " · updating…" : ""}</span>
+                    <span className="flex items-center gap-0.5">
+                      <button type="button" className={pageBtn} disabled={pageBusy || i === 0} title="Move this page up" aria-label={`Move page ${i + 1} up`} onClick={() => void pageChange({ op: "move", page: i, to: i - 1 })}><ArrowUp size={14} /></button>
+                      <button type="button" className={pageBtn} disabled={pageBusy || i >= pages.length - 1} title="Move this page down" aria-label={`Move page ${i + 1} down`} onClick={() => void pageChange({ op: "move", page: i, to: i + 1 })}><ArrowDown size={14} /></button>
+                      <button type="button" className={pageBtn} disabled={pageBusy} title="Turn this page a quarter turn" aria-label={`Turn page ${i + 1}`} onClick={() => void pageChange({ op: "turn", page: i, turn: 90 })}><RotateCw size={14} /></button>
+                      <button type="button" className={cn(pageBtn, "hover:text-red-600")} disabled={pageBusy || pages.length <= 1} title="Remove this page" aria-label={`Remove page ${i + 1}`}
+                        onClick={() => void pageChange({ op: "remove", page: i }, `Page ${i + 1} and any boxes on it will be taken out of the document. This can't be undone.`)}><Trash2 size={14} /></button>
+                    </span>
+                  </>
+                )}
+                overlay={(page, vp) => showFinal ? null : (
+                  <>
+                    {fields.filter((f) => f.page === page).map((f) => (
+                      <FieldBox key={f.id} f={f} vp={vp} color={colorOf(f.assignee)} who={nameOf(f.assignee)} editable={mode === "edit"} inert={!!tool}
+                        fillable={canFill(f)} selected={selected.includes(f.id)} resizable={selected.length === 1 && selected[0] === f.id} flash={flash === f.id}
+                        tapToFill={touch} sig={f.value ? sigs[f.value] ?? null : null}
+                        onSelect={(add) => select(f.id, add)} onMoveStart={onMoveStart} onMove={(p, how, scale) => onMove(f, p, how, scale)} onMoveEnd={onMoveEnd}
+                        onValue={(v) => fillValue(f.id, v)} onSign={() => startSign(f)} onTapFill={() => setFilling(f.id)} />
+                    ))}
+                    {guides && guides.page === page && guides.x != null && <div className="pointer-events-none absolute inset-y-0 w-px bg-fuchsia-500" style={{ left: (vp.convertToViewportPoint(guides.x, 0) as number[])[0] }} />}
+                    {guides && guides.page === page && guides.y != null && <div className="pointer-events-none absolute inset-x-0 h-px bg-fuchsia-500" style={{ top: (vp.convertToViewportPoint(0, guides.y) as number[])[1] }} />}
+                  </>
+                )} />
+            )}
+          </div>
           {/* Signing: a bar that stays in view and walks through the boxes that are left. */}
           {mode === "sign" && pdf && (
-            <div className="sticky bottom-3 z-20 mt-2 flex justify-center px-2">
+            <div className="sticky bottom-3 z-20 flex justify-center px-2">
               <div className="flex w-full max-w-md items-center justify-between gap-3 rounded-2xl border border-violet-300 bg-white/95 p-2 ps-4 shadow-lg backdrop-blur dark:border-violet-800 dark:bg-slate-900/95">
                 <p className="text-sm font-semibold">{todo.length ? `${todo.length} box${todo.length === 1 ? "" : "es"} left for you` : "All your boxes are done"}</p>
                 {todo[0]
@@ -713,8 +802,57 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
               </div>
             </div>
           )}
+          {/* Phones and tablets: a picked box's settings are one tap away. */}
+          {mode === "edit" && selected.length > 0 && !panelOpen && (
+            <div className="sticky bottom-3 z-20 flex justify-end px-3 lg:hidden">
+              <Btn onClick={() => setPanelOpen(true)}><PanelRight size={14} /> {selected.length > 1 ? `${selected.length} picked` : "Box settings"}</Btn>
+            </div>
+          )}
         </div>
+
+        {/* The side panel */}
+        <aside className="hidden w-[320px] shrink-0 overflow-y-auto border-l border-slate-200 bg-slate-50 p-3 lg:block dark:border-slate-700 dark:bg-slate-900/60">
+          <div className="space-y-3 text-sm">{side}</div>
+        </aside>
       </div>
+
+      <Sheet open={panelOpen} onOpenChange={setPanelOpen}>
+        <SheetContent side="right" className="w-[340px] max-w-[92vw] overflow-y-auto bg-slate-50 p-3 sm:max-w-[360px] dark:bg-slate-900">
+          <SheetHeader className="p-0 pb-2"><SheetTitle className="text-sm">{mode === "edit" && sel ? "Box settings" : mode === "edit" && selected.length > 1 ? "Picked boxes" : "Details"}</SheetTitle></SheetHeader>
+          <div className="space-y-3 text-sm">{side}</div>
+        </SheetContent>
+      </Sheet>
+
+      {/* A question before something that can't be undone. */}
+      <Dialog open={!!ask} onOpenChange={(o) => !o && setAsk(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{ask?.title}</DialogTitle>
+            <DialogDescription>{ask?.text}</DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Btn variant="ghost" onClick={() => setAsk(null)}>Keep it</Btn>
+            <Btn variant={ask?.danger ? "danger" : "primary"} onClick={() => { const run = ask?.run; setAsk(null); run?.(); }}>{ask?.yes}</Btn>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Save as template: name it. */}
+      <Dialog open={templateName != null} onOpenChange={(o) => !o && setTemplateName(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Save as a template</DialogTitle>
+            <DialogDescription>The pages and boxes are kept; what was typed in them is not, so no patient's details carry over.</DialogDescription>
+          </DialogHeader>
+          <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); const t = (templateName ?? "").trim(); if (!t) return; setTemplateName(null); void saveTemplate(t); }}>
+            <input className={inputCls} autoFocus value={templateName ?? ""} maxLength={255} onChange={(e) => setTemplateName(e.target.value)} aria-label="Template name" />
+            <div className="flex justify-end gap-2">
+              <Btn type="button" variant="ghost" onClick={() => setTemplateName(null)}>Cancel</Btn>
+              <Btn type="submit" disabled={!(templateName ?? "").trim()}><FileStack size={13} /> Save template</Btn>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {/* White-out for real: say what will happen before the pages are replaced. */}
       <Dialog open={!!whiteoutAsk} onOpenChange={(o) => !o && setWhiteoutAsk(null)}>
