@@ -52,6 +52,11 @@ async function config(): Promise<AvailityConfig> {
   return { ...EMPTY, ...((await readSetting<AvailityConfig>(CONFIG_KEY)) ?? {}) };
 }
 const ready = (c: AvailityConfig) => !!(c.clientId && c.clientSecretEnc && c.npi);
+/** Connected for real (not demo): answers are this patient's coverage, not samples. */
+export async function availityLive(): Promise<boolean> {
+  const c = await config();
+  return ready(c) && c.mode === "production";
+}
 
 // ---------------------------------------------------------------------------
 // Connection (admin)

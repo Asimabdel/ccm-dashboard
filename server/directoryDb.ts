@@ -343,12 +343,15 @@ export async function patient360(actor: WorkspaceActor, key: string) {
   const [roster] = pid ? await d.select({ insurance: patients.insurance, preferredLanguage: patients.preferredLanguage }).from(patients).where(eq(patients.id, pid)).limit(1) : [];
   const clinicName = e.clinicId ? (await d.select({ name: clinics.name }).from(clinics).where(eq(clinics.id, e.clinicId)).limit(1))[0]?.name ?? null : null;
   await audit(actor, "view_patient", { entityType: "patient", entityId: pid ?? undefined, description: `Patient 360 (${key.slice(0, 2)})` });
+  // "Recent patients" in Find anything.
+  const { rememberPatient } = await import("./recentPatientsDb");
+  await rememberPatient(actor.id, key);
   const now = new Date();
   const upcoming = appts.filter((a) => a.startsAt > now && a.status === "scheduled").sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());
   return {
     key,
     patient: {
-      id: pid, key, name: e.name, dateOfBirth: e.dob, phoneNumber: e.phone, mrn: e.mrn, clinicId: e.clinicId, clinicName, providerName: e.providerName,
+      id: pid, key, name: e.name, dateOfBirth: e.dob, phoneNumber: e.phone, mrn: e.mrn, clinicId: e.clinicId, clinicName, providerId: e.providerId, providerName: e.providerName,
       preferredLanguage: roster?.preferredLanguage ?? null, insurance: roster?.insurance ?? null, lastVisit: e.lastVisit, programs: e.programs, sources: e.sources,
     },
     appointments: appts.map((a) => ({ ...a, provider: a.providerDisplay ?? a.providerName })),

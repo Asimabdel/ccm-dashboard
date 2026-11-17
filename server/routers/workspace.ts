@@ -1559,6 +1559,24 @@ export const workspaceRouter = router({
       const actor = await actorFor(ctx, "flowView");
       return run(() => directory.patient360(actor, input.key));
     }),
+    /** "Ready for the next visit?": consent, insurance, screenings, tests, care plan (each part only for those allowed). */
+    readiness: protectedProcedure.input(z.object({ key: patientKey })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "flowView");
+      const { patientReadiness } = await import("../patientReadinessDb");
+      return run(() => patientReadiness(actor, input.key));
+    }),
+    /** The checklist's "Check now": an insurance check with what's on file. */
+    checkInsurance: protectedProcedure.input(z.object({ key: z.string().regex(subjectKeyRe) })).mutation(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "eligibility");
+      const { quickInsuranceCheck } = await import("../patientReadinessDb");
+      return run(() => quickInsuranceCheck(actor, input.key));
+    }),
+    /** Find anything: the patients this person opened last. */
+    recent: protectedProcedure.query(async ({ ctx }) => {
+      const actor = await actorFor(ctx, "flowView");
+      const { recentPatients } = await import("../recentPatientsDb");
+      return run(() => recentPatients(actor.id));
+    }),
   }),
 
   /**

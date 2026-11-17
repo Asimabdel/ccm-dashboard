@@ -244,9 +244,9 @@ export default function WorkspaceHome() {
             {hasRight && (
               <div className="space-y-6 min-w-0">
                 {showOpenings && (
-                  <div className="rounded-xl bg-[#1a1b1f] text-white p-6 shadow-lg relative overflow-hidden">
-                    <div className="pointer-events-none absolute -right-16 -top-16 w-48 h-48 rounded-full bg-brand/25 blur-3xl" />
-                    <p className="relative text-[11px] font-semibold uppercase tracking-wider text-orange-300">Fill the right openings</p>
+                  <div className="rounded-xl bg-sidebar text-white p-6 shadow-lg relative overflow-hidden">
+                    <div className="pointer-events-none absolute -right-16 -top-16 w-48 h-48 rounded-full bg-brand-bright/25 blur-3xl" />
+                    <p className="relative text-[11px] font-semibold uppercase tracking-wider text-teal-300">Fill the right openings</p>
                     <p className="relative mt-2 text-lg font-bold leading-snug">
                       {d.opportunities?.uniquePatients
                         ? `${plural(d.opportunities.uniquePatients, "patient")} may be appropriate for upcoming appointment openings.`

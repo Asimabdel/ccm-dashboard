@@ -16,6 +16,8 @@ export interface SendPreset {
   language?: IntakeLang;
   clinicId?: number | null;
   bookingRequestId?: number | null;
+  /** Forms ticked when it opens (default: the medical intake). */
+  forms?: string[] | null;
 }
 
 type Via = "text" | "email" | "link";
@@ -61,7 +63,7 @@ export function SendFormsDialog({ open, onClose, preset }: { open: boolean; onCl
     setSubjectKey(preset?.subjectKey ?? null);
     setName(preset?.name ?? ""); setDob(""); setPhone(preset?.phone ?? ""); setEmail("");
     setLanguage(preset?.language ?? "en"); setClinicId(preset?.clinicId ?? null);
-    setForms([MEDICAL_INTAKE_KEY]); setVia("text");
+    setForms(preset?.forms?.length ? preset.forms : [MEDICAL_INTAKE_KEY]); setVia("text");
   }, [open, preset]);
 
   // Prefill from what MyPCP knows about the person.

@@ -216,9 +216,9 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
     return (
       <div
         key={item.path}
-        className={cn("group/nav relative flex items-center rounded-lg transition-colors", active ? "bg-white/[0.08]" : "hover:bg-white/[0.05]")}
+        className={cn("group/nav relative flex items-center rounded-lg transition-colors", active ? "bg-brand-bright/[0.12]" : "hover:bg-white/[0.05]")}
       >
-        {active && <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r bg-brand" />}
+        {active && <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r bg-brand-bright" />}
         <button
           onClick={() => setLocation(item.path)}
           title={item.label}
@@ -229,7 +229,7 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
             active ? "text-white font-medium" : "text-slate-400 group-hover/nav:text-slate-100",
           )}
         >
-          <Icon size={17} className={cn("shrink-0", active && "text-white")} />
+          <Icon size={17} className={cn("shrink-0", active && "text-brand-bright")} />
           {!rail && <span className="truncate">{item.label}</span>}
           {waiting > 0 && (
             <span className={cn(bubble, rail ? "absolute right-1 top-1" : "ml-auto")} aria-label={`${waiting} waiting`}>
@@ -296,7 +296,7 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
   const sidebar = (
     <aside
       className={cn(
-        "flex flex-col bg-[#17181b] text-slate-300 h-full transition-[width] duration-200",
+        "flex flex-col bg-sidebar text-slate-300 h-full transition-[width] duration-200",
         isMobile ? "w-72" : rail ? "w-[72px]" : "w-64",
       )}
     >
@@ -305,7 +305,7 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
           <BrandMark size={32} className="shrink-0" />
           {!rail && (
             <div className="leading-tight text-left min-w-0">
-              <span className="block text-sm font-bold tracking-wide text-white truncate">MYPCP</span>
+              <span className="block text-[15px] font-bold tracking-tight text-white truncate">MyPCP Dr</span>
               <span className="block text-[11px] text-slate-400 font-medium">Workspace</span>
             </div>
           )}
@@ -375,11 +375,11 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
           {/* ⌘K command palette — a wide search field, as in the Workspace design */}
           <button
             onClick={() => window.dispatchEvent(new Event("open-command-palette"))}
-            className="flex-1 min-w-0 max-w-md flex items-center gap-2 h-9 px-3 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm text-left hover:border-slate-300 transition-colors"
+            className="flex-1 min-w-0 max-w-lg flex items-center gap-2.5 h-9 px-3 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-sm text-left hover:border-brand/50 hover:bg-white hover:ring-[3px] hover:ring-brand/10 transition-all"
             title={`Search (${KBD_HINT})`}
           >
             <Search size={16} className="text-slate-400 shrink-0" />
-            <span className="flex-1 truncate text-slate-400">Find anything…</span>
+            <span className="flex-1 truncate text-slate-500 dark:text-slate-400"><span className="hidden md:inline">Find anything · patients, pages, or what to do</span><span className="md:hidden">Find anything</span></span>
             <kbd className="hidden sm:inline-flex items-center text-[10px] font-medium text-slate-400 border border-slate-200 dark:border-slate-600 rounded px-1.5 py-0.5">
               {KBD_HINT}
             </kbd>

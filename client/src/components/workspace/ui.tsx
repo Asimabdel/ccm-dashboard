@@ -76,7 +76,7 @@ export function SectionLabel({ children, className }: { children: React.ReactNod
   return <h3 className={cn("mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400", className)}>{children}</h3>;
 }
 
-export const cardCls = "bg-white rounded-xl border border-slate-200 dark:border-slate-700 shadow-[0_1px_2px_rgba(20,21,25,0.04)]";
+export const cardCls = "bg-white rounded-xl border border-slate-200 dark:border-slate-700 shadow-[0_1px_2px_rgba(14,32,34,0.05)]";
 
 export function Panel({ title, subtitle, action, children, className, bodyClassName }: { title?: React.ReactNode; subtitle?: React.ReactNode; action?: React.ReactNode; children: React.ReactNode; className?: string; bodyClassName?: string }) {
   return (
@@ -99,7 +99,7 @@ export function Panel({ title, subtitle, action, children, className, bodyClassN
 export type Tone = "info" | "brand" | "success" | "warning" | "danger" | "violet" | "neutral";
 export const TONE_TILE: Record<Tone, string> = {
   info: "bg-tone-info-soft text-tone-info dark:bg-sky-500/15 dark:text-sky-300",
-  brand: "bg-brand-soft text-brand dark:bg-orange-500/15 dark:text-orange-300",
+  brand: "bg-brand-soft text-brand dark:bg-teal-400/15 dark:text-teal-300",
   success: "bg-tone-success-soft text-tone-success dark:bg-emerald-500/15 dark:text-emerald-300",
   warning: "bg-tone-warning-soft text-tone-warning dark:bg-amber-500/15 dark:text-amber-300",
   danger: "bg-tone-danger-soft text-tone-danger dark:bg-rose-500/15 dark:text-rose-300",
@@ -108,7 +108,7 @@ export const TONE_TILE: Record<Tone, string> = {
 };
 export const TONE_TEXT: Record<Tone, string> = {
   info: "text-tone-info dark:text-sky-300",
-  brand: "text-brand dark:text-orange-300",
+  brand: "text-brand dark:text-teal-300",
   success: "text-tone-success dark:text-emerald-300",
   warning: "text-tone-warning dark:text-amber-300",
   danger: "text-tone-danger dark:text-rose-300",
@@ -130,7 +130,7 @@ const HINT_TONES = {
   good: "text-tone-success dark:text-emerald-300",
   warn: "text-tone-warning dark:text-amber-300",
   bad: "text-tone-danger dark:text-rose-300",
-  accent: "text-brand dark:text-orange-300",
+  accent: "text-brand dark:text-teal-300",
 } as const;
 
 export function MetricCard({ label, value, hint, tone = "neutral", icon, iconTone = "neutral", href }: { label: string; value: React.ReactNode; hint?: React.ReactNode; tone?: keyof typeof HINT_TONES; icon?: React.ElementType; iconTone?: Tone; href?: string }) {
@@ -249,8 +249,8 @@ export function SelectBox({ value, onChange, children, className, ariaLabel }: {
 
 export function Btn({ variant = "primary", size = "md", className, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "brand" | "secondary" | "ghost" | "danger"; size?: "sm" | "md" }) {
   const v = {
-    primary: "bg-ink text-white hover:bg-ink/85 shadow-sm dark:bg-brand dark:hover:bg-brand/90",
-    brand: "bg-brand text-white hover:bg-brand/90 shadow-sm",
+    primary: "bg-brand text-white hover:bg-brand-strong shadow-sm",
+    brand: "bg-brand text-white hover:bg-brand-strong shadow-sm",
     secondary: "border border-slate-200 dark:border-slate-600 bg-white text-slate-800 dark:text-slate-200 hover:bg-slate-50",
     ghost: "text-slate-600 dark:text-slate-300 hover:bg-slate-100",
     danger: "bg-rose-600 text-white hover:bg-rose-700",
