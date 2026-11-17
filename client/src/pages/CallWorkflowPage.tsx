@@ -13,6 +13,8 @@ import { MedRefillPanel } from "@/components/MedRefillPanel";
 import { PhoneLink } from "@/components/phone/PhoneLink";
 import { CallConditionsCard, callConditionPayload, type CallConditionState } from "@/components/careplan/CallConditionsCard";
 import { CORE_QUESTIONS, cleanCallExtras } from "@shared/ccmCall";
+import { simpleQuestionsFor, splitAnswer } from "@shared/ccmQuestions";
+import { ITEM_BY_KEY } from "@shared/conditionLibrary";
 
 type Responses = {
   howFeeling: string; newSymptoms: string; medicationAdherence: string; refillsNeeded: string;
@@ -119,7 +121,12 @@ export default function CallWorkflowPage() {
       // CCM condition part: answers, readings (older notes only have the two reading columns).
       const extras = cleanCallExtras(n.callExtras);
       const answers: CallConditionState["answers"] = {};
-      for (const c of extras.conditions) answers[c.key] = Object.fromEntries(c.answers.map((x) => [x.q, x.a]));
+      for (const c of extras.conditions) {
+        const qa = c.answers[0];
+        if (!qa) continue;
+        const options = simpleQuestionsFor(c.key, ITEM_BY_KEY.get(c.key)?.category).find((x) => x.q === qa.q)?.options ?? [];
+        answers[c.key] = { q: qa.q, ...splitAnswer(qa.a, options) };
+      }
       setCond({
         answers,
         readings: { ...extras.readings, ...(extras.readings.bp ? {} : n.bloodPressureReading ? { bp: n.bloodPressureReading } : {}), ...(extras.readings.sugar ? {} : n.bloodSugarReading ? { sugar: n.bloodSugarReading } : {}) },

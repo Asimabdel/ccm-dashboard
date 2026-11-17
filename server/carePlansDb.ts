@@ -19,6 +19,7 @@ import {
 } from "../drizzle/schema";
 import { cleanGoalChecks, goalProgress, planGoalSummary, problemIdOf, reviewDueOf, type GoalCheck } from "../shared/carePlanProgress";
 import { askedByCondition, nextQuestion, questionKey, readingsFor } from "../shared/ccmCall";
+import { simpleQuestionsFor, type SimpleQuestion } from "../shared/ccmQuestions";
 import {
   DEFAULT_LIBRARY, ITEM_BY_KEY, LIBRARY_ITEMS, LIBRARY_KEYS, REVIEW_NOTES, itemLabel, resolveItems,
   type ConditionLibraryEntry, type LibraryLang, type ResolvedItem,
@@ -644,16 +645,18 @@ export async function callContext(actor: WorkspaceActor, patientId: number, ccmT
   const askedBefore = askedByCondition(notes.filter((n) => n.taskId !== ccmTaskId).map((n) => n.extras));
   const askedNow = askedByCondition(notes.filter((n) => ccmTaskId != null && n.taskId === ccmTaskId).map((n) => n.extras));
   const talk = (key: string | null) => (key ? approved.get(key)?.entry.talkingPoints ?? null : null);
+  // The condition's simple questions (short, answered with a tap: shared/ccmQuestions), one per call.
   const questionFor = (key: string | null, kind: "condition" | "addon") => {
-    const ask = kind === "addon" || !key ? [] : talk(key)?.ask ?? [];
-    const now = ask.find((q) => askedNow.get(key!)?.has(questionKey(q)));
-    const q = now ?? nextQuestion(ask, askedBefore.get(key ?? "") ?? new Set());
-    return { ask: q ? [q] : [], allAsked: ask.length > 0 && !q };
+    const list = kind === "addon" || !key ? [] : simpleQuestionsFor(key, ITEM_BY_KEY.get(key)?.category);
+    const now = list.find((x) => askedNow.get(key!)?.has(questionKey(x.q)));
+    const next = nextQuestion(list.map((x) => x.q), askedBefore.get(key ?? "") ?? new Set());
+    const question = now ?? list.find((x) => x.q === next) ?? null;
+    return { question, allAsked: list.length > 0 && !question };
   };
 
   const sections: {
     id: string; key: string | null; label: string; kind: "condition" | "addon"; diagnosis: string; onPlan: boolean;
-    ask: string[]; allAsked: boolean; teach: string[]; lastCovered: Date | null;
+    question: SimpleQuestion | null; allAsked: boolean; teach: string[]; lastCovered: Date | null;
   }[] = [];
   for (const p of problems) {
     sections.push({
