@@ -37,6 +37,28 @@ export function readingsFor(keys: string[]): ReadingKey[] {
   return out;
 }
 
+/** A question as remembered across calls (wording only: case, spacing and end punctuation don't matter). */
+export const questionKey = (q: string) => q.toLowerCase().replace(/\s+/g, " ").replace(/[?.!\s]+$/, "").trim();
+
+/**
+ * The one question for a condition on this call: the first of its questions this patient hasn't been asked
+ * (answered) on an earlier call. Null when they've all been asked: questions are never repeated for a patient.
+ */
+export function nextQuestion(ask: string[], askedBefore: Set<string>): string | null {
+  return ask.find((q) => q.trim() && !askedBefore.has(questionKey(q))) ?? null;
+}
+
+/** The questions answered on earlier calls, by condition key (from those notes' callExtras). */
+export function askedByCondition(notes: unknown[]): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const n of notes) for (const c of cleanCallExtras(n).conditions) {
+    const set = out.get(c.key) ?? new Set<string>();
+    for (const qa of c.answers) set.add(questionKey(qa.q));
+    out.set(c.key, set);
+  }
+  return out;
+}
+
 /** One condition's questions and the patient's answers on this call. */
 export interface ConditionAnswers { key: string; label: string; answers: { q: string; a: string }[] }
 /** What the condition-shaped part of the call adds to the note. */

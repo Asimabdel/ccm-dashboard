@@ -11,9 +11,8 @@ import {
 import { phq9Severity, gad7Severity, bhiCompliance } from "@/lib/ccm";
 import { MedRefillPanel } from "@/components/MedRefillPanel";
 import { PhoneLink } from "@/components/phone/PhoneLink";
-import { CallConditionsCard, callConditionPayload, type CallConditionState, type GoalEntry } from "@/components/careplan/CallConditionsCard";
+import { CallConditionsCard, callConditionPayload, type CallConditionState } from "@/components/careplan/CallConditionsCard";
 import { CORE_QUESTIONS, cleanCallExtras } from "@shared/ccmCall";
-import { cleanGoalChecks } from "@shared/carePlanProgress";
 
 type Responses = {
   howFeeling: string; newSymptoms: string; medicationAdherence: string; refillsNeeded: string;
@@ -85,10 +84,10 @@ export default function CallWorkflowPage() {
   const [carePlanUpdated, setCarePlanUpdated] = useState(false);
   const [bhiRisk, setBhiRisk] = useState(false);
 
-  // CCM: condition by condition — care-plan goals checked, each condition's questions, readings, teaching
-  // covered, and whether the plan was reviewed with the patient on this call.
-  const [cond, setCond] = useState<CallConditionState>({ goals: {}, answers: {}, readings: {}, covered: [], reviewed: false });
-  const callCtx = trpc.workspace.carePlans.forCall.useQuery({ patientId: patientId! }, { enabled: !!patientId && !isBhi, retry: false });
+  // CCM: condition by condition — one question per condition (never repeated for the patient), readings,
+  // teaching covered, and whether the plan was reviewed with the patient on this call.
+  const [cond, setCond] = useState<CallConditionState>({ answers: {}, readings: {}, covered: [], reviewed: false });
+  const callCtx = trpc.workspace.carePlans.forCall.useQuery({ patientId: patientId!, ccmTaskId: taskId }, { enabled: !!patientId && !isBhi, retry: false });
 
   // Minutes spent on this call — entered manually, logged onto the monthly task
   // when the note is saved (used toward the monthly time total for billing).
@@ -117,14 +116,12 @@ export default function CallWorkflowPage() {
       if (n.behavioralStatus) setBehavioralStatus(n.behavioralStatus);
       if (n.carePlanUpdated) setCarePlanUpdated(true);
       if (n.bhiRiskFlag) setBhiRisk(true);
-      // CCM condition part: goals, answers, readings (older notes only have the two reading columns).
+      // CCM condition part: answers, readings (older notes only have the two reading columns).
       const extras = cleanCallExtras(n.callExtras);
-      const goals: Record<string, GoalEntry> = {};
-      for (const g of cleanGoalChecks(n.goalChecks)) goals[g.goalId] = { problemId: g.problemId, problem: g.problem, goal: g.goal, status: g.status, value: g.value };
       const answers: CallConditionState["answers"] = {};
       for (const c of extras.conditions) answers[c.key] = Object.fromEntries(c.answers.map((x) => [x.q, x.a]));
       setCond({
-        goals, answers,
+        answers,
         readings: { ...extras.readings, ...(extras.readings.bp ? {} : n.bloodPressureReading ? { bp: n.bloodPressureReading } : {}), ...(extras.readings.sugar ? {} : n.bloodSugarReading ? { sugar: n.bloodSugarReading } : {}) },
         covered: Array.isArray(n.educationCovered) ? (n.educationCovered as string[]) : [],
         reviewed: !!n.carePlanReviewed,
@@ -184,16 +181,14 @@ export default function CallWorkflowPage() {
   const cc = callCtx.data;
   const condPayload = callConditionPayload(cond, cc);
   const ccmFields = isBhi ? {} : {
-    carePlanReviewed: cond.reviewed || condPayload.goalChecks.length > 0, educationCovered: cond.covered,
-    goalChecks: condPayload.goalChecks, callExtras: condPayload.callExtras,
+    carePlanReviewed: cond.reviewed, educationCovered: cond.covered, callExtras: condPayload.callExtras,
     bloodPressureReading: cond.readings.bp?.trim() ?? "", bloodSugarReading: cond.readings.sugar?.trim() ?? "",
   };
   const carePlanForNote = isBhi || !cc ? undefined : {
     status: cc.plan?.status ?? "none",
-    reviewed: cond.reviewed || condPayload.goalChecks.length > 0,
+    reviewed: cond.reviewed,
     problems: cc.sections.filter((s) => s.onPlan).map((s) => s.label),
     educationCovered: condPayload.coveredLabels,
-    goals: condPayload.goalChecks.map((g) => ({ problem: g.problem, goal: g.goal, status: g.status, value: g.value })),
   };
 
   const phqBand = phq9Severity(phq9 !== "" ? Number(phq9) : null);
@@ -340,7 +335,7 @@ export default function CallWorkflowPage() {
             </div>
           </div>
 
-          {!isBhi && patientId && <CallConditionsCard patientId={patientId} state={cond} setState={setCond} />}
+          {!isBhi && patientId && <CallConditionsCard patientId={patientId} taskId={taskId} state={cond} setState={setCond} />}
 
           {/* Medication refill requests → provider */}
           {patientId && <MedRefillPanel patientId={patientId} ccmTaskId={taskId} providerName={patient.data?.provider?.name} />}

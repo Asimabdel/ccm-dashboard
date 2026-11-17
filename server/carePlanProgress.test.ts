@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { cleanGoalChecks, goalIdOf, goalProgress, planChanges, planGoalSummary, problemIdOf, reviewDueOf, type GoalCheck } from "../shared/carePlanProgress";
 import { emptyProblem, renderPlanText, type PlanGeneral, type PlanProblem } from "../shared/carePlanDoc";
-import { callExtrasText, cleanCallExtras, readingsFor } from "../shared/ccmCall";
+import { askedByCondition, callExtrasText, cleanCallExtras, nextQuestion, readingsFor } from "../shared/ccmCall";
 
 // Made-up plan content only.
 const dm: PlanProblem = { ...emptyProblem("diabetes_t2", "Type 2 diabetes mellitus (E11.9)", "Type 2 diabetes"), goals: ["A1c below 7.5%", "No low blood sugars"], interventions: ["Monthly call"] };
@@ -86,6 +86,21 @@ describe("Calls shaped by the patient's conditions", () => {
     expect(readingsFor(["hypertension", "hf_reduced"])).toEqual(["bp", "weight"]);
     expect(readingsFor(["dm_kidney", "obesity"])).toEqual(["bp", "sugar", "weight"]);
     expect(readingsFor(["copd", "depression"])).toEqual([]);
+  });
+
+  it("never asks a patient the same condition question twice", () => {
+    const ask = ["How have your sugars been?", "Any lows?", "Feet ok?"];
+    // Earlier calls (made-up): the first question answered once (different spacing / no "?"), one left blank.
+    const earlier = [
+      { readings: {}, conditions: [{ key: "diabetes_t2", label: "Type 2 diabetes", answers: [{ q: "How have your  sugars been", a: "Fine" }] }] },
+      { readings: {}, conditions: [{ key: "diabetes_t2", label: "Type 2 diabetes", answers: [{ q: "Any lows?", a: "" }] }] },
+      null,
+    ];
+    const asked = askedByCondition(earlier);
+    expect(nextQuestion(ask, asked.get("diabetes_t2")!)).toBe("Any lows?"); // a blank answer doesn't count as asked
+    expect(nextQuestion(ask, asked.get("copd") ?? new Set())).toBe("How have your sugars been?");
+    const all = askedByCondition([{ conditions: ask.map((q) => ({ key: "diabetes_t2", label: "x", answers: [{ q, a: "made-up" }] })) }]);
+    expect(nextQuestion(ask, all.get("diabetes_t2")!)).toBeNull();
   });
 
   it("keeps only answered questions and real readings", () => {

@@ -17,8 +17,8 @@ import {
   ccmNotes, ccmTasks, clinics, conditionContent, conditionContentHistory, educationSends, fhirResources, patientCarePlanSignatures,
   patientCarePlans, patients, providers, users,
 } from "../drizzle/schema";
-import { cleanGoalChecks, goalIdOf, goalProgress, planGoalSummary, problemIdOf, reviewDueOf, type GoalCheck } from "../shared/carePlanProgress";
-import { readingsFor } from "../shared/ccmCall";
+import { cleanGoalChecks, goalProgress, planGoalSummary, problemIdOf, reviewDueOf, type GoalCheck } from "../shared/carePlanProgress";
+import { askedByCondition, nextQuestion, questionKey, readingsFor } from "../shared/ccmCall";
 import {
   DEFAULT_LIBRARY, ITEM_BY_KEY, LIBRARY_ITEMS, LIBRARY_KEYS, REVIEW_NOTES, itemLabel, resolveItems,
   type ConditionLibraryEntry, type LibraryLang, type ResolvedItem,
@@ -619,11 +619,14 @@ export async function publicSent(code: string) {
 // ---------------------------------------------------------------------------
 
 /**
- * For the guided CCM call, condition by condition: each section of the patient's care plan (its goals with
- * how they went on earlier calls) joined with the condition's questions to ask and points to teach, then
- * any condition on the record that isn't on the plan yet; and the readings their conditions call for.
+ * For the guided CCM call, condition by condition: each condition on the patient's care plan, then any
+ * condition on the record that isn't on the plan yet, with ONE question to ask and the points to teach; and
+ * the readings their conditions call for. The question is the next one this patient hasn't been asked on an
+ * earlier call (questions are never repeated for a patient); the call being worked on (`ccmTaskId`) keeps
+ * the question it asked. Add-ons (a complication or a combination) repeat their condition's topics, so they
+ * ask nothing extra.
  */
-export async function callContext(actor: WorkspaceActor, patientId: number) {
+export async function callContext(actor: WorkspaceActor, patientId: number, ccmTaskId?: number | null) {
   const conditions = await rosterItems(patientId);
   const d = await db();
   const [row] = await d.select().from(patientCarePlans).where(eq(patientCarePlans.patientId, patientId)).limit(1);
@@ -635,34 +638,36 @@ export async function callContext(actor: WorkspaceActor, patientId: number) {
     .where(eq(educationSends.patientId, patientId)).orderBy(desc(educationSends.createdAt)).limit(40);
   const lastCovered = new Map<string, Date>();
   for (const s of recent) for (const k of s.keys as string[]) if (!lastCovered.has(k)) lastCovered.set(k, s.createdAt);
-  const progress = row ? goalProgress(await goalCalls(patientId)) : {};
+  // The questions answered on this patient's other calls, and the one this call already asked.
+  const notes = await d.select({ taskId: ccmNotes.ccmTaskId, extras: ccmNotes.callExtras }).from(ccmNotes)
+    .where(and(eq(ccmNotes.patientId, patientId), sql`${ccmNotes.callExtras} IS NOT NULL`));
+  const askedBefore = askedByCondition(notes.filter((n) => n.taskId !== ccmTaskId).map((n) => n.extras));
+  const askedNow = askedByCondition(notes.filter((n) => ccmTaskId != null && n.taskId === ccmTaskId).map((n) => n.extras));
   const talk = (key: string | null) => (key ? approved.get(key)?.entry.talkingPoints ?? null : null);
-  // One question per condition (its main one, listed first), after the check-in questions everyone gets;
-  // add-ons (a complication or a combination) repeat their condition's topics, so they ask nothing extra.
-  const oneQuestion = (key: string | null, kind: "condition" | "addon") => (kind === "addon" ? [] : talk(key)?.ask.slice(0, 1) ?? []);
+  const questionFor = (key: string | null, kind: "condition" | "addon") => {
+    const ask = kind === "addon" || !key ? [] : talk(key)?.ask ?? [];
+    const now = ask.find((q) => askedNow.get(key!)?.has(questionKey(q)));
+    const q = now ?? nextQuestion(ask, askedBefore.get(key ?? "") ?? new Set());
+    return { ask: q ? [q] : [], allAsked: ask.length > 0 && !q };
+  };
 
   const sections: {
     id: string; key: string | null; label: string; kind: "condition" | "addon"; diagnosis: string; onPlan: boolean;
-    goals: { goalId: string; goal: string; latest: { status: string; value: string; at: string } | null; flag: boolean }[];
-    ask: string[]; teach: string[]; lastCovered: Date | null;
+    ask: string[]; allAsked: boolean; teach: string[]; lastCovered: Date | null;
   }[] = [];
   for (const p of problems) {
-    const id = problemIdOf(p);
-    const tp = talk(p.key);
     sections.push({
-      id, key: p.key, label: p.problem || p.diagnosis || (p.key ? itemLabel(p.key) : "Problem"), kind: p.kind ?? "condition", diagnosis: p.diagnosis, onPlan: true,
-      goals: p.goals.filter((g) => g.trim()).map((g) => { const pr = progress[goalIdOf(id, g)]; return { goalId: goalIdOf(id, g), goal: g, latest: pr?.latest ?? null, flag: !!pr?.flag }; }),
-      ask: oneQuestion(p.key, p.kind ?? "condition"), teach: tp?.teach ?? [], lastCovered: p.key ? lastCovered.get(p.key) ?? null : null,
+      id: problemIdOf(p), key: p.key, label: p.problem || p.diagnosis || (p.key ? itemLabel(p.key) : "Problem"), kind: p.kind ?? "condition", diagnosis: p.diagnosis, onPlan: true,
+      ...questionFor(p.key, p.kind ?? "condition"), teach: talk(p.key)?.teach ?? [], lastCovered: p.key ? lastCovered.get(p.key) ?? null : null,
     });
   }
   const onPlan = new Set(problems.map((p) => p.key).filter(Boolean));
   for (const c of conditions) {
     if (onPlan.has(c.key)) continue;
-    const tp = talk(c.key);
-    sections.push({ id: c.key, key: c.key, label: c.label, kind: c.kind, diagnosis: c.diagnosis, onPlan: false, goals: [], ask: oneQuestion(c.key, c.kind), teach: tp?.teach ?? [], lastCovered: lastCovered.get(c.key) ?? null });
+    sections.push({ id: c.key, key: c.key, label: c.label, kind: c.kind, diagnosis: c.diagnosis, onPlan: false, ...questionFor(c.key, c.kind), teach: talk(c.key)?.teach ?? [], lastCovered: lastCovered.get(c.key) ?? null });
   }
   return {
-    plan: row ? { status: statusOf(row), signedByName: row.signedByName, signedAt: row.signedAt, reviewedThisMonth: row.lastReviewedMonth === month, summary: planGoalSummary(problems, progress) } : null,
+    plan: row ? { status: statusOf(row), signedByName: row.signedByName, signedAt: row.signedAt, reviewedThisMonth: row.lastReviewedMonth === month } : null,
     sections,
     /** The readings worth asking for, from the patient's conditions (blood pressure, blood sugar, weight). */
     readings: readingsFor(keys),

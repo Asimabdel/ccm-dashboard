@@ -48,7 +48,7 @@ export function GoalLine({ goal, progress }: { goal: string; progress?: GoalProg
             <GoalChip status={l.status} />
             <span className="text-xs text-slate-500">{l.value ? <b className="font-semibold text-slate-700 dark:text-slate-200">{l.value}</b> : null}{l.value ? " · " : ""}{fmtShortDate(l.at)}</span>
           </>
-        ) : <span className="text-xs text-slate-400">Not checked on a call yet</span>}
+        ) : null}
       </div>
       {progress?.flag && (
         <p className="w-full basis-full rounded-md bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
@@ -169,7 +169,7 @@ export function PlanActions({ patientId, language, onCopyPlan, onCopyGoals }: { 
         <DropdownMenuTrigger asChild><Btn variant="secondary" size="sm"><Copy size={14} /> Copy <ChevronDown size={13} /></Btn></DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-64">
           <DropdownMenuItem onSelect={onCopyPlan}><FileText size={14} /> The whole plan (text)</DropdownMenuItem>
-          <DropdownMenuItem onSelect={onCopyGoals}><Copy size={14} /> Goals and how they're going</DropdownMenuItem>
+          <DropdownMenuItem onSelect={onCopyGoals}><Copy size={14} /> Just the goals</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
       <DropdownMenu>

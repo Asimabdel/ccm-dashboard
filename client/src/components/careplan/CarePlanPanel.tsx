@@ -96,7 +96,7 @@ export function CarePlanPanel({ patientId }: { patientId: number }) {
       out.push("", `${i + 1}. ${p.problem || p.diagnosis}`);
       for (const g of p.goals.filter((x) => x.trim())) {
         const l = progress[goalIdOf(problemIdOf(p), g)]?.latest;
-        out.push(`   • ${g}${l ? ` | ${GOAL_STATUS_LABELS[l.status]}${l.value ? ` (${l.value})` : ""}, ${fmtShortDate(l.at)}` : " | not checked yet"}`);
+        out.push(`   • ${g}${l ? ` | ${GOAL_STATUS_LABELS[l.status]}${l.value ? ` (${l.value})` : ""}, ${fmtShortDate(l.at)}` : ""}`);
       }
     });
     void copyText(out.join("\n"), "The goals");
@@ -146,7 +146,7 @@ export function CarePlanPanel({ patientId }: { patientId: number }) {
             </div>
           )}
         </div>
-        {s && s.total > 0 && <GoalSummary s={s} />}
+        {s && s.checked > 0 && <GoalSummary s={s} />}
       </div>
 
       {!d.canSign && plan.status !== "signed" && <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">A provider reviews and signs the plan{d.patient.providerName ? ` (their provider: ${d.patient.providerName})` : ""}. It shows on their Care plans → To sign list.</p>}
@@ -212,7 +212,7 @@ function addMonths(ymd: string, n: number) {
   return d.toISOString().slice(0, 10);
 }
 
-/** "5 on track · 1 met · 2 not yet · 3 not checked", with a bar. */
+/** "5 on track · 1 met · 2 not yet · 3 with no result", with a bar (only for plans whose goals have results). */
 function GoalSummary({ s }: { s: NonNullable<Data["summary"]> }) {
   const unchecked = s.total - s.checked;
   const seg = (n: number, cls: string, label: string) => n > 0 && <span className={cls} style={{ width: `${(n / s.total) * 100}%` }} title={`${n} ${label}`} />;
@@ -223,7 +223,7 @@ function GoalSummary({ s }: { s: NonNullable<Data["summary"]> }) {
         {s.onTrack > 0 && <span className="text-emerald-700 dark:text-emerald-300">{s.onTrack} on track</span>}
         {s.met > 0 && <span className="text-teal-700 dark:text-teal-300">{s.met} met</span>}
         {s.notYet > 0 && <span className="text-amber-700 dark:text-amber-300">{s.notYet} not yet</span>}
-        {unchecked > 0 && <span className="text-slate-500">{unchecked} not checked on a call yet</span>}
+        {unchecked > 0 && <span className="text-slate-500">{unchecked} with no result</span>}
         {s.flagged > 0 && <span className="inline-flex items-center gap-1 font-semibold text-amber-800 dark:text-amber-200"><AlertTriangle size={12} /> {s.flagged} to bring to the provider</span>}
       </div>
       <div className="mt-1.5 flex h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
@@ -336,7 +336,6 @@ function PlanEditor({ plan, onChange, onAdd, adding }: { plan: Plan; onChange: (
           <TextField label="Problem" value={p.problem} rows={1} onChange={(v) => setProblem(i, { problem: v })} />
           <TextField label={PLAN_FIELD_LABELS.expectedOutcome} value={p.expectedOutcome} onChange={(v) => setProblem(i, { expectedOutcome: v })} />
           <ListEditor label={PLAN_FIELD_LABELS.goals} value={p.goals} placeholder="A goal you can measure, e.g. Blood pressure below 130/80" onChange={(v) => setProblem(i, { goals: v })} />
-          <p className="-mt-2 text-xs text-slate-500">Changing a goal's wording starts a new progress history for it on the calls.</p>
           <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
             {OTHER_FIELDS.map((f) => <ListEditor key={f} label={PLAN_FIELD_LABELS[f]} value={p[f]} onChange={(v) => setProblem(i, { [f]: v } as Partial<PlanProblem>)} />)}
           </div>

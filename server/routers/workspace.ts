@@ -1696,9 +1696,9 @@ export const workspaceRouter = router({
       return run(() => carePlans.signAllMine(actor, { deadline: Date.now() + 20_000 }));
     }),
     /** The guided CCM call, condition by condition: plan goals, questions to ask, points to teach, readings. */
-    forCall: protectedProcedure.input(z.object({ patientId: z.number().int().positive() })).query(async ({ ctx, input }) => {
+    forCall: protectedProcedure.input(z.object({ patientId: z.number().int().positive(), ccmTaskId: z.number().int().positive().optional() })).query(async ({ ctx, input }) => {
       const actor = await actorFor(ctx, "carePlans");
-      return run(() => carePlans.callContext(actor, input.patientId));
+      return run(() => carePlans.callContext(actor, input.patientId, input.ccmTaskId ?? null));
     }),
     /** The plan as a PDF: the whole clinical plan, or the patient's copy (English / Spanish). */
     pdf: protectedProcedure.input(z.object({ patientId: z.number().int().positive(), kind: z.enum(["full", "patient"]), lang: z.enum(["en", "es"]).optional() })).mutation(async ({ ctx, input }) => {
