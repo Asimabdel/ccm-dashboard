@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { eraToEvents, isX12, parseEra835 } from "../shared/era835";
 import { parseBillSheet, detectSheetMapping, sheetCents, headerSignature } from "../shared/billSheet";
-import { mergeClaim, claimRefOf, CLAIM_LEVEL, NOT_LISTED, deductibleOwedCents, groupDeductible, type BillEventInput, type DeductibleLine } from "../shared/masterBilling";
+import { mergeClaim, claimRefOf, CLAIM_LEVEL, NOT_LISTED, deductibleOwedCents, groupDeductible, billSearchHits, billSearchWords, likeEscape, type BillEventInput, type DeductibleLine } from "../shared/masterBilling";
 import { adjustmentKind, insuranceType, statusFromText, describeAdjustment } from "../shared/billCodes";
 import { parseCsvRows } from "../shared/workspace";
 import { parsePdfReading } from "../shared/billPdf";
@@ -325,5 +325,44 @@ describe("high-deductible patients", () => {
     expect(found.map((p) => [p.personKey, p.visits.length, p.deductibleCents])).toEqual([["p:1", 3, 28000], ["p:3", 2, 11000]]);
     expect(found[0]!.lastDate).toBe("2026-05-01");
     expect(groupDeductible([line("p:1", "2026-02-03", 100, 1), line("p:1", "2026-03-03", 100, 2)], 3)).toEqual([]);
+  });
+});
+
+describe("the search box", () => {
+  it("splits a search into words every claim has to match", () => {
+    expect(billSearchWords("  Doe, Jane  #004512 ")).toEqual(["doe", "jane", "004512"]);
+    expect(billSearchWords("j doe")).toEqual(["doe"]); // one letter would match nearly everything
+    expect(billSearchWords("j")).toEqual(["j"]); // unless that's all there is
+    expect(billSearchWords("99213 99213 aetna")).toEqual(["99213", "aetna"]);
+    expect(billSearchWords("a b c d e f g h i j k l")).toHaveLength(6);
+    expect(billSearchWords("   ")).toEqual([]);
+  });
+
+  it("says why a claim came up", () => {
+    const claim = {
+      patientName: "DOE JANE", claimNo: "CLM-1001", payerClaimNo: "PAYER-77", memberId: "XYZ123", checkNumbers: ["004512"], codes: ["99213", "36415"],
+      payerName: "DEMO HEALTH PLAN", providerNames: ["SAMPLE PROVIDER", "Dr. Pat Sample"], clinicName: "Test Clinic North",
+    };
+    expect(billSearchHits(["doe", "004512"], claim)).toEqual(["patient name", "check # 004512"]);
+    expect(billSearchHits(["992"], claim)).toEqual(["CPT 99213"]); // a CPT code by how it starts
+    expect(billSearchHits(["1001"], claim)).toEqual(["claim # CLM-1001"]);
+    expect(billSearchHits(["demo", "sample", "north"], claim)).toEqual(["insurance", "provider", "clinic"]);
+    expect(billSearchHits(["xyz"], claim)).toEqual(["member ID"]);
+    expect(billSearchHits(["nobody"], claim)).toEqual([]);
+  });
+
+  it("matches % and _ in a search as plain characters", () => {
+    expect(likeEscape(String.raw`50%_off\x`)).toBe(String.raw`50\%\_off\\x`);
+    expect(likeEscape("smith")).toBe("smith");
+  });
+
+  it("is only open to the owner, like the rest of the page", async () => {
+    for (const role of ["billing", "staff", "office_manager"]) {
+      const caller = appRouter.createCaller(ctxFor(role));
+      await expect(caller.masterBilling.search({ q: "doe" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(caller.masterBilling.recentUploads({ limit: 8 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(caller.masterBilling.billUploadDetail({ importId: 1 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(caller.masterBilling.zocdocUploadDetail({ importId: 1 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
   });
 });

@@ -396,3 +396,56 @@ export const BREAKDOWN_DIM_KEYS = Object.keys(BREAKDOWN_DIMS) as BreakdownDim[];
 
 /** Which date the range and the month / week / day groups use. */
 export type DateBasis = "service" | "paid";
+
+// ---- Search (one box at the top of Master Billing, 2026-11-17) ----
+
+/** Claims shown for one search, at most (the newest first). */
+export const BILL_SEARCH_LIMIT = 50;
+
+/**
+ * The words of a search, lower case: "Smith, Jane #12345" → ["smith", "jane", "12345"]. Every word
+ * has to match something on the claim. One-letter words are dropped (they'd match nearly every claim)
+ * unless that's all there is; at most 6 words.
+ */
+export function billSearchWords(q: string): string[] {
+  const words = q.toLowerCase().split(/\s+/).map((w) => w.replace(/^[#$,.;:()"']+|[,.;:()"']+$/g, "")).filter(Boolean);
+  const long = words.filter((w) => w.length >= 2);
+  return Array.from(new Set(long.length ? long : words)).slice(0, 6);
+}
+
+/** What a found claim has, to say why it came up. */
+export interface BillSearchFields {
+  patientName: string | null;
+  claimNo: string | null;
+  payerClaimNo: string | null;
+  memberId: string | null;
+  checkNumbers: string[];
+  codes: string[];
+  payerName: string | null;
+  providerNames: (string | null)[];
+  clinicName: string | null;
+}
+
+/** Why a claim matched the search, in plain words ("check # 004512", "CPT 99213", "insurance"). */
+export function billSearchHits(words: string[], c: BillSearchFields): string[] {
+  const has = (v: string | null | undefined, w: string) => !!v && v.toLowerCase().includes(w);
+  const out: string[] = [];
+  const add = (s: string) => { if (!out.includes(s)) out.push(s); };
+  for (const w of words) {
+    if (has(c.patientName, w)) add("patient name");
+    if (has(c.claimNo, w)) add(`claim # ${c.claimNo}`);
+    if (has(c.payerClaimNo, w)) add("insurance's claim #");
+    if (has(c.memberId, w)) add("member ID");
+    for (const n of c.checkNumbers) if (has(n, w)) add(`check # ${n}`);
+    for (const code of c.codes) if (code.toLowerCase().startsWith(w)) add(`CPT ${code}`);
+    if (has(c.payerName, w)) add("insurance");
+    if (c.providerNames.some((p) => has(p, w))) add("provider");
+    if (has(c.clinicName, w)) add("clinic");
+  }
+  return out;
+}
+
+/** A LIKE pattern for one search word (its own % and _ are matched as plain characters). */
+export function likeEscape(w: string): string {
+  return w.replace(/[\\%_]/g, (c) => "\\" + c);
+}

@@ -7,10 +7,10 @@
 import { createHash } from "node:crypto";
 import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lte, ne, or, sql, type SQL } from "drizzle-orm";
 import { getDb } from "./db";
-import { appSettings, appointments, billClaimEvents, billClaims, billImports, billLines, clinics, coverageOnFile, fhirPatients, fhirResources, patients, providers, users } from "../drizzle/schema";
+import { appSettings, appointments, billClaimEvents, billClaims, billImports, billLines, clinics, coverageOnFile, fhirPatients, fhirResources, patients, providers, users, zocdocBookings, zocdocImports } from "../drizzle/schema";
 import {
-  altKeyOf, claimRefOf, deductibleOwedCents, groupDeductible, HIGH_DEDUCTIBLE_MIN_VISITS, HIGH_DEDUCTIBLE_WINDOW_DAYS, mergeClaim,
-  type BillAdjustment, type BillEventInput, type BillLineInput, type BillSource, type BreakdownDim, type DateBasis, type DeductibleLine,
+  altKeyOf, BILL_SEARCH_LIMIT, billSearchHits, billSearchWords, claimRefOf, deductibleOwedCents, groupDeductible, HIGH_DEDUCTIBLE_MIN_VISITS, HIGH_DEDUCTIBLE_WINDOW_DAYS,
+  likeEscape, mergeClaim, type BillAdjustment, type BillEventInput, type BillLineInput, type BillSource, type BreakdownDim, type DateBasis, type DeductibleLine,
 } from "../shared/masterBilling";
 import { BILL_STATUS_LABELS, describeAdjustment, insuranceType, type BillStatus } from "../shared/billCodes";
 import { nameKey } from "../shared/workspace";
@@ -870,6 +870,259 @@ export async function listImports(limit = 100) {
     hasFile: sql<boolean>`${billImports.s3Key} IS NOT NULL`, uploadedBy: users.name,
   }).from(billImports).leftJoin(users, eq(users.id, billImports.uploadedByUserId))
     .where(inArray(billImports.status, ["saved", "removing", "removed"])).orderBy(desc(billImports.createdAt), desc(billImports.id)).limit(limit);
+}
+
+// ---------------------------------------------------------------------------
+// Search (one box for every claim, 2026-11-17)
+// ---------------------------------------------------------------------------
+
+/**
+ * Claims matching every word of the search, any date: the patient's name, a claim # (ours or the
+ * insurance's), member ID, check #, CPT code (starting with), insurance, provider or clinic. Newest
+ * first, at most BILL_SEARCH_LIMIT, with how many were found in all.
+ */
+export async function searchClaims(a: WorkspaceActor, q: string) {
+  const words = billSearchWords(q);
+  if (!words.length) return { rows: [], total: 0, limit: BILL_SEARCH_LIMIT };
+  const d = await db();
+  const [provs, cls] = await Promise.all([
+    d.select({ id: providers.id, name: providers.name, aliases: providers.aliases }).from(providers),
+    d.select({ id: clinics.id, name: clinics.name }).from(clinics),
+  ]);
+  const provNames = (p: (typeof provs)[number]) => [p.name, ...((p.aliases as string[] | null) ?? [])];
+  const parts = words.map((w) => {
+    const like = `%${likeEscape(w)}%`;
+    const provIds = provs.filter((p) => provNames(p).some((n) => (n ?? "").toLowerCase().includes(w))).map((p) => p.id);
+    const clinicIds = cls.filter((c) => c.name.toLowerCase().includes(w)).map((c) => c.id);
+    return or(
+      sql`${billClaims.patientName} LIKE ${like}`, sql`${billClaims.claimNo} LIKE ${like}`, sql`${billClaims.payerClaimNo} LIKE ${like}`,
+      sql`${billClaims.memberId} LIKE ${like}`, sql`${billClaims.payerName} LIKE ${like}`, sql`${billClaims.providerName} LIKE ${like}`,
+      provIds.length ? inArray(billClaims.providerId, provIds) : undefined,
+      clinicIds.length ? inArray(billClaims.clinicId, clinicIds) : undefined,
+      sql`${billClaims.claimRef} IN (SELECT ${billClaimEvents.claimRef} FROM ${billClaimEvents} WHERE ${billClaimEvents.checkNumber} LIKE ${like})`,
+      sql`${billClaims.id} IN (SELECT ${billLines.claimId} FROM ${billLines} WHERE ${billLines.code} LIKE ${`${likeEscape(w)}%`})`,
+    )!;
+  });
+  const where = and(isNull(billClaims.supersededBy), ...parts)!;
+  const [rows, [count]] = await Promise.all([
+    d.select({
+      id: billClaims.id, claimRef: billClaims.claimRef, status: billClaims.status, firstServiceDate: billClaims.firstServiceDate, lastPaidDate: billClaims.lastPaidDate,
+      patientName: billClaims.patientName, subjectKey: billClaims.subjectKey, matchSource: billClaims.matchSource, payerName: billClaims.payerName,
+      providerId: billClaims.providerId, providerName: billClaims.providerName, clinicId: billClaims.clinicId, claimNo: billClaims.claimNo, payerClaimNo: billClaims.payerClaimNo,
+      memberId: billClaims.memberId, billedCents: billClaims.billedCents, paidCents: billClaims.paidCents, patientOwesCents: billClaims.patientOwesCents, deniedCents: billClaims.deniedCents,
+    }).from(billClaims).where(where).orderBy(desc(billClaims.firstServiceDate), desc(billClaims.id)).limit(BILL_SEARCH_LIMIT),
+    d.select({ n: sql<number>`COUNT(*)` }).from(billClaims).where(where),
+  ]);
+  const ids = rows.map((r) => r.id);
+  const [codes, checks, names] = await Promise.all([
+    ids.length ? d.select({ claimId: billLines.claimId, code: billLines.code }).from(billLines).where(inArray(billLines.claimId, ids)).orderBy(asc(billLines.lineNo)) : [],
+    ids.length
+      ? d.selectDistinct({ claimRef: billClaimEvents.claimRef, checkNumber: billClaimEvents.checkNumber }).from(billClaimEvents).innerJoin(billImports, eq(billImports.id, billClaimEvents.importId))
+        .where(and(inArray(billClaimEvents.claimRef, rows.map((r) => r.claimRef)), eq(billImports.status, "saved"), isNotNull(billClaimEvents.checkNumber)))
+      : [],
+    nameMaps(),
+  ]);
+  const total = Number(count?.n ?? 0);
+  await audit(a, "view_master_billing", { entityType: "billClaims", description: `Master Billing search (${total} found)` });
+  return {
+    rows: rows.map((r) => {
+      const rowCodes = Array.from(new Set(codes.filter((c) => c.claimId === r.id && !c.code.startsWith("(")).map((c) => c.code)));
+      const checkNumbers = Array.from(new Set(checks.filter((c) => c.claimRef === r.claimRef && c.checkNumber).map((c) => c.checkNumber!)));
+      const providerLabel = r.providerId ? names.provider.get(r.providerId) ?? r.providerName : r.providerName;
+      const clinicName = r.clinicId ? names.clinic.get(r.clinicId) ?? null : null;
+      const prov = r.providerId ? provs.find((p) => p.id === r.providerId) : undefined;
+      return {
+        id: r.id, status: r.status, firstServiceDate: r.firstServiceDate, lastPaidDate: r.lastPaidDate, patientName: r.patientName, subjectKey: r.subjectKey, matchSource: r.matchSource,
+        payerName: r.payerName, providerLabel, clinicName, claimNo: r.claimNo, billedCents: r.billedCents, paidCents: r.paidCents, patientOwesCents: r.patientOwesCents, deniedCents: r.deniedCents,
+        codes: rowCodes, checkNumbers,
+        hits: billSearchHits(words, {
+          patientName: r.patientName, claimNo: r.claimNo, payerClaimNo: r.payerClaimNo, memberId: r.memberId, checkNumbers, codes: rowCodes, payerName: r.payerName,
+          providerNames: [r.providerName, providerLabel, ...(prov ? provNames(prov) : [])], clinicName,
+        }),
+      };
+    }),
+    total, limit: BILL_SEARCH_LIMIT,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Recently uploaded (bills and ZocDoc reports), and what one upload added
+// ---------------------------------------------------------------------------
+
+export interface RecentUpload {
+  /** "bill:12" / "zocdoc:3" */
+  key: string;
+  source: "bill" | "zocdoc";
+  id: number;
+  kind: BillSource | "zocdoc";
+  fileName: string;
+  uploadedAt: Date;
+  uploadedBy: string | null;
+  /** saved | removing | removed (a ZocDoc report is always saved) */
+  status: string;
+  /** Claims (bills) / bookings in the file (ZocDoc). */
+  records: number;
+  /** CPT lines in the file (bills; null once removed). */
+  lines: number | null;
+  billedCents: number | null;
+  paidCents: number | null;
+  /** What ZocDoc charged for the bookings still from this file. */
+  costCents: number | null;
+  /** Matched to a MyPCP patient now, out of matchedOf. */
+  matched: number;
+  matchedOf: number;
+  /** ZocDoc: bookings whose latest copy is from this file (a later report with the same booking takes it over). */
+  stillFromFile: number | null;
+  /** Payments (checks) in a bill file. */
+  payments: number | null;
+  firstDate: string | null;
+  lastDate: string | null;
+}
+
+/** The latest uploads of every kind, newest first, with what each brought in (counts and dollars only). */
+export async function recentUploads(limit = 8): Promise<RecentUpload[]> {
+  const d = await db();
+  const [bills, zoc] = await Promise.all([
+    listImports(limit),
+    d.select({
+      id: zocdocImports.id, fileName: zocdocImports.fileName, rowCount: zocdocImports.rowCount, firstDate: zocdocImports.firstDate, lastDate: zocdocImports.lastDate,
+      createdAt: zocdocImports.createdAt, uploadedBy: users.name,
+    }).from(zocdocImports).leftJoin(users, eq(users.id, zocdocImports.uploadedByUserId)).orderBy(desc(zocdocImports.createdAt), desc(zocdocImports.id)).limit(limit),
+  ]);
+  const billIds = bills.filter((b) => b.status !== "removed").map((b) => b.id);
+  const zocIds = zoc.map((z) => z.id);
+  const [lines, matched, zstats] = await Promise.all([
+    billIds.length
+      ? d.select({ importId: billClaimEvents.importId, n: sql<number>`COALESCE(SUM(JSON_LENGTH(${billClaimEvents.lines})), 0)` }).from(billClaimEvents)
+        .where(inArray(billClaimEvents.importId, billIds)).groupBy(billClaimEvents.importId)
+      : [],
+    billIds.length
+      ? d.select({ importId: billClaimEvents.importId, n: sql<number>`COUNT(DISTINCT ${billClaimEvents.claimRef})` }).from(billClaimEvents)
+        .innerJoin(billClaims, eq(billClaims.claimRef, billClaimEvents.claimRef))
+        .where(and(inArray(billClaimEvents.importId, billIds), isNotNull(billClaims.subjectKey))).groupBy(billClaimEvents.importId)
+      : [],
+    zocIds.length ? zocdocStats(d, zocIds) : new Map<number, ZocdocStats>(),
+  ]);
+  const linesOf = new Map(lines.map((l) => [l.importId, Number(l.n ?? 0)]));
+  const matchedOf = new Map(matched.map((m) => [m.importId, Number(m.n ?? 0)]));
+  const out: RecentUpload[] = [
+    ...bills.map((b) => {
+      const live = b.status !== "removed";
+      return {
+        key: `bill:${b.id}`, source: "bill" as const, id: b.id, kind: b.kind as BillSource, fileName: b.fileName, uploadedAt: b.createdAt, uploadedBy: b.uploadedBy, status: b.status,
+        records: b.claimCount, lines: live ? linesOf.get(b.id) ?? 0 : null, billedCents: b.billedCents, paidCents: b.paidCents, costCents: null,
+        matched: live ? matchedOf.get(b.id) ?? 0 : b.matchedCount, matchedOf: b.claimCount, stillFromFile: null,
+        payments: ((b.checks as CheckSummary[] | null) ?? []).length, firstDate: null, lastDate: null,
+      };
+    }),
+    ...zoc.map((z) => {
+      const s = zstats.get(z.id) ?? { bookings: 0, matched: 0, charged: 0, costCents: 0 };
+      return {
+        key: `zocdoc:${z.id}`, source: "zocdoc" as const, id: z.id, kind: "zocdoc" as const, fileName: z.fileName, uploadedAt: z.createdAt, uploadedBy: z.uploadedBy, status: "saved",
+        records: z.rowCount, lines: null, billedCents: null, paidCents: null, costCents: s.costCents, matched: s.matched, matchedOf: s.bookings, stillFromFile: s.bookings,
+        payments: null, firstDate: z.firstDate, lastDate: z.lastDate,
+      };
+    }),
+  ];
+  return out.sort((x, y) => +new Date(y.uploadedAt) - +new Date(x.uploadedAt) || y.id - x.id).slice(0, limit);
+}
+
+interface ZocdocStats { bookings: number; matched: number; charged: number; costCents: number }
+
+/** Per ZocDoc upload: the bookings whose latest copy came from it, how many are matched, and their cost. */
+export async function zocdocStats(d: Db, importIds: number[]): Promise<Map<number, ZocdocStats>> {
+  const rows = await d.select({
+    importId: zocdocBookings.lastImportId, n: sql<number>`COUNT(*)`, matched: sql<number>`COALESCE(SUM(${zocdocBookings.subjectKey} IS NOT NULL), 0)`,
+    charged: sql<number>`COALESCE(SUM(${zocdocBookings.costCents} > 0), 0)`, cost: sql<number>`COALESCE(SUM(${zocdocBookings.costCents}), 0)`,
+  }).from(zocdocBookings).where(inArray(zocdocBookings.lastImportId, importIds)).groupBy(zocdocBookings.lastImportId);
+  return new Map(rows.map((r) => [r.importId!, { bookings: Number(r.n ?? 0), matched: Number(r.matched ?? 0), charged: Number(r.charged ?? 0), costCents: Number(r.cost ?? 0) }]));
+}
+
+const UPLOAD_PAGE = 50;
+
+/**
+ * One bill upload: its payments, and every claim it brought in (a page at a time): new claims and claims
+ * it added to (already in an earlier upload, or a payment for a claim-report row), with this file's
+ * billed / paid, the claim's status now and whether it's matched to a patient.
+ */
+export async function billUploadDetail(a: WorkspaceActor, importId: number, page = 1) {
+  const d = await db();
+  const [imp] = await d.select({
+    id: billImports.id, kind: billImports.kind, fileName: billImports.fileName, status: billImports.status, checks: billImports.checks, s3Key: billImports.s3Key,
+    claimCount: billImports.claimCount, billedCents: billImports.billedCents, paidCents: billImports.paidCents, matchedCount: billImports.matchedCount,
+    createdAt: billImports.createdAt, removedAt: billImports.removedAt, uploadedBy: users.name,
+  }).from(billImports).leftJoin(users, eq(users.id, billImports.uploadedByUserId)).where(eq(billImports.id, importId)).limit(1);
+  if (!imp || imp.status === "saving" || imp.status === "canceled") throw new WorkspaceError("Upload not found.", "NOT_FOUND");
+  const upload = {
+    id: imp.id, kind: imp.kind as BillSource, fileName: imp.fileName, status: imp.status, uploadedAt: imp.createdAt, uploadedBy: imp.uploadedBy, removedAt: imp.removedAt,
+    hasFile: !!imp.s3Key, checks: (imp.checks as CheckSummary[] | null) ?? [], claimCount: imp.claimCount, billedCents: imp.billedCents, paidCents: imp.paidCents, matchedCount: imp.matchedCount,
+  };
+  const events = await d.select({
+    claimRef: billClaimEvents.claimRef, serviceFrom: billClaimEvents.serviceFrom, paidDate: billClaimEvents.paidDate, patientName: billClaimEvents.patientName,
+    payerName: billClaimEvents.payerName, providerName: billClaimEvents.providerName, checkNumber: billClaimEvents.checkNumber, clpStatus: billClaimEvents.clpStatus,
+    billedCents: billClaimEvents.billedCents, paidCents: billClaimEvents.paidCents, patientRespCents: billClaimEvents.patientRespCents, lines: billClaimEvents.lines,
+  }).from(billClaimEvents).where(eq(billClaimEvents.importId, importId)).orderBy(asc(billClaimEvents.id));
+  await audit(a, "view_master_billing", { entityType: "billImport", entityId: importId, description: "Opened an upload" });
+  if (!events.length) return { upload, totals: null, rows: [], total: 0, page, pageSize: UPLOAD_PAGE };
+
+  // One row per claim (a file can have a claim twice, e.g. a take-back and the new payment).
+  type Acc = { claimRef: string; serviceDate: string | null; paidDate: string | null; patientName: string | null; payerName: string | null; providerName: string | null; checks: Set<string>; codes: Set<string>; lines: number; billed: number; paid: number; owes: number };
+  const byRef = new Map<string, Acc>();
+  for (const e of events) {
+    let r = byRef.get(e.claimRef);
+    if (!r) byRef.set(e.claimRef, (r = { claimRef: e.claimRef, serviceDate: null, paidDate: null, patientName: null, payerName: null, providerName: null, checks: new Set(), codes: new Set(), lines: 0, billed: 0, paid: 0, owes: 0 }));
+    if (e.serviceFrom && (!r.serviceDate || e.serviceFrom < r.serviceDate)) r.serviceDate = e.serviceFrom;
+    if (e.paidDate && (!r.paidDate || e.paidDate > r.paidDate)) r.paidDate = e.paidDate;
+    r.patientName ??= e.patientName;
+    r.payerName ??= payerLabel(e.payerName);
+    r.providerName ??= e.providerName;
+    if (e.checkNumber) r.checks.add(e.checkNumber);
+    const ls = (e.lines as BillLineInput[] | null) ?? [];
+    r.lines += ls.length;
+    for (const l of ls) if (!l.code.startsWith("(")) r.codes.add(l.code);
+    // Billed counts new charges only (a take-back repeats an old charge as a negative), as the upload's total does.
+    if (e.clpStatus !== "22") r.billed += e.billedCents;
+    r.paid += e.paidCents;
+    r.owes += e.patientRespCents;
+  }
+  const refs = Array.from(byRef.keys());
+  const earlier = new Set<string>();
+  const paidReport = new Set<string>();
+  const claimOf = new Map<string, { id: number; status: string; subjectKey: string | null; matchSource: string | null; providerId: number | null; providerName: string | null; clinicId: number | null; supersededBy: string | null }>();
+  for (const part of chunks(refs, 1000)) {
+    const [before, replaced, claims] = await Promise.all([
+      d.selectDistinct({ ref: billClaimEvents.claimRef }).from(billClaimEvents).innerJoin(billImports, eq(billImports.id, billClaimEvents.importId))
+        .where(and(inArray(billClaimEvents.claimRef, part), sql`${billClaimEvents.importId} < ${importId}`, eq(billImports.status, "saved"))),
+      d.selectDistinct({ ref: billClaims.supersededBy }).from(billClaims).where(inArray(billClaims.supersededBy, part)),
+      d.select({ id: billClaims.id, claimRef: billClaims.claimRef, status: billClaims.status, subjectKey: billClaims.subjectKey, matchSource: billClaims.matchSource, providerId: billClaims.providerId,
+        providerName: billClaims.providerName, clinicId: billClaims.clinicId, supersededBy: billClaims.supersededBy }).from(billClaims).where(inArray(billClaims.claimRef, part)),
+    ]);
+    for (const b of before) earlier.add(b.ref);
+    for (const r of replaced) if (r.ref) paidReport.add(r.ref);
+    for (const c of claims) claimOf.set(c.claimRef, c);
+  }
+  const names = await nameMaps();
+  const all = Array.from(byRef.values()).map((r) => {
+    const c = claimOf.get(r.claimRef);
+    return {
+      claimRef: r.claimRef, claimId: c?.id ?? null, serviceDate: r.serviceDate, paidDate: r.paidDate, patientName: r.patientName, payerName: r.payerName,
+      providerLabel: c?.providerId ? names.provider.get(c.providerId) ?? c.providerName : c?.providerName ?? r.providerName,
+      clinicName: c?.clinicId ? names.clinic.get(c.clinicId) ?? null : null,
+      codes: Array.from(r.codes), checkNumbers: Array.from(r.checks), lines: r.lines, billedCents: r.billed, paidCents: r.paid, patientOwesCents: r.owes,
+      status: c?.status ?? null, matched: !!c?.subjectKey, matchSource: c?.matchSource ?? null,
+      /** new = first time this claim came in; added = it was already in an earlier upload, or this is the payment for a claim-report row. */
+      change: earlier.has(r.claimRef) || paidReport.has(r.claimRef) ? ("added" as const) : ("new" as const),
+      /** A claim-report row whose payment came in under another claim (counted there). */
+      replaced: !!c?.supersededBy,
+    };
+  }).sort((x, y) => (y.serviceDate ?? "").localeCompare(x.serviceDate ?? "") || (x.patientName ?? "").localeCompare(y.patientName ?? ""));
+  const totals = {
+    claims: all.length, newClaims: all.filter((r) => r.change === "new").length, addedTo: all.filter((r) => r.change === "added").length,
+    lines: sum(all.map((r) => r.lines)), billedCents: sum(all.map((r) => r.billedCents)), paidCents: sum(all.map((r) => r.paidCents)),
+    patientOwesCents: sum(all.map((r) => r.patientOwesCents)), matched: all.filter((r) => r.matched).length,
+  };
+  const p = Math.max(1, page);
+  return { upload, totals, rows: all.slice((p - 1) * UPLOAD_PAGE, p * UPLOAD_PAGE), total: all.length, page: p, pageSize: UPLOAD_PAGE };
 }
 
 /** Insurances / providers / clinics / CPT codes / reasons seen, for the filter pickers. */

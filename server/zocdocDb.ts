@@ -232,6 +232,41 @@ export async function zocdocImportsList(limit = 50) {
   }).from(zocdocImports).leftJoin(users, eq(users.id, zocdocImports.uploadedByUserId)).orderBy(desc(zocdocImports.id)).limit(limit);
 }
 
+/**
+ * One ZocDoc upload: the bookings whose latest copy came from it (a later report with the same booking
+ * takes it over), a page at a time, newest appointment first. No date of birth leaves the server.
+ */
+export async function zocdocUploadDetail(a: WorkspaceActor, importId: number, page = 1) {
+  const d = await db();
+  const [imp] = await d.select({
+    id: zocdocImports.id, fileName: zocdocImports.fileName, rowCount: zocdocImports.rowCount, firstDate: zocdocImports.firstDate, lastDate: zocdocImports.lastDate,
+    createdAt: zocdocImports.createdAt, uploadedBy: users.name,
+  }).from(zocdocImports).leftJoin(users, eq(users.id, zocdocImports.uploadedByUserId)).where(eq(zocdocImports.id, importId)).limit(1);
+  if (!imp) throw new WorkspaceError("Upload not found.", "NOT_FOUND");
+  const where = eq(zocdocBookings.lastImportId, importId);
+  const p = Math.max(1, page);
+  const [[t], rows, [later]] = await Promise.all([
+    d.select({
+      n: count(), matched: sql<number>`COALESCE(SUM(${zocdocBookings.subjectKey} IS NOT NULL), 0)`, charged: sql<number>`COALESCE(SUM(${zocdocBookings.costCents} > 0), 0)`,
+      cost: sql<number>`COALESCE(SUM(${zocdocBookings.costCents}), 0)`, newPatients: sql<number>`COALESCE(SUM(${zocdocBookings.patientType} = 'new'), 0)`,
+    }).from(zocdocBookings).where(where),
+    d.select({
+      id: zocdocBookings.id, appointmentAt: zocdocBookings.appointmentAt, status: zocdocBookings.status, statusText: zocdocBookings.statusText, patientType: zocdocBookings.patientType,
+      costCents: zocdocBookings.costCents, providerName: zocdocBookings.providerName, locationName: zocdocBookings.locationName, insuranceCarrier: zocdocBookings.insuranceCarrier,
+      patientFirst: zocdocBookings.patientFirst, patientLast: zocdocBookings.patientLast, subjectKey: zocdocBookings.subjectKey,
+    }).from(zocdocBookings).where(where).orderBy(desc(zocdocBookings.appointmentAt), desc(zocdocBookings.id)).limit(PAGE).offset((p - 1) * PAGE),
+    d.select({ n: count() }).from(zocdocImports).where(sql`${zocdocImports.id} > ${importId}`),
+  ]);
+  await audit(a, "view_zocdoc", { entityType: "zocdocImport", entityId: importId, description: "Opened a ZocDoc upload" });
+  const bookings = Number(t?.n ?? 0);
+  return {
+    upload: { id: imp.id, fileName: imp.fileName, uploadedAt: imp.createdAt, uploadedBy: imp.uploadedBy, rowCount: imp.rowCount, firstDate: imp.firstDate, lastDate: imp.lastDate, laterUploads: Number(later?.n ?? 0) },
+    totals: { bookings, matched: Number(t?.matched ?? 0), charged: Number(t?.charged ?? 0), costCents: Number(t?.cost ?? 0), newPatients: Number(t?.newPatients ?? 0) },
+    rows: rows.map(({ patientFirst, patientLast, ...r }) => ({ ...r, patientName: `${patientFirst ?? ""} ${patientLast ?? ""}`.trim() })),
+    total: bookings, page: p, pageSize: PAGE,
+  };
+}
+
 /** Counts and dollar totals only (no patient details), for the IAM-only "zocdoc-counts" job. */
 export async function zocdocCounts(input: { from?: string; to?: string } = {}) {
   const from = input.from ?? `${localDateStr().slice(0, 4)}-01-01`;

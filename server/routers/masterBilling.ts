@@ -140,6 +140,22 @@ export const masterBillingRouter = router({
     await owner(ctx);
     return mb.filterOptions();
   }),
+  /** The search box: claims by patient, claim / check #, CPT, insurance, provider or clinic (any date, newest 50). */
+  search: protectedProcedure.input(z.object({ q: z.string().max(120) })).query(async ({ ctx, input }) => run(async () => mb.searchClaims(await owner(ctx), input.q))),
+  /** Recently uploaded: the latest files of every kind (bills and ZocDoc reports). */
+  recentUploads: protectedProcedure.input(z.object({ limit: z.number().int().min(1).max(50).default(8) })).query(async ({ ctx, input }) => {
+    await owner(ctx);
+    return mb.recentUploads(input.limit);
+  }),
+  /** What one bill upload added (its claims, a page at a time). */
+  billUploadDetail: protectedProcedure.input(z.object({ importId, page: z.number().int().min(1).max(10_000).default(1) }))
+    .query(async ({ ctx, input }) => run(async () => mb.billUploadDetail(await owner(ctx), input.importId, input.page))),
+  /** What one ZocDoc upload added (its bookings, a page at a time). */
+  zocdocUploadDetail: protectedProcedure.input(z.object({ importId, page: z.number().int().min(1).max(10_000).default(1) })).query(async ({ ctx, input }) => {
+    const actor = await owner(ctx);
+    const { zocdocUploadDetail } = await import("../zocdocDb");
+    return run(() => zocdocUploadDetail(actor, input.importId, input.page));
+  }),
   /** Payroll: estimated pay from time-clock hours and pay rates, for a month or a pay period. */
   payroll: protectedProcedure.input(z.discriminatedUnion("view", [
     z.object({ view: z.literal("month"), month: z.string().regex(/^\d{4}-\d{2}$/) }),

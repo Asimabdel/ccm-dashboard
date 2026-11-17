@@ -13,6 +13,8 @@ import { ClaimDrawer } from "@/components/masterBilling/ClaimDrawer";
 import { PayrollTab } from "@/components/masterBilling/PayrollTab";
 import { CostsTab } from "@/components/masterBilling/CostsTab";
 import { ZocdocTab } from "@/components/masterBilling/ZocdocTab";
+import { BillSearchBox, BillSearchResults, useBillSearch } from "@/components/masterBilling/BillSearch";
+import { RecentUploads, UploadDrawer, type UploadRef } from "@/components/masterBilling/RecentUploads";
 import { STATUS_CLASS, StatusBadge } from "@/components/masterBilling/StatusBadge";
 import { downloadCsv, niceName } from "@/lib/masterBillingFiles";
 import { trpc, type RouterOutputs } from "@/lib/trpc";
@@ -81,6 +83,8 @@ export default function MasterBillingPage() {
   const [f, setF] = useState<Filters>({ ...presetRange("12m", today), basis: "service" });
   const [upload, setUpload] = useState(false);
   const [claimId, setClaimId] = useState<number | null>(null);
+  const [uploadView, setUploadView] = useState<UploadRef | null>(null);
+  const search = useBillSearch();
   const allowed = ws.masterBilling;
   const options = trpc.masterBilling.options.useQuery(undefined, { enabled: allowed });
 
@@ -103,7 +107,9 @@ export default function MasterBillingPage() {
   return (
     <CCMDashboardLayout title="Master Billing" pageTitle={false}>
       <PageHeader title="Master Billing" subtitle="Bills that came back from Office Ally: billed, paid, written off, denied. Only you can see this page."
-        actions={<Btn onClick={() => setUpload(true)}><FileUp size={15} /> Upload bills</Btn>} />
+        actions={<><BillSearchBox text={search.text} onChange={search.setText} onClear={search.clear} /><Btn onClick={() => setUpload(true)}><FileUp size={15} /> Upload bills</Btn></>} />
+
+      <BillSearchResults term={search.term} onOpen={setClaimId} onClear={search.clear} />
 
       <div className="mb-4 flex flex-wrap gap-1 border-b border-slate-200 dark:border-slate-700" role="tablist">
         {TABS.map((t) => (
@@ -161,7 +167,7 @@ export default function MasterBillingPage() {
         </div>
       )}
 
-      {tab === "summary" && <Summary f={f} onDrill={drill} onUpload={() => setUpload(true)} />}
+      {tab === "summary" && <Summary f={f} onDrill={drill} onUpload={() => setUpload(true)} onOpenUpload={setUploadView} onSeeAll={() => setParams({ tab: "uploads" })} />}
       {tab === "breakdown" && <Breakdown f={f} onDrill={drill} />}
       {tab === "claims" && <Claims f={f} patch={patch} onOpen={setClaimId} />}
       {tab === "denials" && <Denials f={f} onDrill={drill} onOpen={setClaimId} />}
@@ -169,9 +175,11 @@ export default function MasterBillingPage() {
       {tab === "zocdoc" && <ZocdocTab />}
       {tab === "payroll" && <PayrollTab />}
       {tab === "costs" && <CostsTab />}
-      {tab === "uploads" && <Uploads onUpload={() => setUpload(true)} />}
+      {tab === "uploads" && <Uploads onUpload={() => setUpload(true)} onOpen={(id) => setUploadView({ source: "bill", id })} />}
 
       <UploadDialog open={upload} onOpenChange={setUpload} />
+      {/* Before the claim drawer, so a claim opened from an upload shows on top of it. */}
+      <UploadDrawer target={uploadView} onClose={() => setUploadView(null)} onOpenClaim={setClaimId} />
       <ClaimDrawer id={claimId} onClose={() => setClaimId(null)} />
     </CCMDashboardLayout>
   );
@@ -179,14 +187,15 @@ export default function MasterBillingPage() {
 
 // ---------------------------------------------------------------------------
 
-function Summary({ f, onDrill, onUpload }: { f: Filters; onDrill: (p: Partial<Filters>) => void; onUpload: () => void }) {
+function Summary({ f, onDrill, onUpload, onOpenUpload, onSeeAll }: { f: Filters; onDrill: (p: Partial<Filters>) => void; onUpload: () => void; onOpenUpload: (u: UploadRef) => void; onSeeAll: () => void }) {
   const { theme } = useTheme();
   const colors = theme === "dark" ? BAR.dark : BAR.light;
   const q = trpc.masterBilling.summary.useQuery(f);
   if (q.isLoading) return <Loading />;
   if (q.error) return <ErrorNote message={q.error.message} />;
   const s = q.data!;
-  if (!s.uploads) return <Panel><HowToGetFiles onUpload={onUpload} /></Panel>;
+  const recent = <RecentUploads onOpen={onOpenUpload} onSeeAll={onSeeAll} onUpload={onUpload} />;
+  if (!s.uploads) return <div className="space-y-5"><Panel><HowToGetFiles onUpload={onUpload} /></Panel>{recent}</div>;
   const t = s.totals;
   const waiting = (s.byStatus.waiting?.billed ?? 0) + (s.byStatus.rejected?.billed ?? 0);
   const chart = s.byMonth.map((m) => ({ month: monthLabel(m.month), Billed: m.billed / 100, Paid: m.paid / 100, Denied: m.denied / 100 }));
@@ -248,6 +257,7 @@ function Summary({ f, onDrill, onUpload }: { f: Filters; onDrill: (p: Partial<Fi
             rows={s.topCpt.map((c) => ({ key: c.key, cells: [c.key, c.units.toLocaleString(), money(c.billed), money(c.paid), c.units ? money(Math.round(c.paid / c.units)) : "—"], onClick: () => onDrill({ cpt: c.key }) }))} />
         </Panel>
       </div>
+      {recent}
       <p className="text-xs text-slate-400">Status rules and reason wording are the practice's working rules; check anything that matters for a claim with your biller. {s.lastUpload ? `Last upload ${new Date(s.lastUpload).toLocaleDateString("en-US")}.` : ""}</p>
     </div>
   );
@@ -585,7 +595,7 @@ function HighDeductible({ f, onDrill }: { f: Filters; onDrill: (p: Partial<Filte
 type ImportRow = RouterOutputs["masterBilling"]["imports"][number];
 interface CheckInfo { payerName: string | null; checkNumber: string | null; paymentDate: string | null; amountCents: number; balanced: boolean | null }
 
-function Uploads({ onUpload }: { onUpload: () => void }) {
+function Uploads({ onUpload, onOpen }: { onUpload: () => void; onOpen: (id: number) => void }) {
   const utils = trpc.useUtils();
   const q = trpc.masterBilling.imports.useQuery();
   const remove = trpc.masterBilling.removeImport.useMutation();
@@ -632,7 +642,7 @@ function Uploads({ onUpload }: { onUpload: () => void }) {
   const rows = useMemo(() => q.data ?? [], [q.data]);
   return (
     <>
-      <Panel title="Uploads" subtitle="Every file you uploaded. Removing one takes its claims out (claims also in another upload stay)." action={<Btn size="sm" onClick={onUpload}><FileUp size={14} /> Upload bills</Btn>} bodyClassName="p-0">
+      <Panel title="Uploads" subtitle="Every bill file you uploaded. Click one to see what it added. Removing one takes its claims out (claims also in another upload stay)." action={<Btn size="sm" onClick={onUpload}><FileUp size={14} /> Upload bills</Btn>} bodyClassName="p-0">
         {q.isLoading && <Loading />}
         {q.error && <div className="p-4"><ErrorNote message={q.error.message} /></div>}
         {q.data && !rows.length && <HowToGetFiles onUpload={onUpload} />}
@@ -651,7 +661,8 @@ function Uploads({ onUpload }: { onUpload: () => void }) {
                   const checks = (r.checks as CheckInfo[] | null) ?? [];
                   const gone = r.status !== "saved";
                   return (
-                    <tr key={r.id} className={cn("border-t border-slate-100 align-top dark:border-slate-700/60", gone && "opacity-50")}>
+                    <tr key={r.id} onClick={() => onOpen(r.id)} title="See what this upload added"
+                      className={cn("cursor-pointer border-t border-slate-100 align-top hover:bg-slate-50 dark:border-slate-700/60 dark:hover:bg-slate-800/40", gone && "opacity-50")}>
                       <td className="whitespace-nowrap px-3 py-2">{new Date(r.createdAt).toLocaleDateString("en-US")}<p className="text-xs text-slate-400">{r.uploadedBy}</p></td>
                       <td className="max-w-[260px] px-3 py-2"><p className="truncate font-medium text-slate-800 dark:text-slate-100" title={r.fileName}>{r.fileName}</p><p className="text-xs text-slate-400">{SOURCE_LABELS[r.kind as BillSource]}{gone ? ` · ${r.status === "removing" ? "being removed" : "removed"}` : ""}</p></td>
                       <td className="px-3 py-2 text-xs">
@@ -665,7 +676,7 @@ function Uploads({ onUpload }: { onUpload: () => void }) {
                       <td className="px-3 py-2 text-right tabular-nums">{money(r.billedCents)}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{money(r.paidCents)}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{pct(r.matchedCount, r.claimCount)}</td>
-                      <td className="whitespace-nowrap px-3 py-2 text-right">
+                      <td className="whitespace-nowrap px-3 py-2 text-right" onClick={(e) => e.stopPropagation()}>
                         {r.hasFile && !gone && <Btn size="sm" variant="ghost" onClick={() => void open(r)} title="Download the original file"><Download size={14} /></Btn>}
                         {!gone && <Btn size="sm" variant="ghost" onClick={() => setConfirm(r)} disabled={removing !== null} title="Remove this upload">{removing === r.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}</Btn>}
                       </td>
