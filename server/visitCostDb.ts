@@ -5,7 +5,7 @@
 import { gunzipSync } from "node:zlib";
 import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { appointments, billClaims, billLines, coverageOnFile, fhirResources } from "../drizzle/schema";
+import { appointments, appSettings, billClaims, billLines, coverageOnFile, fhirResources } from "../drizzle/schema";
 import type { BillAdjustment } from "../shared/masterBilling";
 import {
   coverageInfo, EXPECTED_CODES, medianCents, payerFamily, personCost, personNote, planCopay, planDeductibleLikely, planKeys, planNote, planStat, sameMemberId, visitsOf,
@@ -20,6 +20,30 @@ async function db() {
   const d = await getDb();
   if (!d) throw new Error("Database not available");
   return d;
+}
+
+// ---- Who sees the notes ----
+// Admins first, so the owner can check the notes against patients he knows. Then everyone with the usual
+// access, switched on by the IAM-only "visit-cost-audience" job (a saved switch: no deploy needed).
+const AUDIENCE_KEY = "visit_cost_audience";
+let audience: { at: number; everyone: boolean } | null = null;
+
+async function everyoneSees(): Promise<boolean> {
+  if (audience && Date.now() - audience.at < 60_000) return audience.everyone;
+  const [row] = await (await db()).select({ value: appSettings.value }).from(appSettings).where(eq(appSettings.key, AUDIENCE_KEY)).limit(1);
+  audience = { at: Date.now(), everyone: (row?.value as { everyone?: boolean } | undefined)?.everyone === true };
+  return audience.everyone;
+}
+const maySee = async (actor: WorkspaceActor) => actor.role === "admin" || (await everyoneSees());
+
+/** IAM-only "visit-cost-audience" job: who sees the notes. { everyone: true | false } changes it; without it, it only reports. */
+export async function visitCostAudienceJob(input: { everyone?: boolean }) {
+  if (typeof input.everyone === "boolean") {
+    const value = { everyone: input.everyone };
+    await (await db()).insert(appSettings).values({ key: AUDIENCE_KEY, value, updatedByUserId: null }).onDuplicateKeyUpdate({ set: { value, updatedByUserId: null } });
+    audience = null;
+  }
+  return { everyone: await everyoneSees(), meaning: "false = admins only; true = everyone with Patient Flow / Insurance access" };
 }
 
 /** A patient's insurance as Practice Fusion (or an insurance check) has it. */
@@ -191,6 +215,7 @@ function noteFor(b: Built, key: string): CollectNote | null {
 
 /** Patient Flow / Insurance schedule: the collect note for everyone on that day's schedule (in clinics the person can see). */
 export async function visitCostForDay(actor: WorkspaceActor, date: string): Promise<Record<string, CollectNote>> {
+  if (!(await maySee(actor))) return {};
   const d = await db();
   const rows = await d.select({ patientId: appointments.patientId, patientName: appointments.patientName, dob: appointments.dateOfBirth, clinicId: appointments.clinicId })
     .from(appointments).where(eq(appointments.date, date));
@@ -209,6 +234,7 @@ export async function visitCostForDay(actor: WorkspaceActor, date: string): Prom
 
 /** The Insurance tab's "From past visits" card: the note, the visits behind it, the plan's other patients, and what a visit usually costs. */
 export async function visitCostForPatient(actor: WorkspaceActor, key: string) {
+  if (!(await maySee(actor))) return { note: null, through: null, insurance: null, own: null, plan: null, prices: [] };
   if (actor.clinicIds) {
     const care = await subjectCare(key);
     if (!care?.clinicId || !actor.clinicIds.includes(care.clinicId)) throw new WorkspaceError("That patient isn't at your office.", "FORBIDDEN");

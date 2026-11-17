@@ -404,6 +404,11 @@ export const handler = async (event: any, context: any) => {
     const { visitCostCounts } = await import("../visitCostDb");
     return visitCostCounts();
   }
+  // Who sees those estimates: admins only (the start) or everyone with the usual access (IAM-only). { everyone: true | false } changes it.
+  if (event && event.__job === "visit-cost-audience" && !event.requestContext && !event.version) {
+    const { visitCostAudienceJob } = await import("../visitCostDb");
+    return visitCostAudienceJob({ everyone: typeof event.everyone === "boolean" ? event.everyone : undefined });
+  }
   // ZocDoc in Master Billing: counts and dollar totals only, no patient details (IAM-only).
   // { from?, to? } = appointment dates (default this year); { rematch: true } first matches unmatched bookings again.
   if (event && event.__job === "zocdoc-counts" && !event.requestContext && !event.version) {
