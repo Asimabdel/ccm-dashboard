@@ -62,6 +62,8 @@ export function useWorkspace() {
     apcmAccess: q.data?.apcmAccess ?? false,
     /** One of the admins named for Master Billing (the owner). */
     masterBilling: q.data?.masterBilling ?? false,
+    /** May open the Copays & deductibles tab (admins first; everyone with insurance access once switched on). */
+    visitCost: q.data?.visitCost ?? false,
     clinicId: effectiveClinic,
     setClinicId,
   };

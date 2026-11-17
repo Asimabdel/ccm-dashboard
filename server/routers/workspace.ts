@@ -176,10 +176,12 @@ export const workspaceRouter = router({
     const apcmAccess = !["admin", "staff"].includes(role) && await (await import("../apcmAccess")).hasNamedApcmAccess(ctx.user.id);
     // Master Billing: only the admins named for it (server/masterBillingAccess.ts).
     const masterBilling = role === "admin" && await (await import("../masterBillingAccess")).hasMasterBilling(ctx.user);
-    if (!caps.tasks && !caps.playbooksView) return { caps, clinics: [], limitedToClinics: false, noClinicAccess: false, programApprover, ccmAssigner, bhiAssigner, apcmAccess, masterBilling };
+    // Copays & deductibles tab: admins first, then everyone with insurance access once it is switched on (server/visitCostDb.ts).
+    const visitCost = caps.eligibility && await (await import("../visitCostDb")).visitCostAllowed(role);
+    if (!caps.tasks && !caps.playbooksView) return { caps, clinics: [], limitedToClinics: false, noClinicAccess: false, programApprover, ccmAssigner, bhiAssigner, apcmAccess, masterBilling, visitCost };
     const actor = await actorFor(ctx, caps.tasks ? "tasks" : "playbooksView");
     const clinics = await ws.listClinics(actor);
-    return { caps, clinics, limitedToClinics: actor.clinicIds !== null, noClinicAccess: actor.clinicIds !== null && actor.clinicIds.length === 0, programApprover, ccmAssigner, bhiAssigner, apcmAccess, masterBilling };
+    return { caps, clinics, limitedToClinics: actor.clinicIds !== null, noClinicAccess: actor.clinicIds !== null && actor.clinicIds.length === 0, programApprover, ccmAssigner, bhiAssigner, apcmAccess, masterBilling, visitCost };
   }),
 
   /** The side menu: this person's starred pages and folded sections, and how much is waiting on each page. */
@@ -1622,6 +1624,20 @@ export const workspaceRouter = router({
       const { visitCostForPatient } = await import("../visitCostDb");
       return run(() => visitCostForPatient(actor, input.key));
     }),
+    /** The Copays & deductibles tab: a day's schedule with what to expect at check-in. */
+    schedule: protectedProcedure.input(z.object({ date: dateStr })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "eligibility");
+      const { visitCostSchedule } = await import("../visitCostDb");
+      return run(() => visitCostSchedule(actor, input.date));
+    }),
+    /** The same tab: everyone with paid visits on file (people who work across every office). */
+    list: protectedProcedure
+      .input(z.object({ q: z.string().max(80).default(""), kind: z.enum(["all", "copay", "deductible", "coinsurance", "nothing", "info", "none"]).default("all"), page: z.number().int().min(1).max(1000).default(1) }))
+      .query(async ({ ctx, input }) => {
+        const actor = await actorFor(ctx, "eligibility");
+        const { visitCostList } = await import("../visitCostDb");
+        return run(() => visitCostList(actor, input));
+      }),
   }),
 
   /** Program approvals: patients whose diagnoses qualify them for CCM / BHI / RPM / APCM (approvers only). */

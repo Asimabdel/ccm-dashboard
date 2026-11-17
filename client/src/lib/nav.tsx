@@ -1,6 +1,6 @@
 import type React from "react";
 import {
-  LayoutDashboard, Users, ClipboardList, UserCog, AlertTriangle, Receipt,
+  Banknote, LayoutDashboard, Users, ClipboardList, UserCog, AlertTriangle, Receipt,
   BarChart3, PhoneCall, CalendarClock, ShieldCheck, Building2, Stethoscope, Target,
   UserMinus, Ban, Pill, PhoneOutgoing, Activity, Sunrise, CalendarDays, BriefcaseBusiness,
   Home, ListTodo, Waypoints, Radar, BookOpen, UsersRound, PlugZap, Mail, BadgeCheck, Gauge, Printer, CalendarPlus, ClipboardSignature, FileSignature, Wallet, HeartPulse, ClipboardCheck, FlaskConical, Link2, NotebookPen, MessagesSquare, FileBarChart, HeartHandshake, TrendingUp, Landmark,
@@ -47,6 +47,8 @@ const BOOKINGS: NavItem = { label: "Website bookings", path: "/bookings", icon: 
 const FORMS: NavItem = { label: "Patient forms", path: "/intake-forms", icon: ClipboardSignature };
 const DOCUMENTS: NavItem = { label: "Documents", path: "/documents", icon: FileSignature };
 const INSURANCE: NavItem = { label: "Insurance checker", path: "/insurance", icon: BadgeCheck };
+/** What each patient will likely owe at check-in, from past insurance payments. Added after Insurance checker by the layout for those who may see it. */
+export const COPAYS: NavItem = { label: "Copays & deductibles", path: "/copays", icon: Banknote };
 const PAYMENTS: NavItem = { label: "Payments", path: "/payments", icon: Wallet };
 /** Only for the admins named for it (server/masterBillingAccess.ts): added to Revenue by the layout. */
 export const MASTER_BILLING: NavItem = { label: "Master Billing", path: "/master-billing", icon: Landmark };

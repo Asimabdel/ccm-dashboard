@@ -5,7 +5,7 @@ import { trpc } from "@/lib/trpc";
 import {
   LogOut, Menu, ChevronDown, Check, Clock, Search, Sun, Moon, PanelLeftClose, PanelLeftOpen, X, Building2, KeyRound, MessagesSquare, Star,
 } from "lucide-react";
-import { APCM, MASTER_BILLING, MESSAGES, NAV_GROUPS, PROGRAM_APPROVALS, ROLES, ROLE_HOME, STAFF_ASSIGNMENT, type NavItem, type Role } from "@/lib/nav";
+import { APCM, COPAYS, MASTER_BILLING, MESSAGES, NAV_GROUPS, PROGRAM_APPROVALS, ROLES, ROLE_HOME, STAFF_ASSIGNMENT, type NavItem, type Role } from "@/lib/nav";
 import { useNavCounts, useNavPrefs } from "@/components/workspace/useNavMenu";
 import { NAV_SHORTCUTS_SECTION } from "@shared/navMenu";
 import { useUnreadMessages } from "@/components/messages/useUnreadMessages";
@@ -112,7 +112,7 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
   const { warning, secondsLeft, stayLoggedIn, logoutNow } = useIdleLogout({ enabled: !!user });
 
   // Program approvals: only the named approvers get the tab (with how many patients are waiting).
-  const { programApprover, ccmAssigner: ccmOnly, bhiAssigner, apcmAccess, masterBilling } = useWorkspace();
+  const { programApprover, ccmAssigner: ccmOnly, bhiAssigner, apcmAccess, masterBilling, visitCost } = useWorkspace();
   const ccmAssigner = ccmOnly || bhiAssigner;
   const approvals = trpc.workspace.programs.count.useQuery(undefined, { enabled: !!user && programApprover, refetchInterval: 5 * 60_000 });
   // Internal messages: unread count (top bar + sidebar) and the browser pop-up.
@@ -157,7 +157,7 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
       actives[0].scrollIntoView({ block: "center" });
       saveNavScroll(el.scrollTop);
     }
-  }, [location, !!user, collapsed, isMobile, mobileOpen, programApprover, ccmAssigner, apcmAccess, masterBilling]);
+  }, [location, !!user, collapsed, isMobile, mobileOpen, programApprover, ccmAssigner, apcmAccess, masterBilling, visitCost]);
 
   if (!user) return null;
 
@@ -176,9 +176,13 @@ export function CCMDashboardLayout({ children, title, clinicPicker = false, page
     ? withAssignment.map((g, i) => (i === (careIdx >= 0 ? careIdx : 0) ? { ...g, items: [...g.items, APCM] } : g))
     : withAssignment;
   // Master Billing: only the admins named for it, right after Billing in Revenue.
-  const groups = masterBilling
+  const withBilling = masterBilling
     ? withApcm.map((g) => (g.label === "Revenue" ? { ...g, items: g.items.flatMap((x) => (x.path === "/billing" ? [x, MASTER_BILLING] : [x])) } : g))
     : withApcm;
+  // Copays & deductibles: right after Insurance checker, for those who may see the estimates.
+  const groups = visitCost
+    ? withBilling.map((g) => ({ ...g, items: g.items.flatMap((x) => (x.path === "/insurance" ? [x, COPAYS] : [x])) }))
+    : withBilling;
   const waitingApprovals = approvals.data?.patients ?? 0;
   const rail = !isMobile && collapsed;
   const initials = (user.name || user.email || "?").replace(/\(.*?\)/g, "").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();

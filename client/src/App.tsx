@@ -44,6 +44,7 @@ import ProviderReportPage from "./pages/ProviderReportPage";
 import MasterBillingPage from "./pages/MasterBillingPage";
 import WellnessPage from "./pages/WellnessPage";
 import InsuranceCheckerPage from "./pages/InsuranceCheckerPage";
+import CopaysPage from "./pages/CopaysPage";
 import TeamProgressPage from "./pages/TeamProgressPage";
 import FaxInboxPage from "./pages/FaxInboxPage";
 import ChartPage from "./pages/ChartPage";
@@ -121,6 +122,7 @@ function Router() {
       <Route path="/master-billing" component={MasterBillingPage} />
       <Route path="/wellness" component={WellnessPage} />
       <Route path="/insurance" component={InsuranceCheckerPage} />
+      <Route path="/copays" component={CopaysPage} />
       <Route path="/team-progress" component={TeamProgressPage} />
       <Route path="/faxes" component={FaxInboxPage} />
       <Route path="/chart/:key" component={ChartPage} />
