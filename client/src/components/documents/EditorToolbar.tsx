@@ -7,7 +7,7 @@ import { inputCls } from "@/components/workspace/ui";
 import { cn } from "@/lib/utils";
 import type { Assignee } from "@shared/documents";
 import { FILL_TOOLS, MARK_TOOLS, StampGallery, sameTool } from "./editorPanels";
-import type { Doc, ToolChoice } from "./editorShared";
+import { PATIENT_OPTION, type Doc, type ToolChoice } from "./editorShared";
 
 export function EditorToolbar({ tool, onTool, isTemplate, signers, newAssignee, onNewAssignee, onSuggest, onAiRead, suggesting, myName }: {
   tool: ToolChoice | null; onTool: (t: ToolChoice | null) => void; isTemplate: boolean; signers: Doc["signers"]; newAssignee: Assignee; onNewAssignee: (a: Assignee) => void;
@@ -74,6 +74,7 @@ export function EditorToolbar({ tool, onTool, isTemplate, signers, newAssignee, 
               <select className={cn(inputCls, "mt-0.5 h-8 w-40 py-0 text-xs")} value={newAssignee} onChange={(e) => onNewAssignee(e.target.value as Assignee)}>
                 <option value="preparer">Me (I fill it now)</option>
                 {signers.map((s) => <option key={s.userId} value={`signer:${s.userId}`}>{s.name ?? "Signer"} (signs later)</option>)}
+                <option value="patient">{PATIENT_OPTION}</option>
               </select>
             </label>
           </>

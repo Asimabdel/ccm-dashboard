@@ -1422,6 +1422,13 @@ export const documents = mysqlTable("documents", {
   patientId: int("patientId").references(() => patients.id),
   clinicId: int("clinicId").references(() => clinics.id),
   message: varchar("message", { length: 1000 }),
+  /** Sent to the patient to fill and sign on their phone (in a patient forms link): waiting | signed. */
+  patientStatus: varchar("patientStatus", { length: 12 }),
+  /** The patient forms link (intakePackets.id) it went out in. */
+  patientPacketId: int("patientPacketId"),
+  patientSignedAt: datetime("patientSignedAt"),
+  /** The name the patient (or their representative) signed with. */
+  patientSignerName: varchar("patientSignerName", { length: 160 }),
   createdByUserId: int("createdByUserId").notNull().references(() => users.id),
   updatedByUserId: int("updatedByUserId").references(() => users.id),
   sentAt: datetime("sentAt"),
@@ -1456,8 +1463,12 @@ export const documentSignatures = mysqlTable("documentSignatures", {
   id: int("id").autoincrement().primaryKey(),
   documentId: int("documentId").notNull().references(() => documents.id),
   fieldId: varchar("fieldId", { length: 40 }).notNull(),
-  userId: int("userId").notNull().references(() => users.id),
+  /** The staff member who signed; null when the patient signed through their forms link (see signerName). */
+  userId: int("userId").references(() => users.id),
+  /** Who signed when it isn't a staff account (the patient, or their representative). */
+  signerName: varchar("signerName", { length: 160 }),
   kind: varchar("kind", { length: 10 }).notNull(),
+  /** The signature picture (base64 PNG); empty when the patient typed their name instead of drawing. */
   png: mediumtext("png").notNull(),
   sha256: varchar("sha256", { length: 64 }).notNull(),
   /** A provider's stored signature applied by staff (userId) with the provider's approval. */

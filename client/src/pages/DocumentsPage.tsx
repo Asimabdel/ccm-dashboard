@@ -155,8 +155,13 @@ export default function DocumentsPage() {
                     {d.creator ? ` · by ${d.createdByMe ? "you" : d.creator}` : ""}
                     {d.completedAt ? ` · completed ${when(d.completedAt)}` : d.sentAt ? ` · sent ${when(d.sentAt)}` : ` · updated ${when(d.updatedAt)}`}
                   </p>
-                  {d.signers.length > 0 && (
+                  {(d.signers.length > 0 || d.patientStatus) && (
                     <p className="mt-1 flex flex-wrap gap-1.5 text-[11px]">
+                      {d.patientStatus && (
+                        <span className={cn("rounded-full px-2 py-0.5 font-semibold", d.patientStatus === "signed" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200" : "bg-fuchsia-100 text-fuchsia-800 dark:bg-fuchsia-900/40 dark:text-fuchsia-200")}>
+                          {d.patientStatus === "signed" ? "✓ Patient" : "Patient · waiting"}
+                        </span>
+                      )}
                       {d.signers.map((s) => (
                         <span key={s.userId} className={cn("rounded-full px-2 py-0.5 font-semibold", s.status === "signed" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300")}>
                           {s.status === "signed" ? "✓ " : ""}{s.name ?? "Signer"}

@@ -1533,6 +1533,12 @@ const INTAKE_COLUMNS: { table: string; column: string; ddl: string }[] = [
   { table: "bookingRequests", column: "waitAlertAt", ddl: "`waitAlertAt` datetime NULL AFTER `firstContactAt`" },
   // Added 2026-11-16: how each provider's name prints on letterheads and excuse notes.
   { table: "providers", column: "letterName", ddl: "`letterName` varchar(120) NULL AFTER `npi`" },
+  // Documents sent to the patient to sign on their phone (2026-11).
+  { table: "documents", column: "patientStatus", ddl: "`patientStatus` varchar(12) NULL AFTER `message`" },
+  { table: "documents", column: "patientPacketId", ddl: "`patientPacketId` int NULL AFTER `patientStatus`" },
+  { table: "documents", column: "patientSignedAt", ddl: "`patientSignedAt` datetime NULL AFTER `patientPacketId`" },
+  { table: "documents", column: "patientSignerName", ddl: "`patientSignerName` varchar(160) NULL AFTER `patientSignedAt`" },
+  { table: "documentSignatures", column: "signerName", ddl: "`signerName` varchar(160) NULL AFTER `userId`" },
 ];
 async function upgradeIntake(db: Db): Promise<string[]> {
   const applied: string[] = [];
@@ -1664,6 +1670,12 @@ export async function runWorkspaceMigration(): Promise<string[]> {
   applied.push(...(await upgradeStaffProfiles(db)));
   applied.push(...(await upgradeShifts(db)));
   applied.push(...(await upgradePhoneCalls(db)));
+  // A patient's signature on a document has no staff account behind it.
+  const sigUser = await rows<{ n: string }>(db, sql`SELECT IS_NULLABLE AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'documentSignatures' AND COLUMN_NAME = 'userId'`);
+  if (sigUser[0]?.n === "NO") {
+    await db.execute(sql.raw("ALTER TABLE `documentSignatures` MODIFY COLUMN `userId` int NULL"));
+    applied.push("documentSignatures.userId now nullable");
+  }
   applied.push(...(await upgradeEmailMessages(db)));
   const upgraded = await upgradeIntake(db);
   applied.push(...upgraded);

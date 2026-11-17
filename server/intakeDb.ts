@@ -9,7 +9,7 @@ import { getDb } from "./db";
 import { ENV } from "./_core/env";
 import { sealSecret, openSecret } from "./secretBox";
 import {
-  bookingRequests, clinics, emailContacts, fhirPatients, intakeDocuments, intakeEvents, intakeFiles, intakePackets, intakeSignatures,
+  bookingRequests, clinics, documents, emailContacts, fhirPatients, intakeDocuments, intakeEvents, intakeFiles, intakePackets, intakeSignatures,
   patients, providers, staffProfiles, users, workTaskActivities, workTasks,
 } from "../drizzle/schema";
 import {
@@ -22,6 +22,7 @@ import { SCREENINGS, SCREENING_METHOD, cleanScreeningAnswers, screeningFor, scre
 import { enrollmentsForSubject, recordConsent, type ConsentEvent } from "./enrollDb";
 import { matchFaxPatient } from "../shared/fax";
 import { normalizePhone } from "../shared/phone";
+import { pdfDocIdOf, pdfFormKey } from "../shared/documents";
 import { localDateStr } from "../shared/workforce";
 import { WorkspaceError, audit, buildNameDobIndex, createTask, frontDeskFor, loadScheduleSubjects, subjectCare, type WorkspaceActor } from "./workspaceDb";
 
@@ -146,9 +147,17 @@ export async function importDocuments(docs: { title: Record<string, string>; bod
 }
 
 /** The forms that are part of MyPCP itself: the health history, and the depression / anxiety screenings. */
-type FormKind = "questionnaire" | "screening" | "agreement";
-const builtInKind = (key: string): Exclude<FormKind, "agreement"> | null => (key === MEDICAL_INTAKE_KEY ? "questionnaire" : screeningFor(key) ? "screening" : null);
-const formKind = (key: string): FormKind => builtInKind(key) ?? "agreement";
+type FormKind = "questionnaire" | "screening" | "agreement" | "document";
+const builtInKind = (key: string): Exclude<FormKind, "agreement" | "document"> | null => (key === MEDICAL_INTAKE_KEY ? "questionnaire" : screeningFor(key) ? "screening" : null);
+/** "document" = a PDF from Documents the patient fills in and signs ("pdf:<documentId>"). */
+const formKind = (key: string): FormKind => builtInKind(key) ?? (pdfDocIdOf(key) ? "document" : "agreement");
+/** The titles of documents sent in patient forms links (by "pdf:<id>" key). */
+async function pdfTitles(keys: string[]) {
+  const ids = Array.from(new Set(keys.map(pdfDocIdOf).filter((x): x is number => !!x)));
+  if (!ids.length) return new Map<string, string>();
+  const rows = await (await db()).select({ id: documents.id, title: documents.title }).from(documents).where(inArray(documents.id, ids));
+  return new Map(rows.map((r) => [pdfFormKey(r.id), r.title]));
+}
 /** The name staff see for a built-in form (null for a Form library agreement). */
 const builtInTitle = (key: string) => (key === MEDICAL_INTAKE_KEY ? MEDICAL_INTAKE.title.en : screeningFor(key)?.name ?? null);
 
@@ -217,7 +226,11 @@ export async function createPacket(actor: WorkspaceActor, input: CreatePacketInp
   if (!name) throw new WorkspaceError("Enter the patient's name.");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.dob)) throw new WorkspaceError("Enter the patient's date of birth; they use it to open the forms.");
   const active = new Set((await listDocuments()).map((x) => x.key));
-  const forms = Array.from(new Set(input.forms)).filter((k) => !!builtInKind(k) || active.has(k));
+  // A document from Documents goes in only when it's waiting for THIS patient to sign it.
+  const { patientDocReady, linkPatientPacket } = await import("./documentsDb");
+  const pdfOk = new Set<string>();
+  for (const k of Array.from(new Set(input.forms))) { const id = pdfDocIdOf(k); if (id && (await patientDocReady(id, input.subjectKey ?? null))) pdfOk.add(k); }
+  const forms = Array.from(new Set(input.forms)).filter((k) => !!builtInKind(k) || active.has(k) || pdfOk.has(k));
   if (!forms.length) throw new WorkspaceError("Pick at least one form.");
   const d = await db();
   const care = input.subjectKey ? await subjectCare(input.subjectKey) : null;
@@ -234,6 +247,7 @@ export async function createPacket(actor: WorkspaceActor, input: CreatePacketInp
     status: "waiting", expiresAt: new Date(Date.now() + PACKET_EXPIRY_DAYS * 86_400_000), bookingRequestId: input.bookingRequestId ?? null, createdByUserId: actor.id,
   });
   const id = (res as unknown as [{ insertId: number }])[0].insertId;
+  if (pdfOk.size) await linkPatientPacket(Array.from(pdfOk).map((k) => pdfDocIdOf(k)!), id);
   await logEvent(id, "created", { userId: actor.id, detail: `${forms.length} form${forms.length === 1 ? "" : "s"} · ${input.language}` });
   await audit(actor, "update_patient", { entityType: "intakePacket", entityId: id, description: `Patient forms created (${forms.length})` });
   return { id, link: linkFor(origin, token) };
@@ -350,6 +364,7 @@ async function packetRows(where: SQL | undefined, limit: number) {
   const ids = rows.map((r) => r.p.id);
   const signed = ids.length ? await d.select({ packetId: intakeSignatures.packetId, formKey: intakeSignatures.formKey, decision: intakeSignatures.decision }).from(intakeSignatures).where(inArray(intakeSignatures.packetId, ids)) : [];
   const titles = new Map((await listDocuments(true)).map((x) => [x.key, x.title.en ?? "Form"]));
+  for (const [k, t] of Array.from(await pdfTitles(rows.flatMap((r) => r.p.forms as string[])))) titles.set(k, `Document: ${t}`);
   titles.set(MEDICAL_INTAKE_KEY, MEDICAL_INTAKE.title.en);
   for (const s of SCREENINGS) titles.set(s.key, s.name);
   // Screenings that came back: their score sits next to the form's name in the lists.
@@ -465,7 +480,10 @@ export async function packetDetail(actor: WorkspaceActor, id: number) {
     source: p.source as PacketSource,
     expired: OPEN_PACKET.includes(p.status as PacketStatus) && isExpired(p), expiresAt: p.expiresAt, createdAt: p.createdAt, sentAt: p.sentAt, openedAt: p.openedAt, completedAt: p.completedAt, filedAt: p.filedAt,
     clinic, taskId: p.taskId,
-    forms: (p.forms as string[]).map((k) => ({ key: k, title: builtInTitle(k) ?? docs.get(k)?.title.en ?? "Form", kind: formKind(k) })),
+    forms: await (async () => {
+      const pdfs = await pdfTitles(p.forms as string[]);
+      return (p.forms as string[]).map((k) => ({ key: k, title: builtInTitle(k) ?? docs.get(k)?.title.en ?? (pdfs.has(k) ? `Document: ${pdfs.get(k)}` : "Form"), kind: formKind(k), documentId: pdfDocIdOf(k) }));
+    })(),
     answers: ((p.answers ?? {}) as Record<string, Answers>)[MEDICAL_INTAKE_KEY] ?? {},
     signatures: sigs.map((s) => ({
       formKey: s.formKey, formTitle: s.formTitle, language: s.language, formVersion: s.formVersion, signerName: s.signerName, signerRelation: s.signerRelation,
@@ -691,19 +709,21 @@ async function payload(p: typeof intakePackets.$inferSelect) {
   const sigs = await d.select({ formKey: intakeSignatures.formKey, signerName: intakeSignatures.signerName, signedAt: intakeSignatures.signedAt, decision: intakeSignatures.decision }).from(intakeSignatures).where(eq(intakeSignatures.packetId, p.id));
   const photos = await d.select({ kind: intakeFiles.kind }).from(intakeFiles).where(eq(intakeFiles.packetId, p.id));
   const docs = new Map((await listDocuments(true)).map((x) => [x.key, x]));
+  const pdfs = await pdfTitles(p.forms as string[]);
   const forms = (p.forms as string[]).map((k) => {
     const sig = sigs.find((s) => s.formKey === k);
     const done = { signed: !!sig, declined: sig?.decision === "declined", signedAt: sig?.signedAt ?? null };
     if (k === MEDICAL_INTAKE_KEY) return { key: k, kind: "questionnaire" as const, version: MEDICAL_INTAKE.version, ...done, canDecline: false, doc: null };
     const screening = screeningFor(k);
     if (screening) return { key: k, kind: "screening" as const, version: screening.version, ...done, canDecline: false, doc: null };
+    if (pdfDocIdOf(k)) return { key: k, kind: "document" as const, version: 1, ...done, canDecline: false, doc: null, title: pdfs.get(k) ?? null };
     const doc = docs.get(k);
     // Consents are a choice: the patient may say no. Other agreements must be signed.
     return {
       key: k, kind: "agreement" as const, version: doc?.version ?? 0, ...done, canDecline: !!doc?.consentKind && !doc.choices.length,
       doc: doc ? { title: doc.title, body: doc.body, choices: doc.choices } : null,
     };
-  }).filter((f) => f.kind !== "agreement" || f.doc);
+  }).filter((f) => (f.kind !== "agreement" || f.doc) && (f.kind !== "document" || ("title" in f && f.title)));
   // "LAST, FIRST" (Practice Fusion style) or "First Last" → the first name, for "Hello, …".
   const given = (p.name.includes(",") ? p.name.split(",")[1] : p.name) ?? "";
   const saved = (p.answers ?? {}) as Record<string, Answers>;
@@ -722,6 +742,33 @@ async function payload(p: typeof intakePackets.$inferSelect) {
 
 export async function patientLoad(session: string) {
   return payload(await fromSession(session));
+}
+
+/** A document in the patient's link: its pages, their boxes, what's already on it, and their answers so far. */
+export async function patientDocLoad(session: string, formKey: string) {
+  const p = await fromSession(session);
+  const id = pdfDocIdOf(formKey);
+  if (!id || !(p.forms as string[]).includes(formKey)) throw new PatientFormError("bad");
+  const { patientDocView } = await import("./documentsDb");
+  const view = await patientDocView(id, p.id);
+  if (!view) throw new PatientFormError("bad");
+  return { ...view, answers: (((p.answers ?? {}) as Record<string, Record<string, string>>)[formKey] ?? {}) };
+}
+
+/** The patient's answers on a document, saved as they go (so they can stop and come back). */
+export async function patientDocSave(session: string, formKey: string, raw: Record<string, unknown>) {
+  const p = await fromSession(session);
+  const id = pdfDocIdOf(formKey);
+  if (!id || !(p.forms as string[]).includes(formKey)) throw new PatientFormError("bad");
+  const d = await db();
+  const [signed] = await d.select({ id: intakeSignatures.id }).from(intakeSignatures).where(and(eq(intakeSignatures.packetId, p.id), eq(intakeSignatures.formKey, formKey))).limit(1);
+  if (signed) return { ok: true, locked: true };
+  const clean = Object.fromEntries(Object.entries(raw ?? {}).filter(([k, v]) => /^[A-Za-z0-9_-]{1,40}$/.test(k) && typeof v === "string").slice(0, 300).map(([k, v]) => [k, String(v).slice(0, 2000)]));
+  if (JSON.stringify(clean).length > 64_000) throw new PatientFormError("too_big");
+  const first = p.status !== "in_progress";
+  await d.update(intakePackets).set({ answers: { ...((p.answers ?? {}) as Record<string, Record<string, unknown>>), [formKey]: clean }, status: "in_progress" }).where(eq(intakePackets.id, p.id));
+  if (first) await logEvent(p.id, "started");
+  return { ok: true, locked: false };
 }
 
 export async function patientSetLanguage(token: string, language: IntakeLang) {
@@ -828,7 +875,18 @@ export async function patientSign(session: string, input: SignInput, meta: Clien
 
   let formTitle: string, formVersion: number, snapshot: string, consentKind: ConsentKind | null = null;
   let answers: Record<string, ChoiceAnswer> | null = null;
-  if (input.formKey === MEDICAL_INTAKE_KEY) {
+  let pdfDoc: { id: number; values: Record<string, string> } | null = null;
+  const pdfId = pdfDocIdOf(input.formKey);
+  if (pdfId) {
+    if (decision === "declined") throw new PatientFormError("bad");
+    const { patientDocCheck } = await import("./documentsDb");
+    const check = await patientDocCheck(pdfId, p.id, ((p.answers ?? {}) as Record<string, Record<string, unknown>>)[input.formKey] ?? {});
+    if (!check.ok) throw new PatientFormError(check.reason);
+    formTitle = check.title;
+    formVersion = 1;
+    snapshot = stableStringify({ document: pdfId, title: check.title, fileSha256: check.fileSha256, language: lang, values: check.values });
+    pdfDoc = { id: pdfId, values: check.values };
+  } else if (input.formKey === MEDICAL_INTAKE_KEY) {
     if (decision === "declined") throw new PatientFormError("bad");
     const answers = ((p.answers ?? {}) as Record<string, Answers>)[MEDICAL_INTAKE_KEY] ?? {};
     if (missingRequired(MEDICAL_INTAKE, answers).length) throw new PatientFormError("incomplete");
@@ -885,6 +943,12 @@ export async function patientSign(session: string, input: SignInput, meta: Clien
     ...(decision === "declined" ? { decision } : {}), ...(authority ? { authority, authorityNote } : {}), ...(consentKind ? { consentKind } : {}),
     ...(answers ? { choices: answers } : {}),
   }));
+  // A document: the patient's answers and signature go onto it first (the teammates then sign, or the signed PDF is made).
+  if (pdfDoc) {
+    const { patientDocSigned } = await import("./documentsDb");
+    const drawnB64 = input.method === "drawn" ? /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(input.drawn ?? "")?.[1] ?? null : null;
+    await patientDocSigned(pdfDoc.id, p.id, { values: pdfDoc.values, signerName, png: drawnB64, signedAt, ip, userAgent });
+  }
   await d.insert(intakeSignatures).values({
     packetId: p.id, formKey: input.formKey, formTitle: formTitle.slice(0, 255), language: lang, formVersion, snapshot, textHash, signerName, signerRelation: input.relation,
     signerAuthority: authority, authorityNote, decision, consentKind, choices: answers, method: input.method, signatureFileId, signedAt, ip, userAgent, docHash,

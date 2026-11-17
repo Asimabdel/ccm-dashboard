@@ -165,6 +165,11 @@ export default function IntakePrintPage() {
                 </>
               ) : f.kind === "screening" ? (
                 <ScreeningPrint formKey={f.key} answers={sig?.screening?.answers ?? null} language={sig?.language ?? "en"} />
+              ) : f.kind === "document" ? (
+                <>
+                  <h2 className="border-b border-slate-300 pb-1 text-lg font-bold">{f.title}</h2>
+                  <p className="mt-2 text-sm">The patient filled in their boxes and signed this document on their phone. The signed PDF itself, with its signature certificate page, is kept in MyPCP Documents{f.documentId ? ` (document #${f.documentId})` : ""}.</p>
+                </>
               ) : (
                 <>
                   <h2 className="border-b border-slate-300 pb-1 text-lg font-bold" dir={sig?.text ? langDir(sig.language) : undefined}>{sig?.text?.title ?? f.title}</h2>

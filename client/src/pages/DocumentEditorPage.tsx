@@ -5,7 +5,7 @@
 //    nudged, lined up and undone.
 //  • sign: a teammate it was sent to fills in and signs their highlighted boxes ("Next box" walks them through).
 //  • view: read-only (the signed PDF once it's complete).
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "wouter";
 import { toast } from "sonner";
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, CheckCircle2, ChevronDown, Download, FileStack, FileText, Loader2, Maximize2, Minus, MoveHorizontal, PanelRight, Plus, Redo2, RotateCw, Send, Trash2, Undo2 } from "lucide-react";
@@ -23,14 +23,15 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { FieldPanel, MultiPanel, PagesPanel, PatientPanel, SignersPanel, WhoPanel, officeLine } from "@/components/documents/editorPanels";
 import { PRACTICE_FAX, PRACTICE_PHONE, STAMP_GALLERY, logoKindOf, logoSize, officeShortName, stampSize } from "@shared/stamps";
-import { PALETTE, useTouchScreen, type Doc, type SigMap, type ToolChoice } from "@/components/documents/editorShared";
+import { PALETTE, PATIENT_COLOR, useTouchScreen, type Doc, type SigMap, type ToolChoice } from "@/components/documents/editorShared";
 import { addPagesFromFile, isDocFile, uploadPart } from "@/components/documents/uploadFiles";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AnnotationMode, openPdf, type PageViewport, type PdfDoc } from "@/lib/pdf";
 import { downloadPdf } from "@/lib/pdfDownload";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
-import { DOC_STATUS_LABELS, FIELD_DEFAULT_SIZE, isFilled, isMarkup, missingFor, signerOf, type Assignee, type DocField } from "@shared/documents";
+import { DOC_STATUS_LABELS, FIELD_DEFAULT_SIZE, hasPatientBoxes, isFilled, isMarkup, missingFor, pdfFormKey, signerOf, type Assignee, type DocField } from "@shared/documents";
+import { SendFormsDialog, type SendPreset } from "@/components/intake/SendFormsDialog";
 import {
   alignFields, duplicateFields, editTextBoxes, emptyHistory, fillOrder, keepOnPage, newFieldId, nudgeFields, redo, remember, repeatOnPages, snapMove, undo, type AlignHow, type History,
 } from "@shared/docEdit";
@@ -46,19 +47,28 @@ export default function DocumentEditorPage() {
   const { id } = useParams<{ id: string }>();
   const docId = Number(id);
   const q = trpc.workspace.documents.get.useQuery({ id: docId }, { enabled: !!user && docId > 0, refetchOnWindowFocus: false });
+  // Sending a document to the patient: the patient forms window, with this document in it (kept here, outside the
+  // editor, because the editor starts fresh once the document is out for signing).
+  const [linkOpen, setLinkOpen] = useState(false);
+  const d = q.data;
+  const linkPreset = useMemo<SendPreset | null>(
+    () => (d?.subjectKey ? { subjectKey: d.subjectKey, name: d.patientName, documents: [{ key: pdfFormKey(d.id), title: d.title }] } : null),
+    [d?.id, d?.subjectKey, d?.patientName, d?.title], // eslint-disable-line react-hooks/exhaustive-deps
+  );
   return (
     <CCMDashboardLayout title={q.data?.title ?? "Documents"} pageTitle={false} focus>
       {q.isLoading && <Loading />}
       {q.error && <div className="p-6"><ErrorNote message={q.error.message} /></div>}
       {/* A new file (pages added, removed, moved, turned) starts the editor fresh on it. */}
-      {q.data && <Editor key={`${q.data.id}:${q.data.status}:${q.data.mode}:${q.data.fileRev}`} doc={q.data} refetch={() => void q.refetch()} />}
+      {q.data && <Editor key={`${q.data.id}:${q.data.status}:${q.data.mode}:${q.data.fileRev}`} doc={q.data} refetch={() => void q.refetch()} onSendToPatient={() => setLinkOpen(true)} />}
+      {linkPreset && <SendFormsDialog open={linkOpen} onClose={() => { setLinkOpen(false); void q.refetch(); }} preset={linkPreset} />}
     </CCMDashboardLayout>
   );
 }
 
 const todayStr = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
 
-function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
+function Editor({ doc, refetch, onSendToPatient }: { doc: Doc; refetch: () => void; onSendToPatient: () => void }) {
   const { user } = useAuth();
   const [, navigate] = useLocation();
   const utils = trpc.useUtils();
@@ -85,8 +95,8 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
 
   const me: Assignee = `signer:${doc.myUserId}`;
   const signerIds = doc.signers.map((s) => s.userId);
-  const colorOf = (a: Assignee) => { const s = signerOf(a); const i = s ? signerIds.indexOf(s) + 1 : 0; return PALETTE[Math.max(0, i) % PALETTE.length]!; };
-  const nameOf = (a: Assignee) => { const s = signerOf(a); return s ? doc.signers.find((x) => x.userId === s)?.name ?? "Signer" : "You"; };
+  const colorOf = (a: Assignee) => { if (a === "patient") return PATIENT_COLOR; const s = signerOf(a); const i = s ? signerIds.indexOf(s) + 1 : 0; return PALETTE[Math.max(0, i) % PALETTE.length]!; };
+  const nameOf = (a: Assignee) => { if (a === "patient") return "Patient"; const s = signerOf(a); return s ? doc.signers.find((x) => x.userId === s)?.name ?? "Signer" : "You"; };
   /** Can the person looking at this fill that box right now? (Marks are never filled in.) */
   const canFill = useCallback((f: DocField) => !isMarkup(f.type) && ((mode === "edit" && f.assignee === "preparer") || (mode === "sign" && f.assignee === me)), [mode, me]);
 
@@ -520,6 +530,14 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
         if (!(await applyWhiteouts())) return;
       }
       const r = await send.mutateAsync({ id: doc.id });
+      if (r.status === "patient") {
+        // Out to the patient: pick how the link goes (text, email or copy).
+        toast.success("Ready for the patient. Choose how to send them the link.");
+        void utils.workspace.documents.invalidate();
+        refetch();
+        onSendToPatient();
+        return;
+      }
       toast.success(r.status === "completed" ? "Done. The signed PDF is ready." : "Sent. Each signer has a task to sign it.");
       void utils.workspace.documents.invalidate();
       refetch();
@@ -539,6 +557,8 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
     try { downloadPdf(await fileM.mutateAsync({ id: doc.id, which }), `${doc.title}${which === "copy" ? "" : " (signed)"}.pdf`); } catch (e) { toast.error((e as Error).message); }
   };
   const excuseNote = doc.fileName === "excuse-note.pdf";
+  /** Boxes for the patient: it goes to them first (a link to fill in and sign on their phone). */
+  const forPatient = hasPatientBoxes(fields);
 
   const myMissing = mode === "sign" ? missingFor(fields, me) : mode === "edit" ? missingFor(fields, "preparer") : [];
   const sel = selected.length === 1 ? fields.find((f) => f.id === selected[0]) ?? null : null;
@@ -618,6 +638,11 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
               {todo[0] && <button type="button" className="shrink-0 font-bold underline" onClick={() => { setPanelOpen(false); goTo(todo[0]!); }}>Show me</button>}
             </p>
           )}
+          {forPatient && !doc.subjectKey && !doc.isTemplate && (
+            <p className="rounded-xl bg-fuchsia-50 px-3 py-2 text-xs text-fuchsia-900 dark:bg-fuchsia-950/40 dark:text-fuchsia-200">
+              Some boxes are for the patient. Pick the patient below: when you send, they get a link to fill in their boxes and sign on their phone.
+            </p>
+          )}
           {whoGroups.length > 0 && <WhoPanel groups={whoGroups} onPick={(ids) => { setTool(null); setSelected(ids); }} />}
           {!doc.isTemplate && (
             <SignersPanel doc={doc} fields={fields} colorOf={colorOf} onChanged={(ids) => {
@@ -664,7 +689,13 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
         {doc.status === "completed" ? (
           <p className="flex items-start gap-2 text-sm font-semibold text-emerald-700 dark:text-emerald-300"><CheckCircle2 size={16} className="mt-0.5 shrink-0" /> Completed {doc.completedAt ? new Date(doc.completedAt).toLocaleString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}</p>
         ) : <p className="text-sm font-semibold">{DOC_STATUS_LABELS[doc.status]}</p>}
-        <p className="mt-1 text-xs text-slate-500">{showFinal ? "You're looking at the signed PDF, with its certificate page at the end." : doc.status === "signing" ? "Out for signature. You can follow each signer in the line above." : ""}</p>
+        <p className="mt-1 text-xs text-slate-500">{showFinal ? "You're looking at the signed PDF, with its certificate page at the end." : doc.patientStatus === "waiting" ? "Waiting for the patient to fill in their boxes and sign on their phone." : doc.status === "signing" ? "Out for signature. You can follow each signer in the line above." : ""}</p>
+        {doc.patientStatus === "waiting" && doc.status === "signing" && (doc.createdByMe || user?.role === "admin") && (
+          <Btn size="sm" variant="secondary" className="mt-2 w-full" onClick={onSendToPatient}><Send size={13} /> {doc.patientPacketId ? "Send the patient a new link" : "Send the patient the link"}</Btn>
+        )}
+        {doc.patientStatus === "signed" && doc.patientSignedAt && (
+          <p className="mt-2 text-xs text-slate-500">The patient signed {new Date(doc.patientSignedAt).toLocaleString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}{doc.patientSignerName ? ` (as "${doc.patientSignerName}")` : ""}.</p>
+        )}
         {doc.patientName && <p className="mt-2 text-xs text-slate-500">Patient: <b className="text-slate-700 dark:text-slate-200">{doc.patientName}</b></p>}
         {doc.status === "completed" && (
           <div className="mt-3 flex flex-col gap-1.5">
@@ -720,8 +751,8 @@ function Editor({ doc, refetch }: { doc: Doc; refetch: () => void }) {
             <>
               <Btn size="sm" variant="secondary" className="hidden md:inline-flex" disabled={asTemplate.isPending} onClick={() => setTemplateName(title)}><FileStack size={13} /> Save as template</Btn>
               <Btn size="sm" disabled={busy} onClick={() => void doSend()}>
-                {send.isPending || whiteoutBusy ? <Loader2 size={13} className="animate-spin" /> : doc.signers.length ? <Send size={13} /> : <CheckCircle2 size={13} />}
-                <span className="hidden sm:inline">{doc.signers.length ? "Send for signature" : "Finish & create PDF"}</span><span className="sm:hidden">{doc.signers.length ? "Send" : "Finish"}</span>
+                {send.isPending || whiteoutBusy ? <Loader2 size={13} className="animate-spin" /> : doc.signers.length || forPatient ? <Send size={13} /> : <CheckCircle2 size={13} />}
+                <span className="hidden sm:inline">{forPatient ? "Send to patient" : doc.signers.length ? "Send for signature" : "Finish & create PDF"}</span><span className="sm:hidden">{forPatient || doc.signers.length ? "Send" : "Finish"}</span>
               </Btn>
             </>
           )}

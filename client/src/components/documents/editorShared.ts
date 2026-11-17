@@ -19,6 +19,9 @@ export const PALETTE = [
   { border: "border-rose-600", bg: "bg-rose-500/10", text: "text-rose-800", dot: "bg-rose-600" },
 ];
 export type BoxColor = (typeof PALETTE)[number];
+/** The patient's boxes (they fill and sign them on their phone). */
+export const PATIENT_COLOR: BoxColor = { border: "border-fuchsia-600", bg: "bg-fuchsia-500/10", text: "text-fuchsia-800", dot: "bg-fuchsia-600" };
+export const PATIENT_OPTION = "The patient (on their phone)";
 
 /** Ink on the (always white) PDF page, whatever the app's theme. */
 export const INK = "#0f172a";

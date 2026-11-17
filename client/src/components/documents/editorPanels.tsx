@@ -15,7 +15,7 @@ import {
 } from "@shared/documents";
 import type { AlignHow } from "@shared/docEdit";
 import { AI_WHO_LABELS, type AiWho } from "@shared/docSuggest";
-import type { BoxColor, Doc, ToolChoice } from "./editorShared";
+import { PATIENT_OPTION, type BoxColor, type Doc, type ToolChoice } from "./editorShared";
 import { StampArt } from "./StampArt";
 import {
   LOGO_KINDS, LOGO_LABELS, PRACTICE_FAX, PRACTICE_PHONE, STAMP_GALLERY, STAMP_KINDS, STAMP_KIND_LABELS, logoKindOf, logoSize, officeShortName, stampKindOf, stampSize,
@@ -150,8 +150,12 @@ export function FieldPanel({ f, doc, onChange, onDelete, onCopy, onEveryPage, is
           <select className={cn(inputCls, "mt-1 h-8 text-xs")} value={f.assignee} onChange={(e) => onChange({ assignee: e.target.value as Assignee, value: e.target.value === "preparer" ? f.value : null })}>
             <option value="preparer">Me</option>
             {doc.signers.map((s) => <option key={s.userId} value={`signer:${s.userId}`}>{s.name ?? "Signer"}</option>)}
+            <option value="patient">{PATIENT_OPTION}</option>
           </select>
         </label>
+      )}
+      {!markup && !isTemplate && f.assignee === "patient" && (
+        <p className="text-[11px] text-slate-500">The patient fills this in on their phone: when you send, MyPCP sends them a link (text or email), they confirm their date of birth, fill in their boxes and sign. Teammates sign after them.</p>
       )}
       {!markup && (
         <label className="block text-xs text-slate-500">Label (shown to whoever fills it)
@@ -373,6 +377,7 @@ export function MultiPanel({ count, onAlign, onCopy, onDelete, signers, onAssign
             <option value="">Choose…</option>
             <option value="preparer">Me</option>
             {(signers ?? []).map((s) => <option key={s.userId} value={`signer:${s.userId}`}>{s.name ?? "Signer"}</option>)}
+            <option value="patient">{PATIENT_OPTION}</option>
           </select>
         </label>
       )}

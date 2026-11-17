@@ -281,6 +281,7 @@ function PacketSheet({ id, onClose }: { id: number | null; onClose: () => void }
                         {sig?.decision === "declined" ? <XCircle size={16} className="mt-0.5 shrink-0 text-slate-500" /> : sig ? <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-emerald-600" /> : <Clock size={16} className="mt-0.5 shrink-0 text-slate-400" />}
                         <div>
                           <p className="font-medium">{f.title}</p>
+                          {f.documentId && <a href={`/documents/${f.documentId}`} className="text-xs font-semibold text-brand hover:underline dark:text-teal-300">Open the document</a>}
                           {sig && (
                             <p className="text-xs text-slate-500">
                               {sig.decision === "declined" ? <b className="text-slate-700 dark:text-slate-200">Said no</b> : sig.method === SCREENING_METHOD ? "Answered" : "Signed"} by {sig.signerName}

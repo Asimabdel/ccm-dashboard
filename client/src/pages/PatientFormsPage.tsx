@@ -2,7 +2,7 @@
 // who aren't comfortable online: very large text (and a bigger-text button), one small step at a
 // time, big tap targets, English / Spanish / Arabic, "read it to me", answers saved as they go,
 // a "Call us" button on every screen, and a family member or caregiver can sign for them.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "wouter";
 import { TRPCClientError } from "@trpc/client";
 import { Camera, Check, ChevronLeft, ChevronRight, ClipboardList, FileText, Loader2, Lock, Phone, Printer, Square, Volume2, XCircle } from "lucide-react";
@@ -21,6 +21,8 @@ import {
 } from "@shared/screenings";
 
 type Payload = RouterOutputs["patientForms"]["load"];
+/** A document from the office to fill in and sign (from Documents). */
+const PatientDocForm = lazy(() => import("@/components/intake/PatientDocForm"));
 type FormItem = Payload["forms"][number];
 type PublicInfo = Extract<RouterOutputs["patientForms"]["publicInfo"], { ok: true }>;
 type Phase = "loading" | "blocked" | "start" | "welcome" | "home" | "form" | "done" | "copyDob" | "copy";
@@ -217,6 +219,11 @@ export default function PatientFormsPage() {
           activeForm.kind === "questionnaire" ? (
             <Questionnaire key={activeForm.key} lang={lang} session={session} payload={payload} onExit={() => { setPhase("home"); void refresh(); }}
               onSigned={(c) => afterSign(activeForm.key, c)} onServerError={onServerError} />
+          ) : activeForm.kind === "document" ? (
+            <Suspense fallback={<Centered><Loader2 className="size-10 animate-spin text-teal-700" /><p className="mt-3 text-lg">{t(T.docLoading, lang)}</p></Centered>}>
+              <PatientDocForm key={activeForm.key} lang={lang} session={session} formKey={activeForm.key}
+                onExit={() => { setPhase("home"); void refresh(); }} onSigned={(c) => afterSign(activeForm.key, c)} onServerError={onServerError} />
+            </Suspense>
           ) : activeForm.kind === "screening" ? (
             <ScreeningForm key={activeForm.key} lang={lang} session={session} form={activeForm} saved={payload.screeningAnswers?.[activeForm.key] ?? {}}
               onExit={() => { setPhase("home"); void refresh(); }} onSent={(c) => afterSign(activeForm.key, c)} onServerError={onServerError}
@@ -280,7 +287,7 @@ function Centered({ children }: { children: React.ReactNode }) {
   return <div className="flex flex-col items-center py-24 text-center">{children}</div>;
 }
 
-function BigButton({ children, onClick, disabled, variant = "primary", type = "button", className }: { children: React.ReactNode; onClick?: () => void; disabled?: boolean; variant?: "primary" | "secondary" | "success"; type?: "button" | "submit"; className?: string }) {
+export function BigButton({ children, onClick, disabled, variant = "primary", type = "button", className }: { children: React.ReactNode; onClick?: () => void; disabled?: boolean; variant?: "primary" | "secondary" | "success"; type?: "button" | "submit"; className?: string }) {
   return (
     <button type={type} onClick={onClick} disabled={disabled}
       className={cn(
@@ -295,7 +302,7 @@ function BigButton({ children, onClick, disabled, variant = "primary", type = "b
   );
 }
 
-function Note({ children, tone = "info" }: { children: React.ReactNode; tone?: "info" | "warn" | "error" | "ok" }) {
+export function Note({ children, tone = "info" }: { children: React.ReactNode; tone?: "info" | "warn" | "error" | "ok" }) {
   return (
     <div role={tone === "error" ? "alert" : "status"} className={cn("rounded-2xl border-2 px-4 py-3 text-lg",
       tone === "info" && "border-sky-200 bg-sky-50 text-sky-900",
@@ -554,6 +561,7 @@ function PublicStart({ lang, onLang, slug, info, notice, onStarted }: {
 function formTitle(f: FormItem, lang: IntakeLang) {
   if (f.kind === "questionnaire") return tr(MEDICAL_INTAKE.title, lang);
   if (f.kind === "screening") return tr(screeningFor(f.key)?.title, lang);
+  if (f.kind === "document") return ("title" in f && f.title) || t(T.docFill, lang);
   return agreementIn(f.doc!, lang).title;
 }
 
@@ -570,7 +578,7 @@ function Home({ lang, payload, notice, onOpen }: { lang: IntakeLang; payload: Pa
       {notice && <Note tone="warn">{notice}</Note>}
       <ol className="space-y-3">
         {payload.forms.map((f, i) => {
-          const Icon = f.kind === "agreement" ? FileText : ClipboardList;
+          const Icon = f.kind === "agreement" || f.kind === "document" ? FileText : ClipboardList;
           const isNext = f.key === nextKey;
           return (
             <li key={f.key} className={cn("rounded-3xl border-2 bg-white p-5 shadow-sm", f.signed ? "border-emerald-200" : isNext ? "border-teal-600" : "border-slate-200")}>
@@ -584,7 +592,7 @@ function Home({ lang, payload, notice, onOpen }: { lang: IntakeLang; payload: Pa
                   <p className="mt-1 text-lg text-slate-600">
                     {f.signed ? <span className="font-semibold text-emerald-700">{f.declined ? t(T.youSaidNo, lang) : `${t(T.formDone, lang)} ✓`}</span>
                       : f.kind === "questionnaire" ? t(T.aboutMinutes, lang, { m: MEDICAL_INTAKE.minutes })
-                      : f.kind === "screening" ? t(T.aboutMinutes, lang, { m: screeningFor(f.key)?.minutes ?? 2 }) : t(T.readSign, lang)}
+                      : f.kind === "screening" ? t(T.aboutMinutes, lang, { m: screeningFor(f.key)?.minutes ?? 2 }) : f.kind === "document" ? t(T.docFill, lang) : t(T.readSign, lang)}
                   </p>
                 </div>
               </div>
@@ -1377,7 +1385,7 @@ function ReadAloud({ lang, speakLang, text }: { lang: IntakeLang; speakLang: Int
 // Signing: typed name (easiest) or drawn; the patient or someone signing for them
 // ---------------------------------------------------------------------------
 
-function SignBlock({ lang, session, formKey, version, language, consentLabel, decision = "signed", choices, blockedMessage, beforeSign, onSigned, onError }: {
+export function SignBlock({ lang, session, formKey, version, language, consentLabel, decision = "signed", choices, blockedMessage, beforeSign, onSigned, onError }: {
   lang: IntakeLang; session: string; formKey: string; version: number; language: string; consentLabel: string; decision?: "signed" | "declined";
   /** Answers to the form's Yes/No questions, sent with the signature. */
   choices?: Record<string, ChoiceAnswer>;
@@ -1576,6 +1584,8 @@ function PatientCopy({ lang, session, phone, onBack, onServerError }: { lang: In
               </div>
             ) : f.kind === "screening" ? (
               <ScreeningCopy formKey={f.key} answers={f.screening?.answers ?? {}} lang={fl} />
+            ) : f.kind === "document" ? (
+              <p className="mt-3 text-lg text-slate-700">{t(T.docFill, lang)} ✓</p>
             ) : (
               <div dir={langDir(fl)} className="mt-3 space-y-4">
                 {MEDICAL_INTAKE.sections.map((s) => (

@@ -2,6 +2,7 @@
 // time they opened or signed it, and the document's history as a timeline.
 import { Check, CheckCircle2, Circle, Clock, Eye, FileUp, Files, PenLine, Send, Sparkles, XCircle, Download, FileStack, Stethoscope, FilePlus2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { hasPatientBoxes } from "@shared/documents";
 import type { Doc } from "./editorShared";
 
 const when = (d: Date | string | null | undefined, withDay = true) =>
@@ -24,8 +25,10 @@ export function DocProgress({ doc }: { doc: Doc }) {
   if (doc.isTemplate) return null;
   const cancelled = doc.status === "cancelled";
   const withSigners = doc.signers.length > 0;
-  const steps = withSigners ? ["Prepare", "Out for signature", "Done"] : ["Prepare", "Done"];
-  const at = doc.status === "completed" ? steps.length - 1 : doc.status === "signing" ? 1 : 0;
+  // Sent (or to be sent) to the patient to sign on their phone: their step comes first.
+  const toPatient = !!doc.patientStatus || hasPatientBoxes(doc.fields);
+  const steps = toPatient ? ["Prepare", "Patient signs", ...(withSigners ? ["Team signs"] : []), "Done"] : withSigners ? ["Prepare", "Out for signature", "Done"] : ["Prepare", "Done"];
+  const at = doc.status === "completed" ? steps.length - 1 : doc.status === "signing" ? (toPatient && doc.patientStatus === "signed" ? 2 : 1) : 0;
   const people = signerStates(doc);
   const signed = people.filter((p) => p.state === "signed").length;
   return (
@@ -49,6 +52,12 @@ export function DocProgress({ doc }: { doc: Doc }) {
             );
           })}
         </ol>
+      )}
+      {toPatient && doc.status !== "draft" && (
+        <span title={doc.patientStatus === "signed" ? `Signed ${when(doc.patientSignedAt)}` : "Hasn't signed yet"}
+          className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold", doc.patientStatus === "signed" ? "bg-emerald-50 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300" : "bg-fuchsia-50 text-fuchsia-800 dark:bg-fuchsia-500/15 dark:text-fuchsia-300")}>
+          {doc.patientStatus === "signed" ? <CheckCircle2 size={12} /> : <Clock size={12} />} Patient{doc.patientStatus === "signed" ? <span className="font-normal opacity-80">· {when(doc.patientSignedAt)}</span> : <span className="font-normal opacity-80">· waiting</span>}
+        </span>
       )}
       {withSigners && (
         <div className="flex flex-wrap items-center gap-1.5">
@@ -80,6 +89,9 @@ const EVENTS: Record<string, { label: string; icon: React.ElementType }> = {
   viewed: { label: "Opened", icon: Eye },
   provider_signature: { label: "Provider's signature applied", icon: Stethoscope },
   signer_finished: { label: "Signed", icon: PenLine },
+  sent_to_patient: { label: "Sent to the patient", icon: Send },
+  patient_link: { label: "Patient forms link made", icon: Send },
+  patient_signed: { label: "The patient signed", icon: PenLine },
   completed: { label: "Done: signed PDF made", icon: CheckCircle2 },
   downloaded: { label: "Downloaded", icon: Download },
   cancelled: { label: "Cancelled", icon: XCircle },

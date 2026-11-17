@@ -18,6 +18,8 @@ export interface SendPreset {
   bookingRequestId?: number | null;
   /** Forms ticked when it opens (default: the medical intake). */
   forms?: string[] | null;
+  /** Documents from Documents going in this link ("pdf:<id>"): always included, shown by their title. */
+  documents?: { key: string; title: string }[] | null;
 }
 
 type Via = "text" | "email" | "link";
@@ -63,7 +65,7 @@ export function SendFormsDialog({ open, onClose, preset }: { open: boolean; onCl
     setSubjectKey(preset?.subjectKey ?? null);
     setName(preset?.name ?? ""); setDob(""); setPhone(preset?.phone ?? ""); setEmail("");
     setLanguage(preset?.language ?? "en"); setClinicId(preset?.clinicId ?? null);
-    setForms(preset?.forms?.length ? preset.forms : [MEDICAL_INTAKE_KEY]); setVia("text");
+    setForms(preset?.forms?.length ? preset.forms : preset?.documents?.length ? preset.documents.map((x) => x.key) : [MEDICAL_INTAKE_KEY]); setVia("text");
   }, [open, preset]);
 
   // Prefill from what MyPCP knows about the person.
@@ -201,6 +203,12 @@ export function SendFormsDialog({ open, onClose, preset }: { open: boolean; onCl
                 <fieldset>
                   <legend className="mb-1 font-medium">Forms</legend>
                   <div className="space-y-1.5">
+                    {(preset?.documents ?? []).map((x) => (
+                      <label key={x.key} className="flex items-center gap-2" title="From Documents: the patient fills in their boxes and signs it">
+                        <input type="checkbox" className="size-4 accent-teal-700" checked disabled />
+                        <span><b>{x.title}</b> <span className="text-xs text-slate-500">(document to fill in and sign)</span></span>
+                      </label>
+                    ))}
                     {(choices.data ?? []).map((c) => (
                       <label key={c.key} className="flex items-center gap-2">
                         <input type="checkbox" className="size-4 accent-teal-700" checked={forms.includes(c.key)}

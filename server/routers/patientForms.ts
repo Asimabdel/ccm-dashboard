@@ -61,6 +61,16 @@ export const patientFormsRouter = router({
     brake(ctx, 600);
     return run(() => intake.patientSave(input.session, input.answers, input.formKey));
   }),
+  /** A document from Documents in the link: its pages, the patient's boxes, their answers so far. */
+  docLoad: publicProcedure.input(z.object({ session, formKey: z.string().regex(/^pdf:\d{1,10}$/) })).mutation(({ ctx, input }) => {
+    brake(ctx, 120);
+    return run(() => intake.patientDocLoad(input.session, input.formKey));
+  }),
+  /** The patient's answers on that document, saved as they go. */
+  docSave: publicProcedure.input(z.object({ session, formKey: z.string().regex(/^pdf:\d{1,10}$/), values: z.record(z.string().max(40), z.string().max(2000)) })).mutation(({ ctx, input }) => {
+    brake(ctx, 600);
+    return run(() => intake.patientDocSave(input.session, input.formKey, input.values));
+  }),
   /** Send in a depression / anxiety screening (answers only; no signature). */
   submitScreening: publicProcedure
     .input(z.object({

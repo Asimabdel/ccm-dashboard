@@ -92,9 +92,20 @@ export const DOC_STATUSES = ["draft", "signing", "completed", "cancelled"] as co
 export type DocStatus = (typeof DOC_STATUSES)[number];
 export const DOC_STATUS_LABELS: Record<DocStatus, string> = { draft: "Draft", signing: "Out for signature", completed: "Completed", cancelled: "Cancelled" };
 
-/** "preparer" = whoever is preparing the document fills it in now; "signer:<userId>" = a teammate signs it later. */
-export type Assignee = "preparer" | `signer:${number}`;
+/**
+ * "preparer" = whoever is preparing the document fills it in now; "signer:<userId>" = a teammate signs it later;
+ * "patient" = the patient fills and signs it on their phone (a link like the patient forms; staff sign after them).
+ */
+export type Assignee = "preparer" | `signer:${number}` | "patient";
 export const signerOf = (a: string): number | null => { const m = /^signer:(\d+)$/.exec(a); return m ? Number(m[1]) : null; };
+export const PATIENT: Assignee = "patient";
+/** Does the patient have boxes to fill on this document? */
+export const hasPatientBoxes = (fields: { assignee: string; type: string }[]) => fields.some((f) => f.assignee === "patient" && !isMarkup(f.type as FieldType));
+/** A document that goes to the patient in their forms link: "pdf:<documentId>". */
+export const pdfFormKey = (docId: number) => `pdf:${docId}`;
+export const pdfDocIdOf = (key: string): number | null => { const m = /^pdf:(\d{1,10})$/.exec(key); return m ? Number(m[1]) : null; };
+/** The patient's progress on a document sent to them. */
+export type PatientDocStatus = "waiting" | "signed";
 
 /**
  * One box on a page. Position is in PDF user space (points, origin at the page's lower-left), the
@@ -152,7 +163,7 @@ export function cleanFields(raw: unknown, pages: DocPage[]): DocField[] {
     ids.add(id);
     const markup = isMarkup(type);
     // A mark on the page always belongs to the person preparing the document.
-    const assignee = !markup && (f.assignee === "preparer" || (typeof f.assignee === "string" && /^signer:\d+$/.test(f.assignee))) ? (f.assignee as Assignee) : "preparer";
+    const assignee = !markup && (f.assignee === "preparer" || f.assignee === "patient" || (typeof f.assignee === "string" && /^signer:\d+$/.test(f.assignee))) ? (f.assignee as Assignee) : "preparer";
     let value = typeof f.value === "string" ? f.value.slice(0, 2000) : null;
     if (type === "checkbox") value = value ? "x" : "";
     if (type === "date" && value && !/^\d{4}-\d{2}-\d{2}$/.test(value)) value = null;

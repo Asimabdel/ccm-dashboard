@@ -6,15 +6,15 @@
 // signer is done, MyPCP builds the final PDF: every value and signature stamped onto the original pages,
 // the form flattened, and a certificate page (who signed what, when, from where, document fingerprints).
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { BlendMode, LineCapStyle, PDFCheckBox, PDFDocument, PDFDropdown, PDFRef, PDFSignature, PDFTextField, StandardFonts, degrees, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import { getDb } from "./db";
 import {
-  clinics, coverageOnFile, documentEvents, documentSignatures, documentSigners, documents, fhirPatients, patients, providerSignatureDelegates, providerSignatures, providers, userSignatures, users,
+  clinics, coverageOnFile, documentEvents, documentSignatures, documentSigners, documents, fhirPatients, intakePackets, patients, providerSignatureDelegates, providerSignatures, providers, userSignatures, users,
   workTaskActivities, workTasks,
 } from "../drizzle/schema";
 import {
-  APPROVAL_LABELS, APPROVAL_METHODS, INK_HEX, cleanFields, guessPrefill, inkOf, isMarkup, markPen, missingFor, signerOf, usDate, type ApprovalMethod, type Assignee, type DocField, type DocPage, type DocStatus,
+  APPROVAL_LABELS, APPROVAL_METHODS, INK_HEX, cleanFields, guessPrefill, hasPatientBoxes, inkOf, isFilled, isMarkup, markPen, missingFor, pdfFormKey, signerOf, usDate, type ApprovalMethod, type Assignee, type DocField, type DocPage, type DocStatus,
   type InkColor, type PrefillKey,
 } from "../shared/documents";
 import {
@@ -98,11 +98,15 @@ const fieldsOf = (doc: DocRow) => cleanFields(doc.fields ?? [], pagesOf(doc));
 
 export type DocView = "to_sign" | "in_progress" | "completed" | "templates";
 
+/** Out to the patient and they haven't signed yet: the teammates' turn comes after theirs. */
+const waitingOnPatient = (doc: { patientStatus: string | null }) => doc.patientStatus === "waiting";
+const notWaitingOnPatient = or(isNull(documents.patientStatus), ne(documents.patientStatus, "waiting"));
+
 /** The side-menu bubble: documents waiting for this person's signature (what the "To sign" tab lists), as one count. */
 export async function toSignCount(userId: number) {
   const [row] = await (await db()).select({ n: sql<number>`count(distinct ${documents.id})` }).from(documentSigners)
     .innerJoin(documents, eq(documents.id, documentSigners.documentId))
-    .where(and(eq(documentSigners.userId, userId), eq(documentSigners.status, "pending"), eq(documents.status, "signing")));
+    .where(and(eq(documentSigners.userId, userId), eq(documentSigners.status, "pending"), eq(documents.status, "signing"), notWaitingOnPatient));
   return Number(row?.n ?? 0);
 }
 
@@ -115,7 +119,7 @@ export async function listDocuments(a: WorkspaceActor, view: DocView, q?: string
   else if (view === "to_sign") {
     const mine = await d.select({ id: documentSigners.documentId }).from(documentSigners).where(and(eq(documentSigners.userId, a.id), eq(documentSigners.status, "pending")));
     if (!mine.length) return [];
-    where = and(inArray(documents.id, mine.map((m) => m.id)), eq(documents.status, "signing"), ...titleMatch);
+    where = and(inArray(documents.id, mine.map((m) => m.id)), eq(documents.status, "signing"), notWaitingOnPatient, ...titleMatch);
   } else {
     const statuses: DocStatus[] = view === "completed" ? ["completed"] : ["draft", "signing"];
     const signed = await d.select({ id: documentSigners.documentId }).from(documentSigners).where(eq(documentSigners.userId, a.id));
@@ -134,6 +138,7 @@ export async function listDocuments(a: WorkspaceActor, view: DocView, q?: string
     id: doc.id, title: doc.title, status: doc.status as DocStatus, isTemplate: doc.isTemplate, pages: pagesOf(doc).length, fileName: doc.fileName,
     fieldCount: fieldsOf(doc).length, creator, createdByMe: doc.createdByUserId === a.id, updatedAt: doc.updatedAt, sentAt: doc.sentAt, completedAt: doc.completedAt,
     patientName: doc.subjectKey ? names.get(doc.subjectKey) ?? null : null, subjectKey: doc.subjectKey,
+    patientStatus: (doc.patientStatus ?? null) as "waiting" | "signed" | null,
     signers: signers.filter((s) => s.documentId === doc.id).map((s) => ({ userId: s.userId, name: s.name, status: s.status as "pending" | "signed" })),
   }));
 }
@@ -478,7 +483,7 @@ export async function saveAsTemplate(a: WorkspaceActor, id: number, title: strin
   const doc = await docOr404(a, id);
   if (!doc.fileKey || !pagesOf(doc).length) throw new WorkspaceError("Upload the PDF first.");
   // Marks drawn on the page (white-out, stamps, ticks…) are part of the layout, so they stay as they are.
-  const fields = fieldsOf(doc).map((f) => (isMarkup(f.type) ? f : { ...f, value: null, assignee: "preparer" as Assignee }));
+  const fields = fieldsOf(doc).map((f) => (isMarkup(f.type) ? f : { ...f, value: null, assignee: (f.assignee === "patient" ? "patient" : "preparer") as Assignee }));
   const res = await (await db()).insert(documents).values({
     title: title.trim().slice(0, 255) || doc.title, isTemplate: true, status: "draft", fileKey: doc.fileKey, fileName: doc.fileName, fileSize: doc.fileSize, fileSha256: doc.fileSha256,
     pages: doc.pages, fields, createdByUserId: a.id, updatedByUserId: a.id,
@@ -670,7 +675,7 @@ export async function getDocument(a: WorkspaceActor, id: number, meta: ClientMet
     .where(eq(documentEvents.documentId, id)).orderBy(asc(documentEvents.at), asc(documentEvents.id));
   const [creator] = await d.select({ name: users.name }).from(users).where(eq(users.id, doc.createdByUserId)).limit(1);
   const me = signers.find((s) => s.s.userId === a.id);
-  const mode: "edit" | "sign" | "view" = canEdit(a, doc) ? "edit" : doc.status === "signing" && me?.s.status === "pending" ? "sign" : "view";
+  const mode: "edit" | "sign" | "view" = canEdit(a, doc) ? "edit" : doc.status === "signing" && me?.s.status === "pending" && !waitingOnPatient(doc) ? "sign" : "view";
   const patientName = doc.subjectKey ? (await subjectCare(doc.subjectKey).catch(() => null))?.name ?? null : null;
   await logEvent(id, "viewed", { userId: a.id, meta });
   await audit(a, "view_document", { entityType: "document", entityId: id, description: `Opened "${doc.title}"` });
@@ -678,6 +683,8 @@ export async function getDocument(a: WorkspaceActor, id: number, meta: ClientMet
     id: doc.id, title: doc.title, status: doc.status as DocStatus, isTemplate: doc.isTemplate, mode, myUserId: a.id,
     fileName: doc.fileName, pages: pagesOf(doc), fields: fieldsOf(doc), message: doc.message,
     subjectKey: doc.subjectKey, patientName, creator: creator?.name ?? null, createdByMe: doc.createdByUserId === a.id,
+    /** Sent to the patient to sign on their phone: waiting | signed (null = not sent to the patient). */
+    patientStatus: (doc.patientStatus ?? null) as "waiting" | "signed" | null, patientSignedAt: doc.patientSignedAt, patientSignerName: doc.patientSignerName, patientPacketId: doc.patientPacketId,
     sentAt: doc.sentAt, completedAt: doc.completedAt, hasFile: !!doc.fileKey && pagesOf(doc).length > 0, hasFinal: !!doc.finalKey,
     /** Changes whenever the PDF itself changes (pages added, removed, moved, turned): the editor then opens the new file. */
     fileRev: doc.fileKey ? sha256(doc.fileKey).slice(0, 12) : "",
@@ -794,6 +801,7 @@ export async function signField(a: WorkspaceActor, id: number, input: { fieldId:
   if (!f || (f.type !== "signature" && f.type !== "initials")) throw new WorkspaceError("That box isn't a signature box.");
   const mine = f.assignee === "preparer" ? canEdit(a, doc) : signerOf(f.assignee) === a.id && doc.status === "signing" && (await pendingSigner(id, a.id));
   if (!mine) throw new WorkspaceError("That box is for someone else to sign.", "FORBIDDEN");
+  if (f.assignee !== "preparer" && waitingOnPatient(doc)) throw new WorkspaceError("The patient signs first. You'll get a task when it's your turn.");
   const d = await db();
   let b64: string, onBehalf: OnBehalfOf | null = null, providerName: string | null = null;
   if (input.onBehalfOf) {
@@ -859,14 +867,31 @@ export async function sendOrFinish(a: WorkspaceActor, id: number, meta: ClientMe
   if (covered.length) throw new WorkspaceError(`The white-out on page ${covered.map((p) => p + 1).join(", ")} hasn't been applied yet. Click the button again so MyPCP removes what's under it.`);
   const signers = await signersOf(id);
   const d = await db();
-  if (!signers.length) {
+  // Boxes for the patient: it goes to them first (in a patient forms link); teammates sign after them.
+  const toPatient = hasPatientBoxes(fields);
+  if (toPatient && !doc.subjectKey) throw new WorkspaceError("Pick the patient first (Patient, in the side panel): the document goes to them to fill in and sign.");
+  if (!signers.length && !toPatient) {
     await finalize(id, a);
     await audit(a, "manage_document", { entityType: "document", entityId: id, description: `Completed "${doc.title}"` });
     return { status: "completed" as const };
   }
   const unassigned = signers.filter((s) => !fields.some((f) => signerOf(f.assignee) === s.s.userId));
   if (unassigned.length) throw new WorkspaceError(`Give ${unassigned[0]!.name ?? "each signer"} at least one box to fill or sign (choose them under "Who fills this box").`);
-  await d.update(documents).set({ status: "signing", sentAt: new Date(), updatedByUserId: a.id }).where(eq(documents.id, id));
+  if (toPatient) {
+    await d.update(documents).set({ status: "signing", sentAt: new Date(), patientStatus: "waiting", patientSignedAt: null, patientSignerName: null, updatedByUserId: a.id }).where(eq(documents.id, id));
+    await logEvent(id, "sent_to_patient", { userId: a.id, meta, detail: signers.length ? `then ${signers.map((s) => s.name ?? "a teammate").join(", ")}`.slice(0, 250) : null });
+    await audit(a, "manage_document", { entityType: "document", entityId: id, description: `Sent "${doc.title}" to the patient to sign` });
+    return { status: "patient" as const };
+  }
+  await startSigners(a, { ...doc, status: "signing" }, signers, meta);
+  return { status: "signing" as const };
+}
+
+/** Teammates' turn to sign: each gets a task (straight away, or once the patient has signed). */
+async function startSigners(a: WorkspaceActor, doc: DocRow, signers: Awaited<ReturnType<typeof signersOf>>, meta: ClientMeta) {
+  const d = await db();
+  const id = doc.id;
+  await d.update(documents).set({ status: "signing", sentAt: doc.sentAt ?? new Date(), updatedByUserId: a.id }).where(eq(documents.id, id));
   for (const s of signers) {
     const task = await createTask(a, {
       title: `Sign: ${doc.title}`.slice(0, 250),
@@ -879,13 +904,120 @@ export async function sendOrFinish(a: WorkspaceActor, id: number, meta: ClientMe
   }
   await logEvent(id, "sent", { userId: a.id, meta, detail: `to ${signers.map((s) => s.name ?? "a teammate").join(", ")}`.slice(0, 250) });
   await audit(a, "manage_document", { entityType: "document", entityId: id, description: `Sent "${doc.title}" for signature (${signers.length})` });
-  return { status: "signing" as const };
+}
+
+// ---------------------------------------------------------------------------
+// Documents the patient fills in and signs on their phone. They go out in a patient forms link (an intake
+// packet) as the form "pdf:<documentId>"; the patient confirms their date of birth there, fills their boxes step
+// by step, sees the whole document, and signs. Then the teammates sign (tasks), or the signed PDF is made.
+// ---------------------------------------------------------------------------
+
+/** The person a document is filed under once the patient has signed (the one who prepared it). */
+async function preparerActor(userId: number): Promise<WorkspaceActor> {
+  const [u] = await (await db()).select({ id: users.id, name: users.name, role: users.role }).from(users).where(eq(users.id, userId)).limit(1);
+  if (!u) throw new Error("The person who prepared this document no longer has an account.");
+  return { id: u.id, name: u.name, role: u.role, clinicIds: null };
+}
+
+/** Can this document go into a patient forms link for this patient? (Waiting on the patient, and theirs.) */
+export async function patientDocReady(docId: number, subjectKey: string | null) {
+  const [doc] = await (await db()).select().from(documents).where(eq(documents.id, docId)).limit(1);
+  return !!doc && !doc.isTemplate && doc.status === "signing" && doc.patientStatus === "waiting" && !!subjectKey && doc.subjectKey === subjectKey && hasPatientBoxes(fieldsOf(doc));
+}
+
+/** The link it went out in. A link sent earlier for the same document (and not finished) no longer carries it. */
+export async function linkPatientPacket(docIds: number[], packetId: number) {
+  const d = await db();
+  for (const docId of docIds) {
+    const [doc] = await d.select({ packetId: documents.patientPacketId }).from(documents).where(eq(documents.id, docId)).limit(1);
+    if (doc?.packetId && doc.packetId !== packetId) await dropFromPacket(doc.packetId, docId);
+    await d.update(documents).set({ patientPacketId: packetId }).where(eq(documents.id, docId));
+    await logEvent(docId, "patient_link", { detail: `patient forms link #${packetId}` });
+  }
+}
+
+/** Take the document out of a patient forms link that isn't finished (the link is cancelled if nothing is left in it). */
+async function dropFromPacket(packetId: number, docId: number) {
+  const d = await db();
+  const [p] = await d.select({ forms: intakePackets.forms, status: intakePackets.status }).from(intakePackets).where(eq(intakePackets.id, packetId)).limit(1);
+  if (!p || ["completed", "filed", "cancelled"].includes(p.status)) return;
+  const forms = (p.forms as string[]).filter((k) => k !== pdfFormKey(docId));
+  await d.update(intakePackets).set(forms.length ? { forms } : { forms, status: "cancelled" }).where(eq(intakePackets.id, packetId));
+}
+
+/** What the patient's phone shows: the pages, their own boxes to fill, and what's already on the document. */
+export async function patientDocView(docId: number, packetId: number) {
+  const [doc] = await (await db()).select().from(documents).where(eq(documents.id, docId)).limit(1);
+  if (!doc || doc.patientPacketId !== packetId || !doc.fileKey) return null;
+  const fields = fieldsOf(doc);
+  return {
+    title: doc.title,
+    signed: doc.patientStatus === "signed",
+    waiting: doc.status === "signing" && doc.patientStatus === "waiting",
+    pages: pagesOf(doc),
+    // Teammates' boxes show what's in them (their signatures aren't sent to the phone: just that they're there).
+    fields: fields.map((f) => ({ ...f, value: f.type === "signature" || f.type === "initials" ? (f.value ? "signed" : null) : f.value ?? null, mine: f.assignee === "patient" })),
+    file: await readTarget(doc.fileKey, `${doc.title}.pdf`),
+  };
+}
+
+/** The patient's answers checked against their boxes (values for their own non-signature boxes only). */
+export async function patientDocCheck(docId: number, packetId: number, raw: Record<string, unknown>) {
+  const [doc] = await (await db()).select().from(documents).where(eq(documents.id, docId)).limit(1);
+  if (!doc || doc.patientPacketId !== packetId || doc.status !== "signing" || doc.patientStatus !== "waiting") return { ok: false as const, reason: "bad" as const };
+  const values: Record<string, string> = {};
+  const fields = fieldsOf(doc).map((f) => {
+    if (f.assignee !== "patient" || isMarkup(f.type) || f.type === "signature" || f.type === "initials") return f;
+    const v = typeof raw[f.id] === "string" ? String(raw[f.id]).slice(0, 2000) : "";
+    const value = f.type === "checkbox" ? (v ? "x" : "") : f.type === "date" ? (/^\d{4}-\d{2}-\d{2}$/.test(v) ? v : "") : v.replace(/[<>]/g, " ");
+    values[f.id] = value;
+    return { ...f, value };
+  });
+  const missing = fields.filter((f) => f.assignee === "patient" && f.required && f.type !== "signature" && f.type !== "initials" && !isFilled(f));
+  if (missing.length) return { ok: false as const, reason: "incomplete" as const };
+  return { ok: true as const, title: doc.title, fileSha256: doc.fileSha256 ?? "", values };
+}
+
+/**
+ * The patient signed (through their forms link): their answers and signature go on the document, then the
+ * teammates get their tasks, or (nobody else signs) the signed PDF is made. `png` = the drawn signature
+ * (base64), or null when they typed their name (it prints as typed).
+ */
+export async function patientDocSigned(docId: number, packetId: number, input: { values: Record<string, string>; signerName: string; png: string | null; signedAt: Date; ip: string | null; userAgent: string | null }) {
+  const d = await db();
+  const [doc] = await d.select().from(documents).where(eq(documents.id, docId)).limit(1);
+  if (!doc || doc.patientPacketId !== packetId || doc.status !== "signing" || doc.patientStatus !== "waiting") throw new Error("This document isn't waiting for the patient.");
+  const sigHash = sha256(input.png ? Buffer.from(input.png, "base64") : Buffer.from(`typed:${input.signerName}`));
+  const fields: DocField[] = [];
+  for (const f of fieldsOf(doc)) {
+    if (f.assignee !== "patient" || isMarkup(f.type)) { fields.push(f); continue; }
+    if (f.type === "signature" || f.type === "initials") {
+      const res = await d.insert(documentSignatures).values({
+        documentId: docId, fieldId: f.id, userId: null, signerName: input.signerName, kind: f.type, png: input.png ?? "", sha256: sigHash,
+        signedAt: input.signedAt, ip: input.ip, userAgent: input.userAgent,
+      });
+      fields.push({ ...f, value: `sig:${(res as unknown as [{ insertId: number }])[0].insertId}` });
+    } else fields.push({ ...f, value: input.values[f.id] ?? f.value ?? null });
+  }
+  await d.update(documents).set({ fields, patientStatus: "signed", patientSignedAt: input.signedAt, patientSignerName: input.signerName }).where(eq(documents.id, docId));
+  await logEvent(docId, "patient_signed", { meta: { ip: input.ip, userAgent: input.userAgent }, detail: `${input.signerName} · ${input.png ? "drawn" : "typed"} signature · patient forms link #${packetId}`.slice(0, 250) });
+  // The teammates' turn, or done.
+  const actor = await preparerActor(doc.createdByUserId);
+  try {
+    const signers = await signersOf(docId);
+    if (signers.length) await startSigners(actor, { ...doc, fields }, signers, { ip: null, userAgent: null });
+    else await finalize(docId, actor);
+    await notifyTask(doc.createdByUserId, signers.length ? "Patient signed: teammates' turn" : "Patient signed: document done", doc.title, doc.patientId);
+  } catch (e) {
+    console.error("[documents] after the patient signed:", (e as Error).message);
+  }
 }
 
 /** A signer fills their boxes (text / date / checkbox; signatures were stamped with signField) and finishes. */
 export async function signerFinish(a: WorkspaceActor, id: number, values: Record<string, string>, meta: ClientMeta) {
   const doc = await docOr404(a, id);
   if (doc.status !== "signing" || !(await pendingSigner(id, a.id))) throw new WorkspaceError("There's nothing for you to sign on this document.");
+  if (waitingOnPatient(doc)) throw new WorkspaceError("The patient signs first. You'll get a task when it's your turn.");
   const me: Assignee = `signer:${a.id}`;
   const fields = fieldsOf(doc).map((f) => {
     if (f.assignee !== me || f.type === "signature" || f.type === "initials" || !(f.id in values)) return f;
@@ -931,6 +1063,7 @@ export async function cancelDocument(a: WorkspaceActor, id: number) {
   }
   if (doc.status === "completed" || doc.status === "cancelled") throw new WorkspaceError("This document is already finished.");
   for (const s of await signersOf(id)) await closeTask(a, s.s.taskId, "Document cancelled", "cancelled");
+  if (doc.patientPacketId && doc.patientStatus === "waiting") await dropFromPacket(doc.patientPacketId, id);
   await (await db()).update(documents).set({ status: "cancelled", updatedByUserId: a.id }).where(eq(documents.id, id));
   await logEvent(id, "cancelled", { userId: a.id });
   await audit(a, "manage_document", { entityType: "document", entityId: id, description: `Cancelled "${doc.title}"` });
@@ -1145,7 +1278,7 @@ function drawMarkup(page: PDFPage, f: DocField, font: PDFFont, bold: PDFFont) {
   if (f.type === "stamp") drawPrims(page, f, stampPrims(f), color, font, bold);
 }
 
-function drawValue(page: PDFPage, f: DocField, font: PDFFont, sigImages: Map<string, Awaited<ReturnType<PDFDocument["embedPng"]>>>) {
+function drawValue(page: PDFPage, f: DocField, font: PDFFont, sigImages: Map<string, Awaited<ReturnType<PDFDocument["embedPng"]>>>, typed: Map<string, string> = new Map(), script?: PDFFont) {
   const rot = page.getRotation().angle;
   if (f.type === "checkbox") {
     if (f.value !== "x") return;
@@ -1156,6 +1289,16 @@ function drawValue(page: PDFPage, f: DocField, font: PDFFont, sigImages: Map<str
     return;
   }
   if (f.type === "signature" || f.type === "initials") {
+    // A patient who typed their name instead of drawing: the name prints in a slanted hand.
+    const name = f.value ? typed.get(f.value) : undefined;
+    if (name && script) {
+      const text = safeText(script, f.type === "initials" ? name.split(/\s+/).map((w) => w[0] ?? "").join("").toUpperCase() : name);
+      let size = Math.min(f.h * 0.62, 20);
+      const wide = script.widthOfTextAtSize(text, size);
+      if (wide > f.w - 4) size = Math.max(6, size * ((f.w - 4) / wide));
+      page.drawText(text, { x: f.x + 2, y: f.y + (f.h - size) / 2 + size * 0.2, size, font: script, color: rgb(0.05, 0.1, 0.35) });
+      return;
+    }
     const img = f.value ? sigImages.get(f.value) : null;
     if (!img) return;
     const scale = Math.min(f.w / img.width, f.h / img.height);
@@ -1196,7 +1339,12 @@ async function finalize(id: number, a: WorkspaceActor) {
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
   const sigRows = await d.select().from(documentSignatures).where(eq(documentSignatures.documentId, id));
   const sigImages = new Map<string, Awaited<ReturnType<PDFDocument["embedPng"]>>>();
-  for (const s of sigRows) sigImages.set(`sig:${s.id}`, await pdf.embedPng(Buffer.from(s.png, "base64")));
+  const typed = new Map<string, string>();
+  for (const s of sigRows) {
+    if (s.png) sigImages.set(`sig:${s.id}`, await pdf.embedPng(Buffer.from(s.png, "base64")));
+    else if (s.signerName) typed.set(`sig:${s.id}`, s.signerName);
+  }
+  const script = typed.size ? await pdf.embedFont(StandardFonts.TimesRomanItalic) : undefined;
   const pages = pdf.getPages();
   // White-out goes down first, then highlight, then everything else, so words typed over a covered spot still show.
   const layer = (f: DocField) => (f.type === "whiteout" ? 0 : f.type === "highlight" ? 1 : 2);
@@ -1204,7 +1352,7 @@ async function finalize(id: number, a: WorkspaceActor) {
     const page = pages[f.page];
     if (!page) continue;
     if (isMarkup(f.type)) drawMarkup(page, f, font, bold);
-    else drawValue(page, f, f.bold ? bold : font, sigImages);
+    else drawValue(page, f, f.bold ? bold : font, sigImages, typed, script);
   }
   await addCertificate(pdf, doc, fields, sigRows, font, bold);
   pdf.setTitle(doc.title);
@@ -1218,7 +1366,7 @@ async function finalize(id: number, a: WorkspaceActor) {
 
 async function addCertificate(pdf: PDFDocument, doc: DocRow, fields: DocField[], sigRows: (typeof documentSignatures.$inferSelect)[], font: PDFFont, bold: PDFFont) {
   const d = await db();
-  const userIds = Array.from(new Set([doc.createdByUserId, ...sigRows.map((s) => s.userId), ...sigRows.map((s) => s.onBehalfOfUserId).filter((x): x is number => !!x)]));
+  const userIds = Array.from(new Set([doc.createdByUserId, ...sigRows.map((s) => s.userId).filter((x): x is number => !!x), ...sigRows.map((s) => s.onBehalfOfUserId).filter((x): x is number => !!x)]));
   const signerRows = await d.select().from(documentSigners).where(eq(documentSigners.documentId, doc.id));
   for (const s of signerRows) if (!userIds.includes(s.userId)) userIds.push(s.userId);
   const people = new Map((await d.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, userIds))).map((u) => [u.id, u.name ?? `User #${u.id}`]));
@@ -1258,9 +1406,10 @@ async function addCertificate(pdf: PDFDocument, doc: DocRow, fields: DocField[],
   for (const s of sigRows.sort((x, z) => x.signedAt.getTime() - z.signedAt.getTime())) {
     const f = fields.find((x) => x.id === s.fieldId);
     const whose = s.onBehalfOfUserId ?? s.userId;
-    line(`${people.get(whose)}: ${s.kind === "initials" ? "initials" : "signature"}${f?.label ? ` ("${f.label}")` : ""}, page ${f ? f.page + 1 : "?"}`, { b: true, indent: 8 });
-    if (s.onBehalfOfUserId) line(`Applied by ${people.get(s.userId)} with ${people.get(s.onBehalfOfUserId)}'s approval (${(APPROVAL_LABELS[s.approvalMethod as ApprovalMethod] ?? s.approvalMethod ?? "").toLowerCase()}${s.approvalNote ? `: ${s.approvalNote}` : ""}).`, { indent: 16, size: 8 });
-    line(`${fmt(s.signedAt)} · IP ${s.ip ?? "unknown"} · image fingerprint ${s.sha256.slice(0, 24)}…`, { indent: 16, size: 8, color: 0.35 });
+    const who = whose ? people.get(whose) : `${s.signerName ?? "The patient"} (patient, through their private forms link)`;
+    line(`${who}: ${s.kind === "initials" ? "initials" : "signature"}${f?.label ? ` ("${f.label}")` : ""}, page ${f ? f.page + 1 : "?"}`, { b: true, indent: 8 });
+    if (s.onBehalfOfUserId) line(`Applied by ${people.get(s.userId ?? 0)} with ${people.get(s.onBehalfOfUserId)}'s approval (${(APPROVAL_LABELS[s.approvalMethod as ApprovalMethod] ?? s.approvalMethod ?? "").toLowerCase()}${s.approvalNote ? `: ${s.approvalNote}` : ""}).`, { indent: 16, size: 8 });
+    line(`${fmt(s.signedAt)} · IP ${s.ip ?? "unknown"} · ${s.png ? `image fingerprint ${s.sha256.slice(0, 24)}…` : "typed name"}`, { indent: 16, size: 8, color: 0.35 });
   }
   if (!sigRows.length) line("No signature boxes on this document.", { indent: 8, color: 0.4 });
   if (signerRows.length) {
@@ -1274,6 +1423,7 @@ async function addCertificate(pdf: PDFDocument, doc: DocRow, fields: DocField[],
     line(`${fmt(e.at)}  ${e.type.replace(/_/g, " ")}${e.userId ? ` · ${people.get(e.userId) ?? `user #${e.userId}`}` : ""}${e.detail ? ` · ${e.detail}` : ""}`, { indent: 8, size: 8 });
   }
   y -= 8;
-  line("Each person signed inside MyPCP while signed in with their own account. The fingerprints above change if the original file or a signature image is altered.", { size: 7.5, color: 0.4 });
+  const byPatient = sigRows.some((s) => !s.userId);
+  line(`${byPatient ? "Staff signed inside MyPCP while signed in with their own account; the patient signed through a private link sent to them, after confirming their date of birth." : "Each person signed inside MyPCP while signed in with their own account."} The fingerprints above change if the original file or a signature image is altered.`, { size: 7.5, color: 0.4 });
 }
 
