@@ -5,6 +5,7 @@ import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { Btn, ErrorNote, Loading, Panel, inputCls } from "@/components/workspace/ui";
 import { cn } from "@/lib/utils";
 import { localDateStr } from "@shared/workforce";
+import { VisitCostCard } from "./VisitCostCard";
 
 type Check = RouterOutputs["workspace"]["eligibility"]["history"][number];
 
@@ -148,6 +149,7 @@ export function InsurancePanel({ subjectKey }: { subjectKey: string }) {
   const d = defaults.data!;
   return (
     <div className="space-y-4">
+      <VisitCostCard subjectKey={subjectKey} />
       {!d.configured && (
         <p className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
           <AlertTriangle size={15} className="mt-0.5 shrink-0" /> Availity isn't connected yet. An admin sets it up under Integrations → Availity.

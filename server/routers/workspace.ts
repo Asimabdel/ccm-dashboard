@@ -1604,6 +1604,26 @@ export const workspaceRouter = router({
     }),
   }),
 
+  /**
+   * What to expect at check-in (from the payment files in Master Billing): the patient's own past copay
+   * and deductible, or for someone with no visits yet, what other patients on the same plan paid.
+   * Estimates for the front desk; balances and totals stay in Master Billing.
+   */
+  visitCost: router({
+    /** Patient Flow / Insurance schedule: subject key → the short note, for that day's schedule. */
+    day: protectedProcedure.input(z.object({ date: dateStr })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "flowView");
+      const { visitCostForDay } = await import("../visitCostDb");
+      return run(() => visitCostForDay(actor, input.date));
+    }),
+    /** Patient 360: the note plus the visits and plan behind it (Insurance tab). */
+    patient: protectedProcedure.input(z.object({ key: patientKey })).query(async ({ ctx, input }) => {
+      const actor = await actorFor(ctx, "eligibility");
+      const { visitCostForPatient } = await import("../visitCostDb");
+      return run(() => visitCostForPatient(actor, input.key));
+    }),
+  }),
+
   /** Program approvals: patients whose diagnoses qualify them for CCM / BHI / RPM / APCM (approvers only). */
   programs: router({
     list: protectedProcedure

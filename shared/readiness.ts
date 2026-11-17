@@ -40,6 +40,8 @@ export interface ReadinessInput {
   /** Availity, only when it is connected for real (not demo). */
   insurance: { latest: { status: string; createdAt: Date | string; active: boolean | null; statusText: string | null; payerName: string | null } | null; onFile: boolean } | null;
   highDeductible: { visits: number } | null;
+  /** Copay / deductible from past visits (shared/visitCost.ts): what to expect at check-in. */
+  collect?: { kind: string; label: string; detail: string } | null;
   /** CCM care plan (roster patients in CCM, for the roles that handle care plans). */
   carePlan: { status: "none" | "draft" | "changed" | "signed"; signedByName: string | null; signedAt: Date | string | null } | null;
 }
@@ -107,8 +109,9 @@ export function buildReadiness(x: ReadinessInput): ReadyItem[] {
     }
   }
 
-  // 3) High deductible: collect at check-in (from the payment files).
-  if (x.highDeductible) {
+  // 3) What to expect at check-in (from the payment files): their copay / deductible, then the older high-deductible flag.
+  if (x.collect) items.push({ id: "collect", state: "info", title: x.collect.label, detail: `${x.collect.detail} An estimate: confirm with their card.` });
+  if (x.highDeductible && !x.collect) {
     items.push({ id: "deductible", state: "info", title: "High deductible", detail: `Collect at check-in · applied on ${x.highDeductible.visits} visit${x.highDeductible.visits === 1 ? "" : "s"} this past year` });
   }
 

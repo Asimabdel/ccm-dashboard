@@ -399,6 +399,11 @@ export const handler = async (event: any, context: any) => {
     const { masterBillingCounts } = await import("../masterBillingDb");
     return masterBillingCounts();
   }
+  // Copay / deductible estimates for the front desk: how much they cover (IAM-only; counts only, no patient details).
+  if (event && event.__job === "visit-cost-counts" && !event.requestContext && !event.version) {
+    const { visitCostCounts } = await import("../visitCostDb");
+    return visitCostCounts();
+  }
   // ZocDoc in Master Billing: counts and dollar totals only, no patient details (IAM-only).
   // { from?, to? } = appointment dates (default this year); { rematch: true } first matches unmatched bookings again.
   if (event && event.__job === "zocdoc-counts" && !event.requestContext && !event.version) {

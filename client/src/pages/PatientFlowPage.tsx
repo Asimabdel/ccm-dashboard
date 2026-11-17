@@ -20,6 +20,8 @@ import { FLOW_COLUMNS, FLOW_LABELS, WAITING_STATUSES, checkFlowTransition, type 
 import { cn } from "@/lib/utils";
 import { OFFICE_TEST_LABELS, type OfficeTest } from "@shared/officeTests";
 import { HighDeductibleChip } from "@/components/billing/HighDeductibleChip";
+import { CollectChip } from "@/components/billing/CollectChip";
+import type { CollectNote } from "@shared/visitCost";
 
 type Board = RouterOutputs["workspace"]["flow"]["board"];
 type Card = Board["cards"][number];
@@ -72,6 +74,8 @@ export default function PatientFlowPage() {
   const testBadges = trpc.workspace.officeTests.badges.useQuery({ date }, { enabled: !!user && !!ws.caps?.flowView, staleTime: 60_000, refetchInterval: date === today ? 120_000 : false });
   // High deductible (from the payment files): collect at check-in. A yes only, no amounts.
   const deductibles = trpc.workspace.highDeductible.day.useQuery({ date }, { enabled: !!user && !!ws.caps?.flowView, staleTime: 5 * 60_000, retry: false });
+  // What to expect at check-in: each patient's copay / deductible from their past visits (or their plan's other patients).
+  const collect = trpc.workspace.visitCost.day.useQuery({ date }, { enabled: !!user && !!ws.caps?.flowView, staleTime: 5 * 60_000, retry: false });
 
   const move = trpc.workspace.flow.move.useMutation({
     onMutate: async (v) => {
@@ -195,7 +199,7 @@ export default function PatientFlowPage() {
                   <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-2">
                     {cards.map((c) => (
                       <FlowCard key={c.id} card={c} canMove={canMove} onMove={requestMove} onDragStart={() => setDragId(c.id)} onDragEnd={() => { setDragId(null); setOverCol(null); }} busy={move.isPending && move.variables?.appointmentId === c.id} onInjection={caps?.injections ? setInjectionFor : undefined}
-                        tests={testBadges.data?.[c.subjectKey]} onTestDone={canMove ? (card, tests) => setTestFor({ card, tests }) : undefined} deductible={deductibles.data?.[c.subjectKey]} />
+                        tests={testBadges.data?.[c.subjectKey]} onTestDone={canMove ? (card, tests) => setTestFor({ card, tests }) : undefined} deductible={deductibles.data?.[c.subjectKey]} collect={collect.data?.[c.subjectKey]} />
                     ))}
                     {cards.length === 0 && <p className="text-center text-xs text-slate-400 py-6">No patients</p>}
                   </div>
@@ -269,7 +273,7 @@ export default function PatientFlowPage() {
   );
 }
 
-function FlowCard({ card, canMove, onMove, onDragStart, onDragEnd, busy, onInjection, tests, onTestDone, deductible }: { card: Card; canMove: boolean; onMove: (c: Card, to: FlowStatus) => void; onDragStart: () => void; onDragEnd: () => void; busy: boolean; onInjection?: (c: Card) => void; tests?: CardTests; onTestDone?: (c: Card, tests: OfficeTest[]) => void; deductible?: { visits: number } }) {
+function FlowCard({ card, canMove, onMove, onDragStart, onDragEnd, busy, onInjection, tests, onTestDone, deductible, collect }: { card: Card; canMove: boolean; onMove: (c: Card, to: FlowStatus) => void; onDragStart: () => void; onDragEnd: () => void; busy: boolean; onInjection?: (c: Card) => void; tests?: CardTests; onTestDone?: (c: Card, tests: OfficeTest[]) => void; deductible?: { visits: number }; collect?: CollectNote }) {
   const idx = FLOW_COLUMNS.indexOf(card.status as (typeof FLOW_COLUMNS)[number]);
   const next = idx >= 0 && idx < FLOW_COLUMNS.length - 1 ? FLOW_COLUMNS[idx + 1] : null;
   return (
@@ -321,7 +325,12 @@ function FlowCard({ card, canMove, onMove, onDragStart, onDragEnd, busy, onInjec
         </p>
       )}
       {card.reason && <p className="mt-0.5 text-xs text-slate-400 truncate" title={card.reason}>{card.reason}</p>}
-      {deductible && <div className="mt-1.5"><HighDeductibleChip visits={deductible.visits} /></div>}
+      {(collect || deductible) && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {collect && <CollectChip note={collect} />}
+          {deductible && !collect && <HighDeductibleChip visits={deductible.visits} />}
+        </div>
+      )}
       {!!(tests?.due.length || tests?.doneThatDay.length) && (
         <div className="mt-1.5 flex flex-wrap gap-1">
           {tests!.due.map((t) => (

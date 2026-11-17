@@ -32,7 +32,7 @@ export async function patientReadiness(actor: WorkspaceActor, key: string) {
   const pid = /^p:(\d+)$/.exec(key) ? Number(key.slice(2)) : null;
   const testable = /^(p:\d+|s:.+)$/.test(key);
 
-  const [forms, testing, office, insurance, deductible, carePlan] = await Promise.all([
+  const [forms, testing, office, insurance, deductible, carePlan, collect] = await Promise.all([
     part(allowed("intakeForms"), async () => {
       const { subjectForms, listDocuments } = await import("./intakeDb");
       const [f, docs] = await Promise.all([subjectForms(actor, key), listDocuments()]);
@@ -80,9 +80,14 @@ export async function patientReadiness(actor: WorkspaceActor, key: string) {
       const status = !row ? "none" : row.signedVersion == null ? "draft" : row.signedVersion === row.version ? "signed" : "changed";
       return { status, signedByName: row?.signedByName ?? null, signedAt: row?.signedAt ?? null } as const;
     }),
+    part(allowed("eligibility"), async () => {
+      const { visitCostForPatient } = await import("./visitCostDb");
+      const note = (await visitCostForPatient(actor, key)).note;
+      return note ? { kind: note.kind, label: note.label, detail: note.detail } : null;
+    }),
   ]);
 
-  const input: ReadinessInput = { today: localDateStr(), forms, testing, officeTests: office, insurance, highDeductible: deductible, carePlan };
+  const input: ReadinessInput = { today: localDateStr(), forms, testing, officeTests: office, insurance, highDeductible: deductible, carePlan, collect };
   return { items: buildReadiness(input) };
 }
 

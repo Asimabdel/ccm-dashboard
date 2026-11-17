@@ -42,6 +42,7 @@ import { DIRECTORY_PROGRAM_LABELS, type DirectoryProgram } from "@shared/directo
 import { isFindAction } from "@shared/findAnything";
 import type { ReadyFix, ReadyItem, ReadyState } from "@shared/readiness";
 import { HighDeductibleChip } from "@/components/billing/HighDeductibleChip";
+import { CollectChip } from "@/components/billing/CollectChip";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -111,6 +112,9 @@ function Patient360({ subjectKey, id }: { subjectKey: string; id: number | null 
   const q = trpc.workspace.patients.byKey.useQuery({ key: subjectKey }, { retry: false });
   // High deductible (from the payment files): collect at check-in. A yes only, no amounts.
   const deductible = trpc.workspace.highDeductible.patient.useQuery({ key: subjectKey }, { enabled: !!caps?.flowView && isPatientKey(subjectKey), retry: false, staleTime: 5 * 60_000 });
+  // Copay / deductible from their past visits (the Insurance tab shows the visits behind it).
+  const visitCost = trpc.workspace.visitCost.patient.useQuery({ key: subjectKey }, { enabled: !!caps?.eligibility && isPatientKey(subjectKey), retry: false, staleTime: 5 * 60_000 });
+  const collect = visitCost.data?.note ?? null;
   const texting = trpc.workspace.texts.status.useQuery(undefined, { enabled: !!caps?.texts, staleTime: 60_000 });
   const openText = trpc.workspace.texts.openForPatient.useMutation({ onSuccess: (r) => navigate(`/messages?tab=texts&t=${r.id}`), onError: (e) => toast.error(e.message) });
   const today = localDateStr();
@@ -283,11 +287,12 @@ function Patient360({ subjectKey, id }: { subjectKey: string; id: number | null 
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                   <h2 className="text-xl md:text-[26px] font-bold tracking-tight text-slate-900 dark:text-slate-50">{p.name}</h2>
-                  {(p.programs.length > 0 || !p.sources.roster || !!deductible.data) && (
+                  {(p.programs.length > 0 || !p.sources.roster || !!deductible.data || !!collect) && (
                     <div className="flex flex-wrap gap-1.5">
                       {p.programs.map((g) => <span key={g} className="rounded-full bg-brand-soft px-2 py-0.5 text-[11px] font-semibold text-brand dark:text-teal-300">{DIRECTORY_PROGRAM_LABELS[g as DirectoryProgram]}</span>)}
                       {!p.sources.roster && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500 dark:bg-slate-800">{p.sources.practiceFusion ? "From Practice Fusion" : "From the schedule"} · not in a care program</span>}
-                      {deductible.data && <HighDeductibleChip visits={deductible.data.visits} className="px-2 text-[11px]" />}
+                      {collect && <CollectChip note={collect} className="px-2 text-[11px]" />}
+                      {deductible.data && !collect && <HighDeductibleChip visits={deductible.data.visits} className="px-2 text-[11px]" />}
                     </div>
                   )}
                 </div>
