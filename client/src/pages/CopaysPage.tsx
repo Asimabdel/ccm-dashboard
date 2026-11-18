@@ -160,7 +160,7 @@ function AnswerCard({ picked }: { picked: Picked }) {
 
       <div className="border-t border-slate-100 bg-slate-50/60 px-5 py-3 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-800/40">
         <p>
-          {r.insurance ? `Insurance: ${r.insurance}. ` : ""}{ESTIMATE_NOTE}{r.through ? ` Payments uploaded through ${shortDay(r.through)}.` : ""}{" "}
+          {r.insurance ? `Insurance: ${r.insurance}. ` : ""}{ESTIMATE_NOTE}{r.through ? ` Past visits on file through ${shortDay(r.through)}.` : ""}{" "}
           <Link href={insuranceTab} className="font-semibold text-brand hover:underline">See their past visits</Link>
         </p>
       </div>

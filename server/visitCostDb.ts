@@ -8,7 +8,7 @@ import { getDb } from "./db";
 import { appointments, appSettings, billClaims, billLines, clinics, coverageOnFile, fhirResources, patients, planCopays } from "../drizzle/schema";
 import type { BillAdjustment } from "../shared/masterBilling";
 import {
-  coverageInfo, EXPECTED_CODES, medianCents, payerFamily, personCost, personNote, planCopay, planDeductibleLikely, planKeys, planNote, planStat, sameMemberId, shortDay, usd, visitsOf,
+  coverageInfo, EXPECTED_CODES, medianCents, payerFamily, personCost, personNote, planCopay, planDeductibleLikely, planKeys, planNote, planStat, sameMemberId, shortDay, staffOwn, usd, visitsOf,
   type CollectNote, type CostLine, type PersonCost, type PlanMember, type PlanStat, type PlanTier,
 } from "../shared/visitCost";
 import { visitAnswer, type CardInput, type OwnerPlanInput } from "../shared/visitCostAnswer";
@@ -17,6 +17,7 @@ import { addDays } from "../shared/payments";
 import { localDateStr } from "../shared/workforce";
 import { audit, subjectCare, subjectKeyFor, WorkspaceError, type WorkspaceActor } from "./workspaceDb";
 import { people } from "./masterBillingDb";
+import { hasMasterBilling } from "./masterBillingAccess";
 
 async function db() {
   const d = await getDb();
@@ -37,6 +38,8 @@ async function everyoneSees(): Promise<boolean> {
   return audience.everyone;
 }
 const maySee = async (actor: WorkspaceActor) => actor.role === "admin" || (await everyoneSees());
+/** Amounts from the bills themselves (what insurance paid, visit prices, past balances): Master Billing people only (the owner). */
+const seesBills = (actor: WorkspaceActor) => hasMasterBilling({ id: actor.id, role: actor.role });
 /** For the side menu: does this role get the Copays & deductibles tab right now? */
 export const visitCostAllowed = async (role: string) => role === "admin" || (await everyoneSees());
 
@@ -297,9 +300,9 @@ function noteFor(b: Built, key: string, owners?: Map<string, OwnerRow>): Collect
     ? { kind: "copay", basis: "card", cents: card.pcpCopayCents, label: `Copay ${usd(card.pcpCopayCents)} (card)`, detail: `Printed on their insurance card${when}: ${usd(card.pcpCopayCents)} office visit copay.` }
     : { kind: "nothing", basis: "card", cents: 0, label: "No copay (card)", detail: `Their insurance card${when} shows a $0 office visit copay.` };
   const owner = owners ? ownerFor(owners, keysFor(card, null, cov)) : null;
-  if (owner?.answer === "copay" && owner.copayCents != null) return { kind: owner.copayCents ? "copay" : "nothing", basis: "table", cents: owner.copayCents, label: owner.copayCents ? `Copay ${usd(owner.copayCents)} (plan table)` : "No copay (plan table)", detail: `Your plan copay table: ${owner.label}.` };
-  if (owner?.answer === "nothing") return { kind: "nothing", basis: "table", cents: 0, label: "No copay (plan table)", detail: `Your plan copay table: ${owner.label}.` };
-  if (owner?.answer === "deductible") return { kind: "deductible", basis: "table", cents: price?.cents ?? null, label: `Deductible plan (plan table)${price ? `: about ${usd(price.cents)}` : ""}`, detail: `Your plan copay table: ${owner.label}: the deductible comes first.` };
+  if (owner?.answer === "copay" && owner.copayCents != null) return { kind: owner.copayCents ? "copay" : "nothing", basis: "table", cents: owner.copayCents, label: owner.copayCents ? `Copay ${usd(owner.copayCents)} (plan table)` : "No copay (plan table)", detail: `The clinic's plan copay table: ${owner.label}.` };
+  if (owner?.answer === "nothing") return { kind: "nothing", basis: "table", cents: 0, label: "No copay (plan table)", detail: `The clinic's plan copay table: ${owner.label}.` };
+  if (owner?.answer === "deductible") return { kind: "deductible", basis: "table", cents: price?.cents ?? null, label: `Deductible plan (plan table)${price ? `: about ${usd(price.cents)}` : ""}`, detail: `The clinic's plan copay table: ${owner.label}: the deductible comes first.` };
   return planNote(planFor(b, cov.payerKey, cov.group, cov.plan), price?.cents ?? null);
 }
 
@@ -324,7 +327,7 @@ export async function visitCostForDay(actor: WorkspaceActor, date: string): Prom
 
 /** The Insurance tab's "From past visits" card: the note, the visits behind it, the plan's other patients, and what a visit usually costs. */
 export async function visitCostForPatient(actor: WorkspaceActor, key: string) {
-  if (!(await maySee(actor))) return { note: null, through: null, insurance: null, own: null, plan: null, prices: [] };
+  if (!(await maySee(actor))) return { note: null, through: null, insurance: null, own: null, plan: null, bills: null };
   if (actor.clinicIds) {
     const care = await subjectCare(key);
     if (!care?.clinicId || !actor.clinicIds.includes(care.clinicId)) throw new WorkspaceError("That patient isn't at your office.", "FORBIDDEN");
@@ -343,9 +346,10 @@ export async function visitCostForPatient(actor: WorkspaceActor, key: string) {
     note: noteFor(b, key, await ownerRows()),
     through: b.through,
     insurance: pc || cov ? { payer: pc?.payer ?? cov?.payer ?? null, group: cov?.group ?? null, plan: cov?.plan ?? null } : null,
-    own: pc,
+    own: pc ? staffOwn(pc) : null,
     plan: stat ? { tier: stat.tier, patients: stat.patients, copays: stat.copays.slice(0, 4), deductiblePatients: stat.deductiblePatients, copay, deductibleLikely: planDeductibleLikely(stat) } : null,
-    prices,
+    // Only the owner: the visits with what insurance paid and what was left, and what a visit usually costs.
+    bills: (await seesBills(actor)) ? { own: pc, prices } : null,
   };
 }
 

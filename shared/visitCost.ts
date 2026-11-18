@@ -267,6 +267,35 @@ export function personCost(visits: PastVisit[], today: string): PersonCost | nul
   };
 }
 
+// ---- What staff may see of it (2026-11-18, the owner: "make sure they dont see any bills or paid things") ----
+
+/** A past visit without its money: the date, the visit, and what applied (the copay amount is a plan term, so it stays). */
+export interface StaffPastVisit { date: string; code: string | null; copayCents: number; deductible: boolean; coinsurance: boolean; nothingOwed: boolean }
+/** PersonCost for everyone but the owner: no insurance payments, visit prices, past balances or deductible totals. */
+export interface StaffOwn {
+  payer: string | null;
+  copay: PersonCost["copay"];
+  nothingOwed: boolean;
+  deductible: { state: DeductibleState; year: number; visitsThisYear: number; visitsLastYear: number; lastDate: string | null };
+  coinsurancePct: number | null;
+  recent: StaffPastVisit[];
+}
+
+export function staffOwn(pc: PersonCost): StaffOwn {
+  const d = pc.deductible;
+  return {
+    payer: pc.payer,
+    copay: pc.copay,
+    nothingOwed: pc.nothingOwed,
+    deductible: { state: d.state, year: d.year, visitsThisYear: d.visitsThisYear, visitsLastYear: d.visitsLastYear, lastDate: d.lastDate },
+    coinsurancePct: pc.coinsurancePct,
+    recent: pc.recent.map((v) => ({
+      date: v.date, code: v.code, copayCents: v.copayCents, deductible: v.deductibleCents > 0, coinsurance: v.coinsuranceCents > 0,
+      nothingOwed: v.owesCents === 0 && v.copayCents === 0,
+    })),
+  };
+}
+
 // ---- The short note staff see ----
 
 export type CollectKind = "copay" | "deductible" | "coinsurance" | "nothing" | "info";
@@ -293,12 +322,12 @@ const seenOn = (seen: number, of: number) => (seen === of ? `on ${of === 1 ? "th
 export function personNote(pc: PersonCost): CollectNote | null {
   const d = pc.deductible;
   const c = pc.copay;
-  const copayLine = c ? ` Insurance applied a ${usd(c.cents)} copay ${seenOn(c.seenOn, c.outOf)}.` : "";
+  const copayLine = c ? ` Their copay was ${usd(c.cents)} ${seenOn(c.seenOn, c.outOf)}.` : "";
   if (d.state === "applies" && d.lastOwedCents != null) {
     return {
       kind: "deductible", basis: "own", cents: d.lastOwedCents,
       label: c ? `Copay ${usd(c.cents)} + deductible` : `Deductible not met: about ${usd(d.lastOwedCents)}`,
-      detail: `Insurance applied the deductible on ${visitsWord(d.visitsThisYear)} this year and paid nothing for the latest one. On ${shortDay(d.lastDate)} the patient owed ${usd(d.lastOwedCents)} for the office visit.${copayLine}`,
+      detail: `The deductible isn't met yet: it applied on ${visitsWord(d.visitsThisYear)} this year, most recently ${shortDay(d.lastDate)}. Until it's met, expect about ${usd(d.lastOwedCents)} for an office visit.${copayLine}`,
     };
   }
   const met = d.state === "met" ? ` The deductible looks met for ${d.year}.` : "";
@@ -308,13 +337,13 @@ export function personNote(pc: PersonCost): CollectNote | null {
     const stale = c.fromLastYear ? ` No visit yet in ${d.year}: plans can change in January.` : "";
     return {
       kind: "copay", basis: "own", cents: c.cents, label: `Copay ${usd(c.cents)}${c.fromLastYear ? ` (from ${d.year - 1})` : ""}`,
-      detail: `Insurance applied a ${usd(c.cents)} copay ${seenOn(c.seenOn, c.outOf)} (latest ${shortDay(c.lastDate)}).${changed}${met}${reset}${stale}`,
+      detail: `Their copay was ${usd(c.cents)} ${seenOn(c.seenOn, c.outOf)} (latest ${shortDay(c.lastDate)}).${changed}${met}${reset}${stale}`,
     };
   }
   if (d.state === "reset" && d.lastOwedCents != null) {
     return {
       kind: "deductible", basis: "own", cents: d.lastOwedCents, label: `Deductible applied in ${d.year - 1}`,
-      detail: `In ${d.year - 1} insurance applied the deductible on ${visitsWord(d.visitsLastYear)}; on ${shortDay(d.lastDate)} the patient owed ${usd(d.lastOwedCents)} for the office visit. No visit yet in ${d.year}: it starts over each January, so expect it again.`,
+      detail: `In ${d.year - 1} the deductible applied on ${visitsWord(d.visitsLastYear)}. No visit yet in ${d.year}: it starts over each January, so until it's met expect about ${usd(d.lastOwedCents)} for an office visit.`,
     };
   }
   if (pc.coinsurancePct && pc.coinsuranceCents) {
@@ -324,13 +353,13 @@ export function personNote(pc: PersonCost): CollectNote | null {
     };
   }
   if (pc.nothingOwed) {
-    return { kind: "nothing", basis: "own", cents: 0, label: "No copay on past visits", detail: `Insurance left nothing for the patient to pay on ${lastVisits(pc.lookedAt)} (latest ${shortDay(pc.lastVisit)}).${met}` };
+    return { kind: "nothing", basis: "own", cents: 0, label: "No copay on past visits", detail: `Nothing to pay on ${lastVisits(pc.lookedAt)} (latest ${shortDay(pc.lastVisit)}).${met}` };
   }
   if (d.state === "met") {
-    return { kind: "info", basis: "own", cents: null, label: "Deductible looks met", detail: `Insurance applied the deductible on ${visitsWord(d.visitsThisYear)} earlier in ${d.year} and has started paying (latest visit ${shortDay(pc.lastVisit)}).` };
+    return { kind: "info", basis: "own", cents: null, label: "Deductible looks met", detail: `The deductible applied on ${visitsWord(d.visitsThisYear)} earlier in ${d.year} and looks met now (latest visit ${shortDay(pc.lastVisit)}).` };
   }
   if (pc.usualOwesCents > 0) {
-    return { kind: "info", basis: "own", cents: pc.usualOwesCents, label: `Usually owes about ${usd(pc.usualOwesCents)}`, detail: `On ${lastVisits(pc.lookedAt)} insurance left about ${usd(pc.usualOwesCents)} of each office visit to the patient.` };
+    return { kind: "info", basis: "own", cents: pc.usualOwesCents, label: `Usually about ${usd(pc.usualOwesCents)}`, detail: `Their part has been about ${usd(pc.usualOwesCents)} per office visit on ${lastVisits(pc.lookedAt)}.` };
   }
   return null;
 }
@@ -388,11 +417,11 @@ export function planNote(stat: PlanStat | null, expectedCents: number | null): C
   if (planDeductibleLikely(stat)) {
     return {
       kind: "deductible", basis: "plan", cents: expectedCents, label: `Likely deductible plan${expectedCents ? `: about ${usd(expectedCents)}` : ""}`,
-      detail: `Insurance applied the deductible for ${stat.deductiblePatients} of ${stat.patients} other patients with the same ${word}.${expectedCents ? ` A visit with this insurance is usually about ${usd(expectedCents)}.` : ""}${none}`,
+      detail: `The deductible applied for ${stat.deductiblePatients} of ${stat.patients} other patients with the same ${word}.${expectedCents ? ` Until it's met, expect about ${usd(expectedCents)} for the visit.` : ""}${none}`,
     };
   }
   if (c && c.cents > 0) return { kind: "copay", basis: "plan", cents: c.cents, label: `Copay ${usd(c.cents)} (same ${stat.tier === "payer" ? "insurance" : "plan"})`, detail: `${c.patients} of ${c.of} other patients with the same ${word} had a ${usd(c.cents)} copay on their office visits.${none}` };
-  if (c && c.cents === 0) return { kind: "nothing", basis: "plan", cents: 0, label: `Usually no copay (same ${stat.tier === "payer" ? "insurance" : "plan"})`, detail: `Insurance left nothing to pay for ${c.patients} of ${c.of} other patients with the same ${word}.${none}` };
+  if (c && c.cents === 0) return { kind: "nothing", basis: "plan", cents: 0, label: `Usually no copay (same ${stat.tier === "payer" ? "insurance" : "plan"})`, detail: `Nothing to pay for ${c.patients} of ${c.of} other patients with the same ${word}.${none}` };
   return null;
 }
 

@@ -163,7 +163,7 @@ export function visitAnswer(input: AnswerInput): VisitAnswer {
     if (w && w.owesCents > 0) {
       return {
         ...base, kind: "collect", cents: w.owesCents, approx: true, sure: "guess", from: "visits", headline: `Collect about ${usd(w.owesCents)}`,
-        why: [`Booked for a wellness visit. On their last one (${shortDay(w.date)}) insurance left ${usd(w.owesCents)} to them.${copayNote}`],
+        why: [`Booked for a wellness visit. Their last one (${shortDay(w.date)}) wasn't covered in full, so expect about ${usd(w.owesCents)}.${copayNote}`],
         say: { en: `On your last wellness visit, your part was about ${usd(w.owesCents)}.${ESTIMATE.en}`, es: `En su última visita de bienestar, su parte fue de aproximadamente ${usd(w.owesCents)}.${ESTIMATE.es}` },
       };
     }
@@ -188,8 +188,8 @@ export function visitAnswer(input: AnswerInput): VisitAnswer {
       return {
         ...base, kind: "collect", cents, approx: true, sure: reset ? "guess" : "likely", from: "visits", headline: `Collect about ${usd(cents)}`,
         why: reset
-          ? [`In ${d.year - 1} insurance applied their deductible on ${visitsWord(d.visitsLastYear)}. It starts over each January, and they have no visit yet this year.`, `On ${shortDay(d.lastDate)} they owed ${usd(d.lastOwedCents)} for the visit.`]
-          : [`Deductible not met: insurance paid nothing for their last visit (${shortDay(d.lastDate)}), and they owed ${usd(d.lastOwedCents)}.`, `Applied on ${visitsWord(d.visitsThisYear)} this year (${usd(d.centsThisYear)} so far).`, ...(kind === "new" && cents > d.lastOwedCents ? ["A new-patient visit costs more than a follow-up."] : [])],
+          ? [`In ${d.year - 1} their deductible applied on ${visitsWord(d.visitsLastYear)}. It starts over each January, and they have no visit yet this year.`, `Until it's met they pay the full visit: about ${usd(cents)}.`]
+          : [`Deductible not met yet: it applied on ${visitsWord(d.visitsThisYear)} this year, most recently ${shortDay(d.lastDate)}.`, `Until it's met they pay the full visit: about ${usd(cents)}.`, ...(kind === "new" && cents > d.lastOwedCents ? ["A new-patient visit costs more than a follow-up."] : [])],
         say: reset
           ? { en: `Your deductible started over in January, so today's visit will be about ${usd(cents)} until it's met.${ESTIMATE.en}`, es: `Su deducible se reinició en enero, así que la visita de hoy costará aproximadamente ${usd(cents)} hasta que lo cubra.${ESTIMATE.es}` }
           : SAY.deductible(cents),
@@ -227,14 +227,14 @@ export function visitAnswer(input: AnswerInput): VisitAnswer {
     if (pc.nothingOwed) {
       return {
         ...base, kind: "nothing", cents: 0, approx: false, sure: pc.lookedAt >= 3 ? "sure" : "likely", from: "visits", headline: "Nothing to collect",
-        why: [`Insurance left nothing to pay on ${pc.lookedAt === 1 ? "their last visit" : `their last ${pc.lookedAt} visits`} (latest ${shortDay(pc.lastVisit)}).`],
+        why: [`Nothing to pay on ${pc.lookedAt === 1 ? "their last visit" : `their last ${pc.lookedAt} visits`} (latest ${shortDay(pc.lastVisit)}).`],
         say: SAY.nothing,
       };
     }
     if (pc.usualOwesCents > 0) {
       return {
         ...base, kind: "collect", cents: pc.usualOwesCents, approx: true, sure: "guess", from: "visits", headline: `Collect about ${usd(pc.usualOwesCents)}`,
-        why: [`On ${pc.lookedAt === 1 ? "their last visit" : `their last ${pc.lookedAt} visits`} insurance left about ${usd(pc.usualOwesCents)} to them.`],
+        why: [`Their part has been about ${usd(pc.usualOwesCents)} on ${pc.lookedAt === 1 ? "their last visit" : `their last ${pc.lookedAt} visits`}.`],
         say: { en: `Based on your recent visits, your part today is about ${usd(pc.usualOwesCents)}.${ESTIMATE.en}`, es: `Según sus visitas recientes, su parte hoy es de aproximadamente ${usd(pc.usualOwesCents)}.${ESTIMATE.es}` },
       };
     }
@@ -242,13 +242,13 @@ export function visitAnswer(input: AnswerInput): VisitAnswer {
 
   // 5) New to this plan: their card, then the owner's plan table, then other patients on the same plan.
   const owner = input.ownerPlan ?? null;
-  const ownerLine = (cents: number | null) => owner && owner.answer === "copay" && owner.copayCents != null && owner.copayCents !== cents ? [`Your plan copay table says ${usd(owner.copayCents)} for ${owner.label}.`] : [];
+  const ownerLine = (cents: number | null) => owner && owner.answer === "copay" && owner.copayCents != null && owner.copayCents !== cents ? [`The clinic's plan copay table says ${usd(owner.copayCents)} for ${owner.label}.`] : [];
   if (card && card.highDeductible) {
     const after = card.pcpCopayCents ? ` After that, the card shows a ${usd(card.pcpCopayCents)} copay.` : "";
     return {
       ...base, kind: "collect", cents: visitPrice, approx: true, sure: "likely", from: "card",
       headline: visitPrice ? `Collect about ${usd(visitPrice)}` : "Deductible plan: they pay the full visit",
-      why: [...changedLine, `Their card (${cardWhen}) shows ${card.planName ?? "a plan"} with an HSA / high deductible: they pay the full visit until the deductible is met.${after}`, ...(visitPrice ? [`A ${kind === "new" ? "new-patient" : "follow-up"} visit with this insurance is usually about ${usd(visitPrice)}.`] : [])],
+      why: [...changedLine, `Their card (${cardWhen}) shows ${card.planName ?? "a plan"} with an HSA / high deductible: they pay the full visit until the deductible is met.${after}`, ...(visitPrice ? [`That's about ${usd(visitPrice)} for a ${kind === "new" ? "new-patient" : "follow-up"} visit with this insurance.`] : [])],
       say: visitPrice ? SAY.deductiblePlan(visitPrice) : { en: "With your plan, you pay the full visit until your deductible is met.", es: "Con su plan, usted paga la visita completa hasta cubrir su deducible." },
     };
   }
@@ -261,7 +261,7 @@ export function visitAnswer(input: AnswerInput): VisitAnswer {
     };
   }
   if (owner) {
-    const tableLine = `Your plan copay table: ${owner.label}.`;
+    const tableLine = `The clinic's plan copay table: ${owner.label}.`;
     if (owner.answer === "copay" && owner.copayCents != null) {
       return { ...base, kind: owner.copayCents ? "collect" : "nothing", cents: owner.copayCents, approx: false, sure: "likely", from: "table", headline: owner.copayCents ? `Collect ${usd(owner.copayCents)}` : "Nothing to collect", why: [...changedLine, `${tableLine} ${usd(owner.copayCents)} copay.`], say: owner.copayCents ? SAY.copay(owner.copayCents) : SAY.nothingPlan };
     }
@@ -271,7 +271,7 @@ export function visitAnswer(input: AnswerInput): VisitAnswer {
     if (owner.answer === "deductible") {
       return {
         ...base, kind: "collect", cents: visitPrice, approx: true, sure: "likely", from: "table", headline: visitPrice ? `Collect about ${usd(visitPrice)}` : "Deductible plan: they pay the full visit",
-        why: [...changedLine, `${tableLine} The deductible comes first, so they pay the full visit until it's met.`, ...(visitPrice ? [`A ${kind === "new" ? "new-patient" : "follow-up"} visit with this insurance is usually about ${usd(visitPrice)}.`] : [])],
+        why: [...changedLine, `${tableLine} The deductible comes first, so they pay the full visit until it's met.`, ...(visitPrice ? [`That's about ${usd(visitPrice)} for a ${kind === "new" ? "new-patient" : "follow-up"} visit with this insurance.`] : [])],
         say: visitPrice ? SAY.deductiblePlan(visitPrice) : { en: "With your plan, you pay the full visit until your deductible is met.", es: "Con su plan, usted paga la visita completa hasta cubrir su deducible." },
       };
     }
@@ -312,7 +312,7 @@ export function visitAnswer(input: AnswerInput): VisitAnswer {
     ...base, kind: "unknown", cents: null, approx: false, sure: null, from: null, headline: "Not sure: check their card",
     why: [
       ...changedLine,
-      card ? `Their card (${cardWhen}) doesn't show an office visit copay.` : input.insurance ? `Their insurance is ${input.insurance}${fromWhere}, but no payments from it for this patient are in the uploaded files yet.` : input.pc ? "Their past visits don't show a clear amount." : "No insurance and no paid visits on file for this patient.",
+      card ? `Their card (${cardWhen}) doesn't show an office visit copay.` : input.insurance ? `Their insurance is ${input.insurance}${fromWhere}, but nothing on file yet shows their copay.` : input.pc ? "Their past visits don't show a clear amount." : "No insurance and no past visits on file for this patient.",
       ...(kind === "wellness" ? ["Booked for a wellness visit: preventive visits are usually covered in full."] : []),
       `Without insurance: ${usd(firstVisit)} first visit, ${usd(followUp)} follow-up.`,
     ],

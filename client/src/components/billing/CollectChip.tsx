@@ -11,7 +11,7 @@ const TONES: Record<CollectNote["kind"], string> = {
 };
 
 /** Said with every estimate, so nobody takes it for the insurance's own answer. */
-export const ESTIMATE_NOTE = "An estimate from past insurance payments, not a quote: plans change, so confirm with the patient's card.";
+export const ESTIMATE_NOTE = "An estimate from past visits, not a quote: plans change, so confirm with the patient's card.";
 
 /**
  * What to expect at check-in (2026-11-17): the patient's copay or deductible as insurance applied it

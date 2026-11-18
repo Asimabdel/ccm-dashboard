@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  coverageInfo, patientShares, payerFamily, personCost, personNote, planCopay, planDeductibleLikely, planKeys, planNote, planStat, sameMemberId, shortDay, usd, visitsOf,
+  coverageInfo, patientShares, payerFamily, personCost, personNote, planCopay, planDeductibleLikely, planKeys, planNote, planStat, sameMemberId, shortDay, staffOwn, usd, visitsOf,
   type CostLine, type PlanMember,
 } from "../shared/visitCost";
 import type { BillAdjustment } from "../shared/masterBilling";
@@ -228,5 +228,28 @@ describe("how amounts and dates read", () => {
     expect(usd(125000)).toBe("$1,250");
     expect(shortDay("2026-10-03")).toBe("10/3/26");
     expect(shortDay(null)).toBe("");
+  });
+});
+
+describe("what staff see (no bill amounts)", () => {
+  const pc = cost([
+    line("2026-10-03", { allowed: 12800, paid: 0, adj: [pr("1", 12800)] }),
+    line("2026-06-10", { allowed: 12800, paid: 10300, adj: [pr("3", 2500)] }),
+  ])!;
+  it("keeps the copay and what applied, drops insurance paid, prices and balances", () => {
+    const view = staffOwn(pc);
+    expect(view.copay?.cents).toBe(2500);
+    expect(view.deductible).toEqual({ state: "applies", year: 2026, visitsThisYear: 1, visitsLastYear: 0, lastDate: "2026-10-03" });
+    expect(view.recent.map((v) => [v.date, v.copayCents, v.deductible])).toEqual([["2026-10-03", 0, true], ["2026-06-10", 2500, false]]);
+    // No field that carries money from the bill.
+    const text = JSON.stringify(view);
+    for (const key of ["paidCents", "allowedCents", "owesCents", "deductibleCents", "coinsuranceCents", "centsThisYear", "centsLastYear", "lastOwedCents", "lastAllowedCents", "usualOwesCents", "dayOwesCents"]) expect(text).not.toContain(key);
+    expect(text).not.toContain("10300");
+    expect(text).not.toContain("12800");
+  });
+  it("words the note as what to expect, not what insurance paid or a past bill", () => {
+    const note = personNote(pc)!;
+    expect(note.detail).not.toMatch(/paid|owed/i);
+    expect(note.detail).toContain("expect about $128");
   });
 });
