@@ -394,6 +394,11 @@ export const handler = async (event: any, context: any) => {
     const { masterBillingAccessJob } = await import("../masterBillingAccess");
     return masterBillingAccessJob({ names: Array.isArray(event.names) ? event.names.map(String) : [], apply: event.apply === true });
   }
+  // Documents: hide or erase named documents (IAM-only; dry run unless apply; ids, counts and file keys only).
+  if (event && event.__job === "documents-remove" && !event.requestContext && !event.version) {
+    const { documentsRemoveJob } = await import("../documentsRemoveJob");
+    return documentsRemoveJob({ ids: Array.isArray(event.ids) ? event.ids : [], mode: String(event.mode ?? ""), asUser: String(event.asUser ?? ""), apply: event.apply === true });
+  }
   // Master Billing: uploads, claims, matches and totals (IAM-only; counts and dollar totals, no patient details).
   if (event && event.__job === "master-billing-counts" && !event.requestContext && !event.version) {
     const { masterBillingCounts } = await import("../masterBillingDb");
