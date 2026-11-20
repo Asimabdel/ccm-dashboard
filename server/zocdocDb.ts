@@ -119,20 +119,19 @@ type BookingRow = {
 const personOf = (b: Pick<BookingRow, "subjectKey" | "patientFirst" | "patientLast" | "patientDob">, aliasOf: Map<string, string>) =>
   b.subjectKey ? (aliasOf.get(b.subjectKey) ?? b.subjectKey) : `u:${nameKey(`${b.patientFirst ?? ""} ${b.patientLast ?? ""}`)}|${b.patientDob ?? ""}`;
 
-async function load(from: string, to: string) {
+/**
+ * For these MyPCP people: every key each one goes by (roster / schedule / Practice Fusion), their insurance claims
+ * from Master Billing, and their visits (our schedule + signed Practice Fusion visits). Shared by the ZocDoc and
+ * Ads reports so "came in" means the same thing in both.
+ */
+export async function claimsAndVisits(subjectKeys: (string | null)[]) {
   const d = await db();
-  const bookings: BookingRow[] = await d.select({
-    id: zocdocBookings.id, appointmentDate: zocdocBookings.appointmentDate, status: zocdocBookings.status, patientType: zocdocBookings.patientType, costCents: zocdocBookings.costCents,
-    costReason: zocdocBookings.costReason, providerName: zocdocBookings.providerName, insuranceCarrier: zocdocBookings.insuranceCarrier, patientFirst: zocdocBookings.patientFirst,
-    patientLast: zocdocBookings.patientLast, patientDob: zocdocBookings.patientDob, subjectKey: zocdocBookings.subjectKey, bookingSource: zocdocBookings.bookingSource,
-  }).from(zocdocBookings).where(and(gte(zocdocBookings.appointmentDate, from), lte(zocdocBookings.appointmentDate, to))).orderBy(asc(zocdocBookings.appointmentDate));
-
   // Every key a matched person goes by (roster / schedule / Practice Fusion), so all their claims count.
   const { people } = await import("./masterBillingDb");
   const { index } = await people();
   const aliasOf = new Map<string, string>();
   const allKeys = new Set<string>();
-  for (const k of Array.from(new Set(bookings.map((b) => b.subjectKey).filter((x): x is string => !!x)))) {
+  for (const k of Array.from(new Set(subjectKeys.filter((x): x is string => !!x)))) {
     const person = index.byKey.get(k);
     const canonical = person?.key ?? k;
     for (const alias of [k, ...(person?.keys ?? [])]) { aliasOf.set(alias, canonical); allKeys.add(alias); }
@@ -174,6 +173,18 @@ async function load(from: string, to: string) {
       }
     }
   }
+  return { aliasOf, claimsByPerson, visitsByPerson, today };
+}
+
+async function load(from: string, to: string) {
+  const d = await db();
+  const bookings: BookingRow[] = await d.select({
+    id: zocdocBookings.id, appointmentDate: zocdocBookings.appointmentDate, status: zocdocBookings.status, patientType: zocdocBookings.patientType, costCents: zocdocBookings.costCents,
+    costReason: zocdocBookings.costReason, providerName: zocdocBookings.providerName, insuranceCarrier: zocdocBookings.insuranceCarrier, patientFirst: zocdocBookings.patientFirst,
+    patientLast: zocdocBookings.patientLast, patientDob: zocdocBookings.patientDob, subjectKey: zocdocBookings.subjectKey, bookingSource: zocdocBookings.bookingSource,
+  }).from(zocdocBookings).where(and(gte(zocdocBookings.appointmentDate, from), lte(zocdocBookings.appointmentDate, to))).orderBy(asc(zocdocBookings.appointmentDate));
+
+  const { aliasOf, claimsByPerson, visitsByPerson, today } = await claimsAndVisits(bookings.map((b) => b.subjectKey));
   const zb: ZBooking[] = bookings.map((b) => ({
     person: personOf(b, aliasOf), matched: !!b.subjectKey, appointmentDate: b.appointmentDate, status: b.status as ZocdocStatus,
     patientType: (b.patientType as ZBooking["patientType"]) ?? null, costCents: b.costCents, costReason: b.costReason, providerName: b.providerName, insuranceCarrier: b.insuranceCarrier,
@@ -191,6 +202,17 @@ export async function zocdocReport(a: WorkspaceActor, input: { from: string; to:
   await audit(a, "view_zocdoc", { entityType: "zocdocReport", description: `Viewed the ZocDoc report ${input.from} to ${input.to}` });
   const { people, ...rest } = summary;
   return { ...rest, lastUpload: last ?? null, bookingsOnFile: Number(total) };
+}
+
+/**
+ * The number an ad has to beat (totals only, nothing about patients, not audited): the last 12 months of ZocDoc
+ * spend against the patients who came in and what insurance paid for them.
+ */
+export async function zocdocBenchmark() {
+  const to = localDateStr(), from = addDays(to, -365);
+  const { summary } = await load(from, to);
+  const t = summary.totals;
+  return { from, to, spentCents: t.spentCents, cameIn: t.cameIn, judged: t.judged, paidCents: t.paidCents };
 }
 
 export type { ZocdocPatientFilter } from "../shared/zocdoc";

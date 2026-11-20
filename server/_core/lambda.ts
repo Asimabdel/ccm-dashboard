@@ -394,6 +394,11 @@ export const handler = async (event: any, context: any) => {
     const { masterBillingAccessJob } = await import("../masterBillingAccess");
     return masterBillingAccessJob({ names: Array.isArray(event.names) ? event.names.map(String) : [], apply: event.apply === true });
   }
+  // Ads: campaigns, leads and what became of them (IAM-only; counts and dollar totals, no patient details).
+  if (event && event.__job === "ads-counts" && !event.requestContext && !event.version) {
+    const { adsCounts } = await import("../adsDb");
+    return adsCounts({ from: typeof event.from === "string" ? event.from : undefined, to: typeof event.to === "string" ? event.to : undefined });
+  }
   // Documents: hide or erase named documents (IAM-only; dry run unless apply; ids, counts and file keys only).
   if (event && event.__job === "documents-remove" && !event.requestContext && !event.version) {
     const { documentsRemoveJob } = await import("../documentsRemoveJob");

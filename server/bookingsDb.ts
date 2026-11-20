@@ -5,6 +5,7 @@ import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { bookingRequests, clinics, users, workTaskActivities, workTasks } from "../drizzle/schema";
 import { BOOKING_STATUS_LABELS, OPEN_BOOKING, WAIT_ALERT_MIN, clinicForLocation, officeMinutesBetween, parseBookingEmail, parsePreferred, type BookingStatus } from "../shared/booking";
+import { cleanAdTouch } from "../shared/ads";
 import { normalizePhone } from "../shared/phone";
 import { nameKey } from "../shared/workspace";
 import { localDateStr } from "../shared/workforce";
@@ -16,7 +17,11 @@ async function db() {
   return d;
 }
 
-export interface IncomingBooking { name: string; phone: string; location?: string | null; provider?: string | null; visitType?: string | null; preferred?: string | null }
+export interface IncomingBooking {
+  name: string; phone: string; location?: string | null; provider?: string | null; visitType?: string | null; preferred?: string | null;
+  /** Where the visitor came from, when they arrived through an ad's tracking link (shared/ads.ts cleanAdTouch). */
+  ad?: unknown;
+}
 const clean = (s: unknown, max: number) => (typeof s === "string" ? s.replace(/[\r\n<>]/g, " ").trim().slice(0, max) : "") || null;
 
 /** Who the person is, if MyPCP already knows them: by phone first, then an exact, unique name. */
@@ -59,9 +64,22 @@ export async function ingestBooking(b: IncomingBooking) {
   });
   const id = (res as unknown as [{ insertId: number }])[0].insertId;
   const clinicName = clinicRows.find((c) => c.id === clinicId)?.name ?? location ?? "any location";
+  // Came through an ad's tracking link: it's that campaign's lead, and the front desk is told to call it first.
+  let fromAd = false;
+  try {
+    const touch = cleanAdTouch(b.ad);
+    if (touch) {
+      const { leadFromBooking } = await import("./adsDb");
+      await leadFromBooking({ bookingRequestId: id, touch, name, phoneKey, at: receivedAt, subjectKey: who?.key ?? null });
+      fromAd = true;
+    }
+  } catch {
+    console.warn("[website-booking] ad lead not saved"); // never holds up the booking
+  }
   const task = await createTask(await actorFor(null), {
-    title: `Call to confirm website booking: ${name}${pref.spanish ? " (Spanish)" : ""}`.slice(0, 250),
+    title: `${fromAd ? "Ad lead: call first. " : ""}Call to confirm website booking: ${name}${pref.spanish ? " (Spanish)" : ""}`.slice(0, 250),
     description: [
+      fromAd ? "This person came from one of our ads. Please call within 15 minutes: they are comparing clinics right now." : null,
       `${who ? `Existing patient: ${who.name}` : "New patient (not found in MyPCP)"}`,
       `Phone: ${phone}`,
       `Location: ${clinicName}`,
@@ -84,7 +102,7 @@ export async function ingestBooking(b: IncomingBooking) {
   } catch {
     console.warn("[website-booking] confirmation text failed");
   }
-  console.log(`[website-booking] ${JSON.stringify({ id, matched: !!who, clinic: !!clinicId, texted })}`); // no patient details in logs
+  console.log(`[website-booking] ${JSON.stringify({ id, matched: !!who, clinic: !!clinicId, texted, fromAd })}`); // no patient details in logs
   return { ok: true as const, id };
 }
 
@@ -105,7 +123,15 @@ export async function listBookings(actor: WorkspaceActor, filter: BookingFilter)
   const rows = await d.select({ b: bookingRequests, clinicName: clinics.name, assignee: users.name }).from(bookingRequests)
     .leftJoin(clinics, eq(clinics.id, bookingRequests.clinicId)).leftJoin(users, eq(users.id, bookingRequests.assignedUserId))
     .where(and(...conds)).orderBy(desc(bookingRequests.receivedAt)).limit(500);
-  return rows.map(({ b, clinicName, assignee }) => ({ ...b, clinicName, assignee }));
+  // "From an ad" (where it ran, never what it cost) so the front desk calls those first.
+  let ads = new Map<number, string>();
+  try {
+    const { adNamesForBookings } = await import("./adsDb");
+    ads = await adNamesForBookings(rows.map((r) => r.b.id));
+  } catch {
+    console.warn("[website-booking] ad tags not loaded"); // the list itself never depends on the ads tables
+  }
+  return rows.map(({ b, clinicName, assignee }) => ({ ...b, clinicName, assignee, fromAd: ads.get(b.id) ?? null }));
 }
 
 /** Header numbers: waiting now, and how fast the first call happens (last 30 days). */

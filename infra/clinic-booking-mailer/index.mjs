@@ -87,6 +87,9 @@ export const handler = async (event) => {
   const provider = clean(data.provider, 60);
   const visitType = clean(data.visitType, 60);
   const preferred = clean(data.preferred, 80);
+  // Where the visitor came from, when an ad's tracking link brought them. MyPCP cleans it again.
+  const adRaw = data.ad && typeof data.ad === "object" ? data.ad : null;
+  const ad = adRaw ? Object.fromEntries(["campaign", "source", "medium", "term", "content", "clickId", "device", "landing"].map((k) => [k, clean(adRaw[k], 200)]).filter(([, v]) => v)) : null;
   if (!name || !phone || phone.replace(/\D/g, "").length < 10) {
     return { statusCode: 400, headers: cors, body: JSON.stringify({ ok: false, error: "name and valid phone required" }) };
   }
@@ -112,7 +115,7 @@ export const handler = async (event) => {
     await lambda.send(new InvokeCommand({
       FunctionName: "ccm-app",
       InvocationType: "Event",
-      Payload: new TextEncoder().encode(JSON.stringify({ __job: "website-booking", booking: { name, phone, location, provider, visitType, preferred } })),
+      Payload: new TextEncoder().encode(JSON.stringify({ __job: "website-booking", booking: { name, phone, location, provider, visitType, preferred, ...(ad && ad.campaign ? { ad } : {}) } })),
     }));
   } catch (e) {
     console.error("MyPCP hand-off failed; email still sent");

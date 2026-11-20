@@ -84,6 +84,8 @@ export interface MappedCallLogRecord {
   durationSec: number;
   result: string | null;
   extensionId: string | null;
+  /** Our side of the call (last 10 digits): the number they dialed, or the one we called from. */
+  ownNumber: string | null;
 }
 
 type RcParty = { phoneNumber?: string; extensionNumber?: string; name?: string } | undefined;
@@ -169,6 +171,7 @@ export function mapCallLogRecord(r: RcCallLogRecord): MappedCallLogRecord | null
     ids,
     direction,
     otherNumber: normalizePhone(party?.phoneNumber),
+    ownNumber: normalizePhone((direction === "outbound" ? r.from : r.to)?.phoneNumber),
     startedAt: new Date(r.startTime),
     durationSec: Math.max(0, Math.round(Number(r.duration ?? 0))),
     result: r.result ?? null,

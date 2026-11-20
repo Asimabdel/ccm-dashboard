@@ -279,6 +279,8 @@ type AuditAction =
   | "view_costs"
   | "set_cost"
   | "set_plan_copay"
+  | "view_ads"
+  | "manage_ads"
   | "export_data";
 
 export async function audit(actor: WorkspaceActor, action: AuditAction, opts: { entityType?: string; entityId?: number; description?: string } = {}) {

@@ -4,7 +4,7 @@
 // Master Billing router (owner guard).
 import { and, asc, eq, gte, isNull, lte, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { billClaims, billLines, clinics, practiceCosts, users, zocdocBookings } from "../drizzle/schema";
+import { adCampaigns, adSpend, billClaims, billLines, clinics, practiceCosts, users, zocdocBookings } from "../drizzle/schema";
 import { audit, WorkspaceError, type WorkspaceActor } from "./workspaceDb";
 import { payroll } from "./payrollDb";
 import { COST_CATEGORIES, costInMonth, costsByMonth, isMonth, matchClinic, moneyMonth, monthsBetween, nextMonth, type CostCategory } from "../shared/costs";
@@ -92,7 +92,7 @@ export async function costsReport(actor: WorkspaceActor) {
   const thisMonth = today.slice(0, 7);
   const months = monthsBetween(FIRST_MONEY_MONTH, thisMonth);
   const from = `${months[0]}-01`, to = lastDayOf(months.at(-1)!);
-  const [costs, clinicRows, paidRows, zocRows] = await Promise.all([
+  const [costs, clinicRows, paidRows, zocRows, adRows] = await Promise.all([
     listCosts(),
     d.select({ id: clinics.id, name: clinics.name, address: clinics.address }).from(clinics).orderBy(asc(clinics.name)),
     // Insurance payments by payment date, like the Summary tab with "by payment date".
@@ -103,15 +103,18 @@ export async function costsReport(actor: WorkspaceActor) {
     // ZocDoc charges by appointment date, like the ZocDoc tab, with ZocDoc's location for each.
     d.select({ date: zocdocBookings.appointmentDate, location: zocdocBookings.locationName, cost: sql<number>`SUM(${zocdocBookings.costCents})` }).from(zocdocBookings)
       .where(and(gte(zocdocBookings.appointmentDate, from), lte(zocdocBookings.appointmentDate, to))).groupBy(zocdocBookings.appointmentDate, zocdocBookings.locationName),
+    // Ad spend by month, under the clinic each campaign is aimed at (the Ads tab).
+    d.select({ month: sql<string>`LEFT(${adSpend.day}, 7)`, clinicId: adCampaigns.clinicId, cost: sql<number>`SUM(${adSpend.costCents})` }).from(adSpend)
+      .innerJoin(adCampaigns, eq(adCampaigns.id, adSpend.campaignId)).where(and(gte(adSpend.day, from), lte(adSpend.day, to))).groupBy(sql`LEFT(${adSpend.day}, 7)`, adCampaigns.clinicId),
   ]);
 
   // Everything by month and clinic ("" = not tied to a clinic).
-  type Cell = { insuranceCents: number; staffPayCents: number; providerPayCents: number; costsCents: number; zocdocCents: number };
+  type Cell = { insuranceCents: number; staffPayCents: number; providerPayCents: number; costsCents: number; zocdocCents: number; adsCents: number };
   const cells = new Map<string, Cell>();
   const cell = (month: string, clinicId: number | null) => {
     const k = `${month}|${clinicId ?? ""}`;
     let c = cells.get(k);
-    if (!c) cells.set(k, (c = { insuranceCents: 0, staffPayCents: 0, providerPayCents: 0, costsCents: 0, zocdocCents: 0 }));
+    if (!c) cells.set(k, (c = { insuranceCents: 0, staffPayCents: 0, providerPayCents: 0, costsCents: 0, zocdocCents: 0, adsCents: 0 }));
     return c;
   };
   const known = new Set(clinicRows.map((c) => c.id));
@@ -135,6 +138,12 @@ export async function costsReport(actor: WorkspaceActor) {
     locations.set(lk, l);
     l.cents += cents;
   }
+  const adsByMonth = new Map<string, number>();
+  for (const r of adRows) {
+    const cents = Number(r.cost ?? 0);
+    adsByMonth.set(r.month, (adsByMonth.get(r.month) ?? 0) + cents);
+    cell(r.month, clinicKey(r.clinicId)).adsCents += cents;
+  }
   const costMonths = costsByMonth(costs, months);
   for (const m of months) for (const c of costs) if (costInMonth(c, m)) cell(m, clinicKey(c.clinicId)).costsCents += c.amountCents;
   // Payroll per month (estimate), split by clinic: staff by where they clocked in, providers by where they saw
@@ -149,12 +158,12 @@ export async function costsReport(actor: WorkspaceActor) {
     }
   }
   const rows = months.map((m) => moneyMonth({
-    month: m, insuranceCents: insurance.get(m) ?? 0, payrollCents: pay.get(m) ?? 0, costsCents: costMonths.get(m) ?? 0, zocdocCents: zocdoc.get(m) ?? 0, inProgress: m === thisMonth,
+    month: m, insuranceCents: insurance.get(m) ?? 0, payrollCents: pay.get(m) ?? 0, costsCents: costMonths.get(m) ?? 0, zocdocCents: zocdoc.get(m) ?? 0, adsCents: adsByMonth.get(m) ?? 0, inProgress: m === thisMonth,
   }));
   const places = [...clinicRows.map((c) => ({ key: String(c.id), id: c.id as number | null, name: c.name })), { key: "", id: null, name: "Not tied to a clinic" }];
   const clinicMonths = months.map((m) => ({
     month: m, inProgress: m === thisMonth,
-    clinics: places.map((p) => ({ key: p.key, name: p.name, ...(cells.get(`${m}|${p.key}`) ?? { insuranceCents: 0, staffPayCents: 0, providerPayCents: 0, costsCents: 0, zocdocCents: 0 }) })),
+    clinics: places.map((p) => ({ key: p.key, name: p.name, ...(cells.get(`${m}|${p.key}`) ?? { insuranceCents: 0, staffPayCents: 0, providerPayCents: 0, costsCents: 0, zocdocCents: 0, adsCents: 0 }) })),
   }));
   const clinicName = new Map(clinicRows.map((c) => [c.id, c.name]));
   const zocdocLocations = Array.from(locations.values()).sort((a, b) => b.cents - a.cents)

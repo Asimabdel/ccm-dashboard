@@ -1,0 +1,90 @@
+<!--
+  mypcpdr.com footer code: the ad tag (2026-11-20). Reference copy of what goes at the END of the Squarespace
+  footer code injection. It does two things, and nothing else:
+
+  1. When someone arrives through an ad's tracking link (…?utm_campaign=g-katy-en&…), it remembers that in THEIR
+     browser for 30 days (localStorage "mypcp_ad"; no cookie, nothing sent anywhere).
+  2. When they send a booking request, the tag rides along with it (a small "ad" part added to the request the
+     booking screen already sends). MyPCP then counts the booking under that campaign (server/adsDb.ts).
+
+  The booking screen's own code is not changed. Switch it off for one browser with ?adtag=off (back on: ?adtag=on);
+  remove the block to switch it off for everyone.
+
+  Optional: to show a campaign's own phone number to people who came from its ad, list it in MYPCP_AD_NUMBERS
+  below (campaign code → 10 digits). Leave it empty until the numbers exist in RingCentral.
+-->
+<script id="mypcp-adtag">
+(function () {
+  try {
+    var MYPCP_AD_NUMBERS = {};
+    var KEY = 'mypcp_ad', OFF = 'mypcp_adtag_off', DAYS = 30;
+    var API = 'https://37zhvbvb1g.execute-api.us-east-1.amazonaws.com/';
+    var MAIN = '3467078978';
+    var q = new URLSearchParams(location.search);
+    try {
+      if (q.get('adtag') === 'off') localStorage.setItem(OFF, '1');
+      if (q.get('adtag') === 'on') localStorage.removeItem(OFF);
+      if (localStorage.getItem(OFF) === '1') return;
+    } catch (e) { return; }
+    var clip = function (v, n) { return v ? String(v).slice(0, n) : ''; };
+    var campaign = q.get('utm_campaign');
+    if (campaign) {
+      var tag = {
+        campaign: clip(campaign, 60), source: clip(q.get('utm_source'), 40), medium: clip(q.get('utm_medium'), 40),
+        term: clip(q.get('utm_term'), 120), content: clip(q.get('utm_content'), 120),
+        clickId: clip(q.get('gclid') || q.get('gbraid') || q.get('wbraid') || q.get('fbclid') || q.get('msclkid'), 200),
+        device: clip(q.get('utm_device'), 12), landing: clip(location.pathname, 160), at: Date.now()
+      };
+      try { localStorage.setItem(KEY, JSON.stringify(tag)); } catch (e) {}
+    }
+    var saved = function () {
+      try {
+        var t = JSON.parse(localStorage.getItem(KEY) || 'null');
+        if (!t || !t.campaign) return null;
+        if (Date.now() - t.at > DAYS * 864e5) { localStorage.removeItem(KEY); return null; }
+        return t;
+      } catch (e) { return null; }
+    };
+
+    // The booking request carries the tag. Only that one request is touched: a POST to the booking address.
+    var real = window.fetch;
+    if (real && !real.__mypcpAd) {
+      var wrapped = function (input, init) {
+        try {
+          var url = typeof input === 'string' ? input : (input && input.url) || '';
+          if (url === API && init && String(init.method || '').toUpperCase() === 'POST' && typeof init.body === 'string') {
+            var t = saved();
+            if (t) {
+              var body = JSON.parse(init.body);
+              if (body && typeof body === 'object' && !body.ad) {
+                body.ad = { campaign: t.campaign, source: t.source, medium: t.medium, term: t.term, content: t.content, clickId: t.clickId, device: t.device, landing: t.landing };
+                init = Object.assign({}, init, { body: JSON.stringify(body) });
+              }
+            }
+          }
+        } catch (e) {}
+        return real.call(this, input, init);
+      };
+      wrapped.__mypcpAd = true;
+      window.fetch = wrapped;
+    }
+
+    // A campaign with its own phone number: people who came from its ad see (and tap) that number.
+    var swap = function () {
+      var t = saved();
+      var n = t && MYPCP_AD_NUMBERS[t.campaign];
+      if (!n || !/^\d{10}$/.test(n)) return;
+      var pretty = '(' + n.slice(0, 3) + ') ' + n.slice(3, 6) + '-' + n.slice(6);
+      var links = document.querySelectorAll('a[href^="tel:"]');
+      for (var i = 0; i < links.length; i++) {
+        var a = links[i];
+        if (a.getAttribute('href').replace(/\D/g, '').slice(-10) !== MAIN) continue;
+        a.setAttribute('href', 'tel:+1' + n);
+        if (/\d{3}\D*\d{3}\D*\d{4}/.test(a.textContent || '')) a.textContent = (a.textContent || '').replace(/\(?\d{3}\)?[\s.-]*\d{3}[\s.-]*\d{4}/, pretty);
+      }
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', swap); else swap();
+    setTimeout(swap, 2000);
+  } catch (e) {}
+})();
+</script>

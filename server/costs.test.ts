@@ -25,6 +25,9 @@ describe("monthly costs", () => {
     expect(moneyMonth({ month: "2026-10", insuranceCents: 10_000_000, payrollCents: 6_000_000, costsCents: 1_180_000, zocdocCents: 900_000, inProgress: false }))
       .toMatchObject({ outCents: 8_080_000, leftCents: 1_920_000 });
     expect(moneyMonth({ month: "2026-11", insuranceCents: 100, payrollCents: 200, costsCents: 0, zocdocCents: 0, inProgress: true }).leftCents).toBe(-100);
+    // Ad spend (the Ads tab) is money out too.
+    expect(moneyMonth({ month: "2026-12", insuranceCents: 10_000_000, payrollCents: 6_000_000, costsCents: 1_180_000, zocdocCents: 900_000, adsCents: 200_000, inProgress: false }))
+      .toMatchObject({ adsCents: 200_000, outCents: 8_280_000, leftCents: 1_720_000 });
   });
 
   it("splits money by weight in whole cents that add back up", () => {

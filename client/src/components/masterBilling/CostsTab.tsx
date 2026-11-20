@@ -31,8 +31,8 @@ export function CostsTab() {
   const csv = () => {
     if (!d) return;
     downloadCsv(`money-in-vs-out-${d.months[0]}-to-${d.months.at(-1)}.csv`, [
-      ["Month", "Insurance paid", "Payroll (estimate)", "Rent and other costs", "ZocDoc", "Money out", "Left over", "Note"],
-      ...d.rows.map((r) => [r.month, (r.insuranceCents / 100).toFixed(2), (r.payrollCents / 100).toFixed(2), (r.costsCents / 100).toFixed(2), (r.zocdocCents / 100).toFixed(2),
+      ["Month", "Insurance paid", "Payroll (estimate)", "Rent and other costs", "ZocDoc", "Ads", "Money out", "Left over", "Note"],
+      ...d.rows.map((r) => [r.month, (r.insuranceCents / 100).toFixed(2), (r.payrollCents / 100).toFixed(2), (r.costsCents / 100).toFixed(2), (r.zocdocCents / 100).toFixed(2), (r.adsCents / 100).toFixed(2),
         (r.outCents / 100).toFixed(2), (r.leftCents / 100).toFixed(2), r.inProgress ? "month in progress" : ""]),
     ]);
   };
@@ -48,7 +48,7 @@ export function CostsTab() {
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <MetricCard label="Monthly costs now" value={money(d.monthlyNowCents)} hint={`${d.costs.filter((c) => c.startMonth <= d.today.slice(0, 7) && (!c.endMonth || c.endMonth >= d.today.slice(0, 7))).length} bills in ${monthName(d.today.slice(0, 7))}`} />
             {last ? <MetricCard label={`Money in, ${shortMonth(last.month)}`} value={money(last.insuranceCents)} hint="insurance payments loaded here" /> : <MetricCard label="Money in" value="—" hint="no full month yet" />}
-            {last ? <MetricCard label={`Money out, ${shortMonth(last.month)}`} value={money(last.outCents)} hint="payroll + costs + ZocDoc" /> : <MetricCard label="Money out" value="—" />}
+            {last ? <MetricCard label={`Money out, ${shortMonth(last.month)}`} value={money(last.outCents)} hint="payroll + costs + ZocDoc + ads" /> : <MetricCard label="Money out" value="—" />}
             {last ? <MetricCard label={`Left over, ${shortMonth(last.month)}`} value={money(last.leftCents)} tone={last.leftCents >= 0 ? "good" : "warn"} hint={last.leftCents >= 0 ? "before taxes and anything not listed here" : "more went out than came in"} />
               : <MetricCard label="Left over" value="—" />}
           </div>
@@ -60,7 +60,7 @@ export function CostsTab() {
                 <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
                   <tr>
                     <th className="px-3 py-2 text-left font-medium">Month</th><th className={th}>Insurance paid</th><th className={th}>Payroll</th><th className={th}>Rent &amp; costs</th>
-                    <th className={th}>ZocDoc</th><th className={th}>Money out</th><th className={th}>Left over</th>
+                    <th className={th}>ZocDoc</th><th className={th}>Ads</th><th className={th}>Money out</th><th className={th}>Left over</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -71,6 +71,7 @@ export function CostsTab() {
                       <td className={td}>{money(r.payrollCents)}</td>
                       <td className={td}>{money(r.costsCents)}</td>
                       <td className={td}>{money(r.zocdocCents)}</td>
+                      <td className={td}>{money(r.adsCents)}</td>
                       <td className={td}>{money(r.outCents)}</td>
                       <td className={cn(td, "font-semibold", r.leftCents < 0 ? "text-rose-700 dark:text-rose-300" : "text-emerald-700 dark:text-emerald-300")}>{money(r.leftCents)}</td>
                     </tr>
@@ -82,7 +83,7 @@ export function CostsTab() {
           <p className="text-xs text-slate-500">
             Money in is only the insurance payments loaded in Master Billing (Office Ally payment files, by payment date{d.latestPaymentDate ? `, loaded through ${day(d.latestPaymentDate)}` : ""}). Insurers whose
             payment files aren&rsquo;t loaded, and what patients pay you, aren&rsquo;t in it yet. Payroll is the Payroll tab&rsquo;s estimate of gross pay (before employer taxes). ZocDoc is its
-            per-booking charges by appointment date. Rent &amp; costs are the monthly bills listed below. The month in progress shows money in and payroll so far, but its full rent.
+            per-booking charges by appointment date. Ads is the spend entered on the Ads tab. Rent &amp; costs are the monthly bills listed below. The month in progress shows money in and payroll so far, but its full rent.
           </p>
 
           <Panel title="Monthly costs" subtitle="Rent and other bills paid every month. A change in amount: end the old one the month before and add the new one."
@@ -126,8 +127,8 @@ export function CostsTab() {
 }
 
 type ClinicRow = Report["clinicMonths"][number]["clinics"][number];
-const KEYS = ["insuranceCents", "staffPayCents", "providerPayCents", "costsCents", "zocdocCents"] as const;
-const outOf = (c: Pick<ClinicRow, "staffPayCents" | "providerPayCents" | "costsCents" | "zocdocCents">) => c.staffPayCents + c.providerPayCents + c.costsCents + c.zocdocCents;
+const KEYS = ["insuranceCents", "staffPayCents", "providerPayCents", "costsCents", "zocdocCents", "adsCents"] as const;
+const outOf = (c: Pick<ClinicRow, "staffPayCents" | "providerPayCents" | "costsCents" | "zocdocCents" | "adsCents">) => c.staffPayCents + c.providerPayCents + c.costsCents + c.zocdocCents + c.adsCents;
 
 /** Each clinic's money in vs. its own costs: staff and provider pay, rent and other bills, and ZocDoc, for a month or all months. */
 function ClinicCosts({ d }: { d: Report }) {
@@ -136,16 +137,16 @@ function ClinicCosts({ d }: { d: Report }) {
   const chosen = pick === "all" ? d.clinicMonths : d.clinicMonths.filter((m) => m.month === pick);
   const byKey = new Map<string, ClinicRow>();
   for (const m of chosen) for (const c of m.clinics) {
-    const t = byKey.get(c.key) ?? { ...c, insuranceCents: 0, staffPayCents: 0, providerPayCents: 0, costsCents: 0, zocdocCents: 0 };
+    const t = byKey.get(c.key) ?? { ...c, insuranceCents: 0, staffPayCents: 0, providerPayCents: 0, costsCents: 0, zocdocCents: 0, adsCents: 0 };
     for (const k of KEYS) t[k] += c[k];
     byKey.set(c.key, t);
   }
   const rows = Array.from(byKey.values()).filter((c) => KEYS.some((k) => c[k] !== 0));
-  const total = rows.reduce((t, c) => { for (const k of KEYS) t[k] += c[k]; return t; }, { insuranceCents: 0, staffPayCents: 0, providerPayCents: 0, costsCents: 0, zocdocCents: 0 });
+  const total = rows.reduce((t, c) => { for (const k of KEYS) t[k] += c[k]; return t; }, { insuranceCents: 0, staffPayCents: 0, providerPayCents: 0, costsCents: 0, zocdocCents: 0, adsCents: 0 });
   const label = pick === "all" ? `${shortMonth(d.months[0]!)} – ${shortMonth(d.months.at(-1)!)}` : monthName(pick);
   const inProgress = chosen.some((m) => m.inProgress);
   const csv = () => downloadCsv(`cost-per-clinic-${pick}.csv`, [
-    ["Clinic", "Insurance paid", "Staff pay", "Provider pay", "Rent and other costs", "ZocDoc", "Total cost", "Left over"],
+    ["Clinic", "Insurance paid", "Staff pay", "Provider pay", "Rent and other costs", "ZocDoc", "Ads", "Total cost", "Left over"],
     ...[...rows, { key: "total", name: "Total", ...total }].map((c) => [c.name, ...KEYS.map((k) => (c[k] / 100).toFixed(2)), (outOf(c) / 100).toFixed(2), ((c.insuranceCents - outOf(c)) / 100).toFixed(2)]),
   ]);
   const th = "px-3 py-2 text-right font-medium";
@@ -167,7 +168,7 @@ function ClinicCosts({ d }: { d: Report }) {
             <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
               <tr>
                 <th className="px-3 py-2 text-left font-medium">Clinic</th><th className={th}>Insurance paid</th><th className={th}>Staff pay</th><th className={th}>Provider pay</th>
-                <th className={th}>Rent &amp; costs</th><th className={th}>ZocDoc</th><th className={th}>Total cost</th><th className={th}>Left over</th>
+                <th className={th}>Rent &amp; costs</th><th className={th}>ZocDoc</th><th className={th}>Ads</th><th className={th}>Total cost</th><th className={th}>Left over</th>
               </tr>
             </thead>
             <tbody>
@@ -182,6 +183,7 @@ function ClinicCosts({ d }: { d: Report }) {
                     <td className={td}>{money(c.providerPayCents)}</td>
                     <td className={td}>{money(c.costsCents)}</td>
                     <td className={td}>{money(c.zocdocCents)}</td>
+                    <td className={td}>{money(c.adsCents)}</td>
                     <td className={cn(td, "font-semibold")}>{money(out)}<span className="block text-[11px] font-normal text-slate-500">{c.insuranceCents > 0 ? `${pct(out, c.insuranceCents)} of money in` : ""}</span></td>
                     <td className={cn(td, "font-semibold", left < 0 ? "text-rose-700 dark:text-rose-300" : "text-emerald-700 dark:text-emerald-300")}>{money(left)}</td>
                   </tr>

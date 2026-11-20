@@ -40,6 +40,8 @@ export interface MoneyMonth {
   payrollCents: number;
   costsCents: number;
   zocdocCents: number;
+  /** What the ad campaigns cost (the Ads tab's spend). */
+  adsCents: number;
   outCents: number;
   /** Money in minus money out. */
   leftCents: number;
@@ -105,7 +107,8 @@ export function matchClinic<T extends { id: number; name: string; address?: stri
   return best && !tie ? best.c : null;
 }
 
-export function moneyMonth(m: { month: string; insuranceCents: number; payrollCents: number; costsCents: number; zocdocCents: number; inProgress: boolean }): MoneyMonth {
-  const outCents = m.payrollCents + m.costsCents + m.zocdocCents;
-  return { ...m, outCents, leftCents: m.insuranceCents - outCents };
+export function moneyMonth(m: { month: string; insuranceCents: number; payrollCents: number; costsCents: number; zocdocCents: number; adsCents?: number; inProgress: boolean }): MoneyMonth {
+  const adsCents = m.adsCents ?? 0;
+  const outCents = m.payrollCents + m.costsCents + m.zocdocCents + adsCents;
+  return { ...m, adsCents, outCents, leftCents: m.insuranceCents - outCents };
 }

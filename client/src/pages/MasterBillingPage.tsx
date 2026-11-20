@@ -14,6 +14,7 @@ import { PayrollTab } from "@/components/masterBilling/PayrollTab";
 import { CostsTab } from "@/components/masterBilling/CostsTab";
 import { PlanCopaysTab } from "@/components/masterBilling/PlanCopaysTab";
 import { ZocdocTab } from "@/components/masterBilling/ZocdocTab";
+import { AdsTab } from "@/components/masterBilling/AdsTab";
 import { BillSearchBox, BillSearchResults, useBillSearch } from "@/components/masterBilling/BillSearch";
 import { RecentUploads, UploadDrawer, type UploadRef } from "@/components/masterBilling/RecentUploads";
 import { STATUS_CLASS, StatusBadge } from "@/components/masterBilling/StatusBadge";
@@ -41,13 +42,13 @@ interface Filters {
   closeMatch?: boolean | null;
   subjectKey?: string | null;
 }
-type Tab = "summary" | "breakdown" | "claims" | "denials" | "deductible" | "plancopays" | "zocdoc" | "payroll" | "costs" | "uploads";
+type Tab = "summary" | "breakdown" | "claims" | "denials" | "deductible" | "plancopays" | "zocdoc" | "ads" | "payroll" | "costs" | "uploads";
 const TABS: { key: Tab; label: string }[] = [
   { key: "summary", label: "Summary" }, { key: "breakdown", label: "Breakdown" }, { key: "claims", label: "Claims" }, { key: "denials", label: "Denials" },
-  { key: "deductible", label: "High deductible" }, { key: "plancopays", label: "Plan copays" }, { key: "zocdoc", label: "ZocDoc" }, { key: "payroll", label: "Payroll" }, { key: "costs", label: "Costs" }, { key: "uploads", label: "Uploads" },
+  { key: "deductible", label: "High deductible" }, { key: "plancopays", label: "Plan copays" }, { key: "zocdoc", label: "ZocDoc" }, { key: "ads", label: "Ads" }, { key: "payroll", label: "Payroll" }, { key: "costs", label: "Costs" }, { key: "uploads", label: "Uploads" },
 ];
 /** Tabs with their own date controls (the page's filters bar is hidden on them). */
-const OWN_FILTERS: Tab[] = ["uploads", "payroll", "zocdoc", "costs", "plancopays"];
+const OWN_FILTERS: Tab[] = ["uploads", "payroll", "zocdoc", "ads", "costs", "plancopays"];
 
 type Preset = "month" | "lastMonth" | "3m" | "ytd" | "12m" | "all";
 const PRESETS: { key: Preset; label: string }[] = [
@@ -174,6 +175,7 @@ export default function MasterBillingPage() {
       {tab === "denials" && <Denials f={f} onDrill={drill} onOpen={setClaimId} />}
       {tab === "deductible" && <HighDeductible f={f} onDrill={drill} />}
       {tab === "zocdoc" && <ZocdocTab />}
+      {tab === "ads" && <AdsTab />}
       {tab === "payroll" && <PayrollTab />}
       {tab === "costs" && <CostsTab />}
       {tab === "plancopays" && <PlanCopaysTab />}

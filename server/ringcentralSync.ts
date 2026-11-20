@@ -196,6 +196,9 @@ export async function runRingCentralSync(opts: { maxRequests: number; maxMs: num
     const exts = await extensions(token);
     const userByEmail = new Map((await d.select({ id: users.id, email: users.email }).from(users)).filter((u) => u.email).map((u) => [u.email!.toLowerCase(), u.id]));
     const phones = await buildPhoneIndex();
+    // Ads: the phone numbers that belong to campaigns (usually none, then this costs nothing).
+    const { trackingNumbers, noteAdCall } = await import("./adsDb");
+    const adNumbers = await trackingNumbers();
 
     // Once, when per-person call stats were added (2026-09-26): re-read the last 30 days so every call
     // (not only patient calls) is counted. Re-reading is safe: calls already in the log are matched, not added.
@@ -232,6 +235,18 @@ export async function runRingCentralSync(opts: { maxRequests: number; maxMs: num
         const m = mapCallLogRecord(raw as Parameters<typeof mapCallLogRecord>[0]);
         if (!m?.otherNumber) continue;
         const who = phones.get(m.otherNumber);
+        // A call on a campaign's own number is that campaign's lead, patient or not; our call to them is the call back.
+        if (adNumbers.size && m.ids[0]) {
+          try {
+            const parts = m.direction === "inbound" ? mapCallStats(raw as Parameters<typeof mapCallStats>[0]) : [];
+            await noteAdCall({
+              rcId: m.ids[0], direction: m.direction, otherNumber: m.otherNumber, ownNumber: m.ownNumber, startedAt: m.startedAt, durationSec: m.durationSec,
+              answered: parts.some((p) => p.answered), missed: parts.some((p) => p.missed) && !parts.some((p) => p.answered), result: m.result,
+            }, adNumbers, who ? { key: who.key, name: who.name } : null);
+          } catch {
+            console.warn("[RingCentral] ad call not saved"); // never stops the sync
+          }
+        }
         if (!who) continue; // not a patient: never stored
         stats.matched++;
         const ext = m.extensionId ? exts.get(m.extensionId) : undefined;

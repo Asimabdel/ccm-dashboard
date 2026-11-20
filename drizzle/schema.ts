@@ -495,6 +495,9 @@ export const auditLogs = mysqlTable("auditLogs", {
     "set_cost",
     // Plan copays in Master Billing (owner only), added 2026-11-17
     "set_plan_copay",
+    // Ads in Master Billing (owner only), added 2026-11-20
+    "view_ads",
+    "manage_ads",
   ]).notNull(),
   entityType: varchar("entityType", { length: 50 }),
   entityId: int("entityId"),
@@ -2570,3 +2573,104 @@ export const planCopays = mysqlTable("planCopays", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
+
+/**
+ * Ads in Master Billing (owner only, 2026-11-20): one row per ad campaign (Google Search, Facebook, a flyer…).
+ * `code` rides in the campaign's tracking link (utm_campaign), so a website booking that arrives with it is
+ * that campaign's lead; `trackingPhone` is a number used only in that campaign's ads.
+ */
+export const adCampaigns = mysqlTable("adCampaigns", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 120 }).notNull(),
+  /** shared/ads.ts AD_CHANNELS: google_search | google_profile | facebook | nextdoor | mail | other */
+  channel: varchar("channel", { length: 20 }).notNull(),
+  code: varchar("code", { length: 40 }).notNull().unique(),
+  /** The clinic it's aimed at; null = all clinics. */
+  clinicId: int("clinicId").references(() => clinics.id),
+  language: varchar("language", { length: 4 }).default("en").notNull(),
+  /** Last 10 digits of the phone number used only in this campaign's ads. */
+  trackingPhone: varchar("trackingPhone", { length: 10 }),
+  monthlyBudgetCents: int("monthlyBudgetCents"),
+  /** active | paused | ended */
+  status: varchar("status", { length: 10 }).default("active").notNull(),
+  /** The page the ad opens (blank = the website's home page). */
+  landingUrl: varchar("landingUrl", { length: 255 }),
+  /** The campaign's name in Google's / Facebook's spend report, when it differs. */
+  outsideName: varchar("outsideName", { length: 160 }),
+  note: varchar("note", { length: 255 }),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  phoneIdx: index("adCampaigns_phone_idx").on(t.trackingPhone),
+}));
+
+/** What a campaign cost on one day (typed in, or from an uploaded Google / Facebook report). */
+export const adSpend = mysqlTable("adSpend", {
+  id: int("id").autoincrement().primaryKey(),
+  campaignId: int("campaignId").notNull().references(() => adCampaigns.id),
+  /** YYYY-MM-DD */
+  day: varchar("day", { length: 10 }).notNull(),
+  costCents: int("costCents").notNull(),
+  impressions: int("impressions").default(0).notNull(),
+  clicks: int("clicks").default(0).notNull(),
+  /** manual | upload */
+  source: varchar("source", { length: 10 }).notNull(),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  oneDay: uniqueIndex("adSpend_campaign_day_unique").on(t.campaignId, t.day),
+  dayIdx: index("adSpend_day_idx").on(t.day),
+}));
+
+/**
+ * A person's first contact from a campaign: a website booking that came with the campaign's code, a call to
+ * its phone number, or one added by hand. Who came in and what insurance paid is worked out fresh each time
+ * from the schedule and Master Billing's claims (nothing about that is stored here).
+ */
+export const adLeads = mysqlTable("adLeads", {
+  id: int("id").autoincrement().primaryKey(),
+  campaignId: int("campaignId").notNull().references(() => adCampaigns.id),
+  /** web | call | manual */
+  kind: varchar("kind", { length: 10 }).notNull(),
+  at: datetime("at").notNull(),
+  name: varchar("name", { length: 120 }),
+  phoneKey: varchar("phoneKey", { length: 10 }),
+  bookingRequestId: int("bookingRequestId").unique(),
+  subjectKey: varchar("subjectKey", { length: 120 }),
+  /** A missed call: when someone first called them back. */
+  calledBackAt: datetime("calledBackAt"),
+  /** The "call back" task made for a missed call. */
+  taskId: int("taskId"),
+  /** Staff's result for a phone or hand-added lead: scheduled | not_booked | spam. */
+  outcome: varchar("outcome", { length: 12 }),
+  /** From the tracking link: the search words, the ad, the click number (kept here only), phone or computer, the page. */
+  keyword: varchar("keyword", { length: 120 }),
+  adName: varchar("adName", { length: 120 }),
+  clickId: varchar("clickId", { length: 200 }),
+  device: varchar("device", { length: 12 }),
+  landing: varchar("landing", { length: 160 }),
+  note: varchar("note", { length: 255 }),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (t) => ({
+  campaignIdx: index("adLeads_campaign_idx").on(t.campaignId, t.at),
+  phoneIdx: index("adLeads_phone_idx").on(t.phoneKey),
+  subjectIdx: index("adLeads_subject_idx").on(t.subjectKey),
+}));
+
+/** Each call to a campaign's phone number (from the RingCentral call log), under the lead it belongs to. */
+export const adCalls = mysqlTable("adCalls", {
+  id: int("id").autoincrement().primaryKey(),
+  leadId: int("leadId").notNull().references(() => adLeads.id),
+  rcId: varchar("rcId", { length: 120 }).notNull().unique(),
+  startedAt: datetime("startedAt").notNull(),
+  durationSec: int("durationSec").default(0).notNull(),
+  answered: boolean("answered").default(false).notNull(),
+  result: varchar("result", { length: 60 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({
+  leadIdx: index("adCalls_lead_idx").on(t.leadId),
+}));

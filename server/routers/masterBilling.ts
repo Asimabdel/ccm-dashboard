@@ -9,6 +9,7 @@ import { isValidDateStr } from "../../shared/workforce";
 import { ZOCDOC_PATIENT_FILTERS } from "../../shared/zocdoc";
 import { PAY_TYPES } from "../../shared/payroll";
 import { COST_CATEGORIES } from "../../shared/costs";
+import { AD_CHANNEL_KEYS, AD_LANGUAGE_KEYS, AD_LEAD_OUTCOMES, AD_STATUSES } from "../../shared/ads";
 import * as mb from "../masterBillingDb";
 import { hasMasterBilling } from "../masterBillingAccess";
 import { WorkspaceError, type WorkspaceActor } from "../workspaceDb";
@@ -271,6 +272,79 @@ export const masterBillingRouter = router({
     if (out.read) invalidateVisitCost();
     return out;
   }),
+
+  /** Ads: campaigns, what they cost, their leads, and what the leads became (server/adsDb.ts). */
+  adsReport: protectedProcedure.input(z.object({ from: dateStr, to: dateStr })).query(async ({ ctx, input }) => {
+    const actor = await owner(ctx);
+    const { adsReport } = await import("../adsDb");
+    return run(() => adsReport(actor, input));
+  }),
+  /** The number an ad has to beat: what a patient who came in costs through ZocDoc. */
+  adsBenchmark: protectedProcedure.query(async ({ ctx }) => {
+    await owner(ctx);
+    const { adsBenchmark } = await import("../adsDb");
+    return run(() => adsBenchmark());
+  }),
+  adsLeads: protectedProcedure.input(z.object({
+    from: dateStr, to: dateStr, filter: z.enum(["all", "waiting", "not_called", "booked", "came_in", "upcoming", "pending", "lost", "repeat", "existing", "spam"]).default("all"),
+    campaignId: z.number().int().positive().nullish(), page: z.number().int().min(1).max(10_000).default(1),
+  })).query(async ({ ctx, input }) => {
+    const actor = await owner(ctx);
+    const { adsLeads } = await import("../adsDb");
+    return run(() => adsLeads(actor, input));
+  }),
+  adsSaveCampaign: protectedProcedure.input(z.object({
+    id: z.number().int().positive().nullish(), name: z.string().min(1).max(120), channel: z.enum(AD_CHANNEL_KEYS), code: z.string().max(40).nullish(),
+    clinicId: z.number().int().positive().nullable(), language: z.enum(AD_LANGUAGE_KEYS), trackingPhone: z.string().max(30).nullish(),
+    monthlyBudgetCents: z.number().int().min(0).max(50_000_000).nullish(), status: z.enum(AD_STATUSES), landingUrl: z.string().max(255).nullish(),
+    outsideName: z.string().max(160).nullish(), note: z.string().max(255).nullish(),
+  })).mutation(async ({ ctx, input }) => {
+    const actor = await owner(ctx);
+    const { saveCampaign } = await import("../adsDb");
+    return run(() => saveCampaign(actor, input));
+  }),
+  adsRemoveCampaign: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    const actor = await owner(ctx);
+    const { removeCampaign } = await import("../adsDb");
+    return run(() => removeCampaign(actor, input.id));
+  }),
+  adsCampaignSpend: protectedProcedure.input(z.object({ campaignId: z.number().int().positive() })).query(async ({ ctx, input }) => {
+    await owner(ctx);
+    const { campaignSpend } = await import("../adsDb");
+    return run(() => campaignSpend(input.campaignId));
+  }),
+  adsSaveSpend: protectedProcedure.input(z.object({
+    campaignId: z.number().int().positive(), from: dateStr, to: dateStr, costCents: z.number().int().min(0).max(100_000_000),
+    clicks: z.number().int().min(0).max(100_000_000).nullish(), impressions: z.number().int().min(0).max(2_000_000_000).nullish(),
+  })).mutation(async ({ ctx, input }) => {
+    const actor = await owner(ctx);
+    const { saveSpend } = await import("../adsDb");
+    return run(() => saveSpend(actor, input));
+  }),
+  adsImportSpend: protectedProcedure.input(z.object({
+    fileName: z.string().max(255),
+    rows: z.array(z.object({
+      campaignId: z.number().int().positive(), day: dateStr, costCents: z.number().int().min(0).max(100_000_000),
+      clicks: z.number().int().min(0).max(100_000_000), impressions: z.number().int().min(0).max(2_000_000_000),
+    })).max(2000),
+  })).mutation(async ({ ctx, input }) => {
+    const actor = await owner(ctx);
+    const { importSpend } = await import("../adsDb");
+    return run(() => importSpend(actor, input));
+  }),
+  adsAddLead: protectedProcedure.input(z.object({
+    campaignId: z.number().int().positive(), name: z.string().max(120), phone: z.string().max(30).nullish(), day: dateStr.nullish(), note: z.string().max(255).nullish(),
+  })).mutation(async ({ ctx, input }) => {
+    const actor = await owner(ctx);
+    const { addManualLead } = await import("../adsDb");
+    return run(() => addManualLead(actor, input));
+  }),
+  adsSetLeadOutcome: protectedProcedure.input(z.object({ id: z.number().int().positive(), outcome: z.enum(AD_LEAD_OUTCOMES).nullable(), note: z.string().max(255).nullish() }))
+    .mutation(async ({ ctx, input }) => {
+      const actor = await owner(ctx);
+      const { setLeadOutcome } = await import("../adsDb");
+      return run(() => setLeadOutcome(actor, input));
+    }),
 
   /** Pick the patient (null = match again; `none` = the patient isn't in MyPCP, leave it unmatched). */
   linkPatient: protectedProcedure.input(z.object({ claimId: z.number().int().positive(), subjectKey: subjectKey.nullable(), none: z.boolean().optional() }))

@@ -120,6 +120,7 @@ export default function WebsiteBookingsPage() {
                         <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", STATUS_CLS[b.status])}>{BOOKING_STATUS_LABELS[b.status]}{b.status === "no_answer" && b.attempts > 1 ? ` ×${b.attempts}` : ""}</span>
                         {officeWait >= WAIT_ALERT_MIN && <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-800 dark:bg-red-900/40 dark:text-red-200" title="Office time since the request came in (evenings and weekends don't count)">Not called for {mins(officeWait)}</span>}
                         {b.spanish && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-800 dark:bg-sky-900/40 dark:text-sky-200">Español</span>}
+                        {b.fromAd && <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-800 dark:bg-violet-900/40 dark:text-violet-200" title={`Came from an ad (${b.fromAd}). Call these first: they are comparing clinics right now.`}>Ad lead: call first</span>}
                         {b.subjectKey
                           ? <Link href={chartHref(b.subjectKey)} className="text-xs font-semibold text-emerald-700 hover:underline dark:text-emerald-300">Existing patient: {b.patientName}</Link>
                           : <span className="text-xs font-semibold text-violet-700 dark:text-violet-300">New patient</span>}
